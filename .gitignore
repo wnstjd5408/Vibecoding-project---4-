@@ -1,0 +1,23 @@
+# 비밀값
+.env
+.env.*
+!.env.example
+
+# 의존성·빌드 산출물
+node_modules/
+dist/
+build/
+.next/
+coverage/
+
+# 로그
+*.log
+
+# OS·에디터
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Claude Code 로컬 설정
+.claude/settings.local.json
