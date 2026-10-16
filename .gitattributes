@@ -1,0 +1,11 @@
+# 줄바꿈을 LF로 통일한다 (.editorconfig와 일치)
+* text=auto eol=lf
+
+# 바이너리
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
