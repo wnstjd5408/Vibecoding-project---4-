@@ -8,8 +8,8 @@ clone한 뒤 아래 [설정](#설정) 1~3단계를 순서대로 진행한다. �
 |---|---|
 | [Git](https://git-scm.com/) | 버전 관리 |
 | [GitHub CLI](https://cli.github.com/) (`gh`) | 로그인, PR 생성 |
-
-개발 스택(Python, React)의 설치 절차는 스택이 정해지면 이 섹션에 추가한다.
+| [Node.js](https://nodejs.org/) 24 + npm | 프론트엔드(`frontend/`, React) |
+| [uv](https://docs.astral.sh/uv/) | 백엔드(`backend/`, FastAPI). Python 3.12가 없으면 `uv`가 내려받는다 |
 
 ## 설정
 
@@ -29,6 +29,32 @@ clone한 뒤 아래 [설정](#설정) 1~3단계를 순서대로 진행한다. �
    ```
 
 줄바꿈은 `.gitattributes`가 LF로 맞추므로 따로 설정하지 않는다.
+
+## 실행
+
+터미널 두 개를 연다. 백엔드를 먼저 켠다.
+
+1. **백엔드** (`http://localhost:8000`)
+   ```bash
+   cd backend
+   uv sync
+   uv run fastapi dev app/main.py
+   ```
+2. **프론트엔드** (`http://localhost:5173`)
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
+3. 브라우저에서 `http://localhost:5173`을 연다. "백엔드 상태" 줄 끝에 `ok`가 보이면 정상이다.
+
+환경변수 이름은 `backend/.env.example`, `frontend/.env.example`에 있다. 지금은 값 없이도 실행된다. Supabase는 아직 연결하지 않았다.
+
+| 검사 | 위치 | 명령 |
+|---|---|---|
+| 백엔드 테스트 | `backend/` | `uv run pytest` |
+| 프론트엔드 린트 | `frontend/` | `npm run lint` |
+| 프론트엔드 빌드 | `frontend/` | `npm run build` |
 
 ## 기여 규칙
 
