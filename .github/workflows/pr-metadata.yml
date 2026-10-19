@@ -1,0 +1,72 @@
+name: PR metadata
+
+# pull_request_target은 PR 브랜치가 아니라 기본 브랜치의 이 파일을 실행한다.
+# PR에서 이 파일을 고쳐도 병합 전에는 검사가 바뀌지 않는다.
+# PR 코드를 checkout하거나 실행하지 않는다. 제목·본문·브랜치명만 환경변수로 받는다.
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions: {}
+
+jobs:
+  check-metadata:
+    name: Check PR metadata
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate title, branch and body
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # --- check start ---
+          body="${PR_BODY//$'\r'/}"
+          errors=()
+
+          title_re='^(feat|fix|docs|chore)\((MEG-[0-9]+)\): .+'
+          branch_re='^meg-([0-9]+)-[a-z0-9]+(-[a-z0-9]+)*$'
+
+          title_id=""
+          if [[ "$PR_TITLE" =~ $title_re ]]; then
+            title_id="${BASH_REMATCH[2]}"
+          else
+            errors+=("PR 제목은 <type>(MEG-N): <설명> 형식이어야 한다. type은 feat, fix, docs, chore 중 하나다. 예: docs(MEG-12): 첫 실험 설계 문서 추가")
+          fi
+
+          branch_id=""
+          if [[ "$PR_BRANCH" =~ $branch_re ]]; then
+            branch_id="MEG-${BASH_REMATCH[1]}"
+          else
+            errors+=("브랜치명은 meg-<번호>-<짧은-설명> 형식이어야 한다. 소문자, 숫자, 하이픈만 쓴다. 예: meg-12-first-experiment")
+          fi
+
+          if [[ -n "$title_id" && -n "$branch_id" && "$title_id" != "$branch_id" ]]; then
+            errors+=("제목의 이슈 ID(${title_id})와 브랜치의 이슈 ID(${branch_id})가 다르다. PR 하나는 이슈 하나에 연결한다.")
+          fi
+
+          if [[ -n "$title_id" ]] && ! grep -Eq "(^|[^0-9A-Za-z-])${title_id}([^0-9]|$)" <<< "$body"; then
+            errors+=("PR 본문에 이슈 ID(${title_id})가 없다. '## 이슈' 섹션에 이슈 ID와 링크를 적는다.")
+          fi
+
+          if grep -Fq '[MEG-N]' <<< "$body"; then
+            errors+=("PR 본문의 '## 이슈' 섹션에 템플릿 자리표시자 [MEG-N]이 남아 있다.")
+          fi
+
+          if grep -Eq '^[[:space:]]*- \[[ xX]\] AC-[0-9]+\.[[:space:]]*$' <<< "$body"; then
+            errors+=("내용이 빈 AC 줄이 있다. 이슈의 AC를 옮겨 적거나 쓰지 않는 줄은 지운다.")
+          fi
+
+          if grep -Eq '^[[:space:]]*- 검증:[[:space:]]*$' <<< "$body"; then
+            errors+=("내용이 빈 '검증:' 줄이 있다. 확인한 방법과 결과를 적거나 '미검증: <이유>'로 바꾼다.")
+          fi
+
+          if (( ${#errors[@]} > 0 )); then
+            for e in "${errors[@]}"; do
+              echo "::error::$e"
+            done
+            echo "이슈 범위와 AC 충족 여부는 이 검사가 확인하지 않는다. 리뷰어가 확인한다."
+            exit 1
+          fi
+          echo "OK: ${title_id} 제목·브랜치·본문 형식 통과"
+          # --- check end ---
