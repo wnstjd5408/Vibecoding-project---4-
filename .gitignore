@@ -9,6 +9,12 @@ dist/
 build/
 .next/
 coverage/
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Playwright MCP 실행 기록
+.playwright-mcp/
 
 # 로그
 *.log
