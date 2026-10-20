@@ -8,7 +8,7 @@ clone한 뒤 아래 [설정](#설정) 1~3단계를 순서대로 진행한다. �
 |---|---|
 | [Git](https://git-scm.com/) | 버전 관리 |
 | [GitHub CLI](https://cli.github.com/) (`gh`) | 로그인, PR 생성 |
-| [Node.js](https://nodejs.org/) 24 + npm | 프론트엔드(`frontend/`, React) |
+| [Node.js](https://nodejs.org/) 24 + npm | 프론트엔드(`frontend/`, React). 버전은 루트 `.nvmrc`에 고정했다. `nvm use`(fnm은 `fnm use`)로 맞춘다 |
 | [uv](https://docs.astral.sh/uv/) | 백엔드(`backend/`, FastAPI). Python 3.12가 없으면 `uv`가 내려받는다 |
 
 ## 설정
