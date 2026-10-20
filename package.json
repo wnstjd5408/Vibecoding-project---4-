@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "devDependencies": {
+    "supabase": "2.121.0"
+  }
+}
