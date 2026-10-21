@@ -49,6 +49,25 @@ create table public.note_sources (
   unique (note_id, url)
 );
 
+-- 노트 수정 시각을 UPDATE마다 갱신한다.
+create function public.set_updated_at()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+revoke execute on function public.set_updated_at() from public, anon, authenticated;
+
+create trigger notes_set_updated_at
+  before update on public.notes
+  for each row execute function public.set_updated_at();
+
 -- 보안: RLS를 켜고 정책은 만들지 않는다. anon/authenticated는 행을 볼 수 없다.
 alter table public.subjects enable row level security;
 alter table public.notes enable row level security;
@@ -61,6 +80,9 @@ revoke all on table public.subjects, public.notes, public.note_subjects, public.
 grant select, insert, update, delete
   on table public.subjects, public.notes, public.note_subjects, public.note_sources
   to service_role;
+-- identity 시퀀스도 기존 기본 권한이 남지 않게 명시적으로 회수한다.
+revoke all on sequence public.subjects_id_seq, public.notes_id_seq, public.note_sources_id_seq
+  from anon, authenticated;
 grant usage on all sequences in schema public to service_role;
 
 -- 앞으로 public에 만드는 객체도 anon/authenticated에 자동 노출되지 않게 한다.
@@ -70,3 +92,7 @@ alter default privileges for role postgres in schema public
   revoke all on sequences from anon, authenticated;
 alter default privileges for role postgres in schema public
   revoke all on functions from anon, authenticated, public;
+-- 스키마별 설정으로는 Postgres 전역 기본값(PUBLIC EXECUTE)이 사라지지 않는다.
+-- 앞으로 만드는 함수는 필요한 역할에만 명시적으로 EXECUTE를 준다.
+alter default privileges for role postgres
+  revoke execute on functions from public;
