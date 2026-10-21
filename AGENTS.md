@@ -19,7 +19,7 @@ AI 에이전트(Codex, Claude 등)가 이 저장소에서 작업할 때 따르�
 |---|---|---|
 | S | 동작을 바꾸지 않는 작은 수정 (오타, 설정 값, 문서 한 절) | 네 섹션 티켓 (Summary·Requirements·AC·Work Checklist). 별도 회의나 PRD는 요구하지 않는다 |
 | M | 기존 흐름 안의 기능 추가·변경 | S + 사람이 수락한 범위·AC·검증 방법과 확정된 개발 담당자 |
-| L | 새 사용자 흐름, 정식 기능 개발 전환 | M + 사용자 흐름 → PRD → 디자인 → 기술 검토 ([spec-flow](docs/harness/spec-flow.md)) |
+| L | 새 사용자 흐름, 정식 기능 개발 전환 | M + 사용자 흐름 → PRD → 디자인·백엔드 API spec → 기술 검토 ([spec-flow](docs/harness/spec-flow.md)) |
 
 담당자나 독립 산출물이 다르면 티켓을 나눈다.
 
