@@ -46,7 +46,8 @@ class BedrockSettings:
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "BedrockSettings":
         env = os.environ if environ is None else environ
-        mode = env.get("AI_AUTH_MODE", AUTH_OIDC)
+        # .env.example처럼 값이 빈 줄은 설정하지 않은 것으로 본다.
+        mode = env.get("AI_AUTH_MODE") or AUTH_OIDC
         if mode not in AUTH_MODES:
             raise AiConfigError(f"AI_AUTH_MODE는 {' 또는 '.join(AUTH_MODES)}여야 한다")
 
@@ -59,8 +60,8 @@ class BedrockSettings:
         defaults = cls()
         return cls(
             auth_mode=mode,
-            region=env.get("BEDROCK_REGION", defaults.region),
-            model_id=env.get("BEDROCK_MODEL_ID", defaults.model_id),
+            region=env.get("BEDROCK_REGION") or defaults.region,
+            model_id=env.get("BEDROCK_MODEL_ID") or defaults.model_id,
             role_arn=role_arn,
         )
 

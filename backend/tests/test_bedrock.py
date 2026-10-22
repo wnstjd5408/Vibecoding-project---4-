@@ -87,6 +87,22 @@ def test_defaults_to_oidc_and_needs_role_arn():
     assert settings.region == "ap-northeast-1"
 
 
+def test_blank_values_from_env_example_use_defaults():
+    settings = BedrockSettings.from_env(
+        {
+            "AI_AUTH_MODE": "",
+            "AWS_ROLE_ARN": "role",
+            "BEDROCK_REGION": "",
+            "BEDROCK_MODEL_ID": "",
+            "AWS_BEARER_TOKEN_BEDROCK": "",
+        }
+    )
+
+    assert settings.auth_mode == "oidc"
+    assert settings.region == "ap-northeast-1"
+    assert settings.model_id == "global.openai.gpt-6-luna"
+
+
 def test_api_key_mode_needs_key_in_env():
     with pytest.raises(AiConfigError, match="AWS_BEARER_TOKEN_BEDROCK"):
         BedrockSettings.from_env({"AI_AUTH_MODE": "api_key"})
