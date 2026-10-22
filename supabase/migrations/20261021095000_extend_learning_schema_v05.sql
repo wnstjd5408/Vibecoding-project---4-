@@ -87,10 +87,13 @@ create table public.ai_explanations (
   body text not null,
   model text not null,
   prompt_version text not null,
+  -- 무효화는 review_status가 아니라 invalidated_at으로만 나타낸다.
   review_status text not null default 'pending'
-    check (review_status in ('pending', 'approved', 'invalidated')),
+    check (review_status in ('pending', 'approved')),
   invalidated_at timestamptz,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  -- 용어 삭제 API는 설명을 먼저 무효화한 뒤 용어를 지운다. 순서가 바뀐 삭제는 실패해 유효한 설명이 고아로 남지 않는다.
+  check (term_id is not null or invalidated_at is not null)
 );
 
 -- 무효화되지 않은 설명은 용어당 하나다.
@@ -142,8 +145,9 @@ create table public.quiz_sets (
   -- KST 날짜. 하루에 한 번만 만든다.
   quiz_date date not null,
   source_date date not null,
-  status text not null default 'pending'
-    check (status in ('pending', 'generating', 'ready', 'failed')),
+  -- 퀴즈 대상이 없으면 행을 만들지 않으므로 대기 상태는 두지 않는다.
+  status text not null default 'generating'
+    check (status in ('generating', 'ready', 'failed')),
   -- 생성 작업 선점 만료 시각과 시도 횟수
   lease_expires_at timestamptz,
   attempt integer not null default 0 check (attempt >= 0),
@@ -223,6 +227,8 @@ create table public.ai_usage_ledger (
   input_tokens integer check (input_tokens >= 0),
   output_tokens integer check (output_tokens >= 0),
   attempt_no integer not null default 1 check (attempt_no >= 1),
+  -- usage: 응답의 실제 사용량으로 정산. reserved_fallback: 시간 초과 등으로 응답이 없어 예약액 그대로 정산.
+  settle_basis text check (settle_basis in ('usage', 'reserved_fallback')),
   settled_at timestamptz,
   status text not null default 'reserved' check (status in ('reserved', 'settled', 'released')),
   -- KST 날짜
@@ -230,8 +236,12 @@ create table public.ai_usage_ledger (
   created_at timestamptz not null default now(),
   check (
     status <> 'settled'
-    or (actual_usd is not null and input_tokens is not null
-        and output_tokens is not null and settled_at is not null)
+    or (actual_usd is not null and settled_at is not null and settle_basis is not null)
+  ),
+  -- 토큰 수는 실제 사용량으로 정산할 때만 반드시 있다.
+  check (
+    settle_basis is distinct from 'usage'
+    or (input_tokens is not null and output_tokens is not null)
   )
 );
 
