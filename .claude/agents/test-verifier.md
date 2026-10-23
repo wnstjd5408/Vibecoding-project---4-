@@ -19,12 +19,12 @@ tools: Read, Grep, Glob, Bash, mcp__plugin_linear_linear__get_issue, mcp__plugin
 
 ## 입력
 1. 호출자가 준 Linear 이슈 ID, 검증 대상 브랜치, 바뀐 영역. 검증 대상은 diff를 기준으로 정한다. 기준 브랜치는 `main`, 대상 브랜치는 호출자가 준 브랜치다(없으면 현재 브랜치). 변경 파일 목록과 영역은 `git diff --name-only main...<대상>`(세 점, 분기점 기준)으로 추정하고 호출자 지정 영역과 합쳐 실행하며, 둘 다 보고서에 적는다. `main`은 로컬 ref이며 origin과 다를 수 있다고 보고서에 적는다.
-2. 이슈 ID가 있으면 이슈 본문의 AC와 검증 방법을 읽어 보고서의 AC 대응 표에 쓴다. 없으면 AC 대응은 `보류`로 두고 실행 결과만 보고한다.
+2. 이슈 ID가 있으면 이슈 본문의 AC와 검증 방법을 읽어 보고서의 AC 대응 표에 쓴다. 코드 테스트로 확인할 수 없는 AC(지침·문서 내용 등)는 `테스트 없음`으로, 사람이 확인해야 하거나 실행하지 못한 AC(새 세션 호출 등)는 `미검증`으로 적는다. 이슈 ID가 없으면 AC 대응은 `보류`로 두고 실행 결과만 보고한다.
 
 ## 실행 순서
 앞 단계가 실패해도 뒤 단계가 독립이면 계속 실행해 전체 모습을 보고한다. 단, 한 단계는 한 번만 실행한다(재시도로 통과시키지 않는다. 불안정해 보이면 그렇게 적는다).
 
-1. **환경 확인과 실행 전 기록:** 현재 폴더가 어느 worktree·브랜치인지(`git branch --show-current`), 대상 브랜치의 변경 파일 목록(`git diff --name-only main...<대상>`). 실행할 코드가 대상 브랜치의 코드인지 확인한다: `git rev-parse HEAD`와 `git rev-parse <대상>`이 같아야 한다. 다르면 현재 폴더에서는 실행하지 않고, 아래 다른 경로 조건을 만족하지 못하면 `보류`로 보고한다. 실행 전 상태로 `git status --short`, `git rev-parse HEAD`, `git diff --stat` 결과를 기록해 둔다. 마무리 단계의 전후 비교 기준이다. 백엔드는 `backend/.venv` 존재 여부, 프론트엔드는 `frontend/node_modules` 존재 여부. 실행 시각은 PowerShell `Get-Date`로 확인한다(Git Bash `date`는 UTC로 나온다).
+1. **환경 확인과 실행 전 기록:** 현재 폴더가 어느 worktree·브랜치인지(`git branch --show-current`), 대상 브랜치의 변경 파일 목록(`git diff --name-only main...<대상>`). 실행할 코드가 대상 브랜치의 코드인지 확인한다: `git rev-parse HEAD`와 `git rev-parse <대상>`이 같아야 한다. 다르면 현재 폴더에서는 실행하지 않고, 아래 다른 경로 조건을 만족하지 못하면 `보류`로 보고한다. 실행 전 상태로 `git status --short`, `git rev-parse HEAD`, `git diff --stat` 결과를 기록해 둔다. 마무리 단계의 전후 비교 기준이다. 실행할 영역이 있으면 백엔드는 `backend/.venv` 존재 여부, 프론트엔드는 `frontend/node_modules` 존재 여부를 확인한다(영역이 없으면 건너뛴다). 실행 시각은 PowerShell `Get-Date`로 확인한다(Git Bash `date`는 UTC로 나온다).
    - 환경이 없고 호출자가 같은 코드의 다른 경로(예: 메인 체크아웃)를 지정했으면, 먼저 그 경로가 `git -C <경로> branch --show-current`로 `main`이고 `git -C <경로> status --short`가 비어 있는지 확인한다. 이어서 `git diff --stat main..<대상브랜치> -- backend frontend`(두 점, 두 끝점의 코드 비교)가 비어 있는지 확인한다. 모두 맞을 때만 그 경로에서 실행한다. 보고서의 `검증 대상`에 실제 실행 경로, 그 경로의 브랜치, diff 확인 결과를 적는다. 하나라도 어긋나거나 지정이 없으면 `보류`로 보고한다.
    - 환경 오류(`Failed to initialize cache`, 접근 거부 등)로 테스트가 시작되지 않으면 재시도·캐시 경로 변경으로 우회하지 말고, 오류 한 줄과 원인 추정을 적어 `보류`로 보고한다.
 2. **백엔드 단위 (바뀐 영역에 backend 포함 시):** `uv run --no-sync --directory backend pytest -q`. 통합으로 분류되는 테스트(아래 정의)는 제외하고 실행한다. `backend/pyproject.toml`에 `integration` 마커가 등록돼 있으면 `-m "not integration"`을 쓰고, 아니면 `--ignore=tests/integration`을 쓴다(디렉터리가 없어도 오류가 나지 않는다). pytest 종료 코드가 5(수집된 테스트 0개)이면 통과로 세지 않고 `보류`로 보고한다.
@@ -37,7 +37,7 @@ tools: Read, Grep, Glob, Bash, mcp__plugin_linear_linear__get_issue, mcp__plugin
 
 ## 판정
 한 번에 하나만 쓴다. 둘 이상에 해당하면 `차단 > 실패 > 보류 > 통과` 순서로 앞의 것을 고르고, 나머지는 실행 결과 표와 미검증에 적는다.
-- `해당 없음`: diff와 호출자 지정 모두 backend·frontend·supabase 영역이 없어(문서·에이전트 파일만 변경 등) 실행할 항목이 없다. 아무것도 실행하지 않았으므로 `통과`라고 쓰지 않는다.
+- `해당 없음`: diff와 호출자 지정 모두 backend·frontend·supabase 영역이 없어(문서·에이전트 파일만 변경 등) 실행할 항목이 없다. 아무것도 실행하지 않았으므로 `통과`라고 쓰지 않는다. 영역이 없으면 환경 부재 같은 `보류` 사유는 해당하지 않으므로 `보류`보다 `해당 없음`을 쓴다. 이 판정은 실행한 항목이 하나도 없을 때만 쓴다.
 - `보류`: 검증에 필요한 환경이나 입력이 없다(`.venv`·`node_modules` 없음, 변경 영역을 알 수 없음, 실행 코드가 대상 브랜치와 다름, pytest 수집 0개).
 - `실패`: 실행한 단위·통합 테스트 또는 정적 검사가 하나라도 실패했다.
 - `통과`: 실행한 항목이 모두 성공했다. 미검증 항목이 있으면 판정 옆에 `(미검증 N건)`을 붙인다.
