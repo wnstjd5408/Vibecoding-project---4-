@@ -2,63 +2,48 @@
   "meta": {
     "title": "CS 학습 노트 아키텍처",
     "sources": [
-      {
-        "name": "CS 학습 노트 기술 검토",
-        "version": "v0.2",
-        "status": "3~8절 수락",
-        "date": "2026-10-26",
-        "where": "Linear, MEG-38 첨부"
-      },
-      {
-        "name": "CS 학습 노트 백엔드 API spec",
-        "version": "v0.2",
-        "status": "확인됨",
-        "date": "2026-10-26",
-        "where": "Linear, MEG-27 첨부"
-      }
+      {"name": "CS 학습 노트 기술 검토", "version": "v0.2", "status": "3~8절 수락", "date": "2026-10-26", "where": "Linear, MEG-38 첨부"},
+      {"name": "CS 학습 노트 백엔드 API spec", "version": "v0.2", "status": "확인됨", "date": "2026-10-26", "where": "Linear, MEG-27 첨부"}
     ],
     "rule": "이 파일은 원본의 공개 요약이다. 원본과 다르면 원본을 따른다. 이 파일을 고친 뒤 generate_drawio.py로 architecture.drawio를 다시 만든다."
   },
   "icons": {
     "note": "image는 각 회사 브랜드 페이지에서 받은 원본 그대로다. aws_resource·aws_shape·aws_group은 draw.io에 들어 있는 AWS Architecture Icons다.",
     "attribution": "Vercel, the Vercel design, Next.js and related marks, designs and logos are trademarks or registered trademarks of Vercel, Inc. or its affiliates in the US and other countries.",
-    "sources": {
-      "icons/vercel-symbol-black.svg": "https://vercel.com/geist/brands (Vercel Symbol Black)",
-      "icons/supabase-logo-icon.svg": "https://supabase.com/brand-assets (logo kit, supabase-logo-icon.svg)"
-    }
+    "sources": {"icons/vercel-symbol-black.svg": "https://vercel.com/geist/brands (Vercel Symbol Black)", "icons/supabase-logo-icon.svg": "https://supabase.com/brand-assets (logo kit, supabase-logo-icon.svg)"}
   },
   "zones": [
     {"id": "client", "label": "사용자 기기 (신뢰하지 않음)", "kind": "untrusted", "icon": {"aws_shape": "users"}},
     {"id": "vercel", "label": "Vercel 프로젝트 (우리가 운영)", "kind": "server", "icon": {"image": "icons/vercel-symbol-black.svg"}},
     {"id": "supabase", "label": "Supabase", "kind": "supabase", "icon": {"image": "icons/supabase-logo-icon.svg"}},
-    {"id": "external", "label": "AWS Cloud (외부 AI 서비스)", "kind": "external", "icon": {"aws_group": "group_aws_cloud_alt"}},
-    {"id": "onetime", "label": "Notion 가져오기 (처음 한 번)", "kind": "onetime"}
+    {"id": "external", "label": "AWS Cloud (외부 AI)", "kind": "external", "icon": {"aws_group": "group_aws_cloud_alt"}},
+    {"id": "onetime", "label": "Notion 가져오기", "kind": "onetime"}
   ],
   "components": [
-    {"id": "browser", "zone": "client", "label": "브라우저", "detail": "React 화면. Supabase 키·AI 키 없음", "icon": {"aws_shape": "client"}},
-    {"id": "static", "zone": "vercel", "label": "정적 화면 파일", "detail": "React(Vite) 빌드 결과", "icon": {"aws_shape": "documents"}},
-    {"id": "api", "zone": "vercel", "label": "FastAPI (/api)", "detail": "Vercel 함수, 도쿄(hnd1). 비밀값은 환경변수", "icon": {"aws_shape": "gear"}},
-    {"id": "auth", "zone": "supabase", "label": "Supabase Auth", "detail": "계정·비밀번호 관리. 세션은 HttpOnly 쿠키", "icon": {"aws_shape": "ssl_padlock"}},
-    {"id": "db", "zone": "supabase", "label": "Postgres", "detail": "모든 표 RLS, anon·authenticated 권한 회수. 원자 작업은 SQL 함수(service_role만 EXECUTE)", "icon": {"aws_shape": "generic_database"}},
-    {"id": "note_images", "zone": "supabase", "label": "노트 이미지 버킷", "detail": "비공개. FastAPI가 읽기 권한 확인 뒤 서명 URL 발급", "icon": {"aws_shape": "bucket"}},
-    {"id": "glossary_images", "zone": "supabase", "label": "사전 이미지 버킷", "detail": "공개 읽기 제안(Q7 미정). 쓰기는 FastAPI만", "icon": {"aws_shape": "bucket"}},
-    {"id": "bedrock", "zone": "external", "label": "Amazon Bedrock", "detail": "Converse API, 모델 gpt-6-luna(잠정). 도구 권한 없음", "icon": {"aws_resource": "bedrock", "color": "#01A88D"}},
-    {"id": "importer", "zone": "onetime", "label": "가져오기 스크립트", "detail": "운영자 로컬에서 실행. 끝나면 공유 해제·전용 키 폐기", "icon": {"aws_shape": "gear"}},
-    {"id": "notion", "zone": "onetime", "label": "Notion", "detail": "허용한 페이지 본문만 읽음", "icon": {"aws_shape": "documents"}}
+    {"id": "browser", "zone": "client", "label": "브라우저", "icon": {"aws_shape": "client"}, "sub": "React 화면"},
+    {"id": "static", "zone": "vercel", "label": "정적 화면 파일", "icon": {"aws_shape": "documents"}, "sub": "Vite 빌드"},
+    {"id": "api", "zone": "vercel", "label": "FastAPI /api", "icon": {"aws_shape": "gear"}, "sub": "Vercel 함수, 도쿄"},
+    {"id": "auth", "zone": "supabase", "label": "Supabase Auth", "icon": {"aws_shape": "ssl_padlock"}, "sub": "HttpOnly 쿠키 세션"},
+    {"id": "db", "zone": "supabase", "label": "Postgres", "icon": {"aws_shape": "generic_database"}, "sub": "RLS, service_role만"},
+    {"id": "glossary_images", "zone": "supabase", "label": "사전 이미지 버킷", "icon": {"aws_shape": "bucket"}, "sub": "공개 읽기 제안"},
+    {"id": "note_images", "zone": "supabase", "label": "노트 이미지 버킷", "icon": {"aws_shape": "bucket"}, "sub": "비공개, 서명 URL"},
+    {"id": "bedrock", "zone": "external", "label": "Amazon Bedrock", "icon": {"aws_resource": "bedrock", "color": "#01A88D"}, "sub": "gpt-6-luna 잠정"},
+    {"id": "importer", "zone": "onetime", "label": "가져오기 스크립트", "icon": {"aws_shape": "gear"}, "sub": "운영자 로컬"},
+    {"id": "notion", "zone": "onetime", "label": "Notion", "icon": {"aws_shape": "documents"}, "sub": "허용한 페이지만"}
   ],
   "flows": [
-    {"id": "f-static", "from": "browser", "to": "static", "label": "화면 파일 (HTTPS)"},
-    {"id": "f-api", "from": "browser", "to": "api", "label": "/api JSON + 세션 쿠키\n상태 변경은 Origin 검사"},
-    {"id": "f-auth", "from": "api", "to": "auth", "label": "로그인·로그아웃·계정 발급"},
-    {"id": "f-db", "from": "api", "to": "db", "label": "secret key(service_role)\nREST + 원자 작업 SQL 함수"},
-    {"id": "f-note-sign", "from": "api", "to": "note_images", "label": "서명 URL 발급·객체 삭제"},
-    {"id": "f-glossary-write", "from": "api", "to": "glossary_images", "label": "업로드·삭제"},
-    {"id": "f-ai", "from": "api", "to": "bedrock", "label": "예약 → 호출 → 정산\nOIDC(기본) / API 키(대체)"},
-    {"id": "f-note-read", "from": "browser", "to": "note_images", "label": "서명 URL로 읽기", "style": "direct-read"},
-    {"id": "f-glossary-read", "from": "browser", "to": "glossary_images", "label": "공개 URL로 읽기(Q7 미정)", "style": "direct-read"},
-    {"id": "f-notion", "from": "importer", "to": "notion", "label": "허용한 페이지만 읽기"},
-    {"id": "f-import-db", "from": "importer", "to": "db", "label": "노트 기록(있으면 건너뜀)"},
-    {"id": "f-import-img", "from": "importer", "to": "note_images", "label": "이미지 재인코딩 뒤 업로드"}
+    {"id": "f-static", "no": 1, "type": "data", "from": "browser", "to": "static", "label": "화면 파일을 받는다(HTTPS)"},
+    {"id": "f-api", "no": 2, "type": "data", "from": "browser", "to": "api", "label": "/api 요청. 세션 쿠키, 상태 변경은 Origin 검사"},
+    {"id": "f-auth", "no": 3, "type": "data", "from": "api", "to": "auth", "label": "로그인·로그아웃·계정 발급"},
+    {"id": "f-db", "no": 4, "type": "data", "from": "api", "to": "db", "label": "secret key로 읽기·쓰기. 원자 작업은 SQL 함수"},
+    {"id": "f-glossary-write", "no": 5, "type": "data", "from": "api", "to": "glossary_images", "label": "사전 이미지 업로드·삭제"},
+    {"id": "f-note-sign", "no": 6, "type": "data", "from": "api", "to": "note_images", "label": "읽기 권한 확인 뒤 서명 URL 발급, 객체 삭제"},
+    {"id": "f-ai", "no": 7, "type": "data", "from": "api", "to": "bedrock", "label": "AI 호출. 예약 → 호출 → 정산, OIDC(기본)·API 키(대체)"},
+    {"id": "f-note-read", "no": 8, "type": "data", "from": "browser", "to": "note_images", "label": "서명 URL로 노트 이미지를 직접 읽는다(선 생략)", "drawn": false},
+    {"id": "f-glossary-read", "no": 9, "type": "data", "from": "browser", "to": "glossary_images", "label": "공개 URL로 사전 이미지를 직접 읽는다(Q7 미정, 선 생략)", "drawn": false},
+    {"id": "f-notion", "no": 10, "type": "control", "from": "importer", "to": "notion", "label": "허용한 페이지 본문만 읽는다"},
+    {"id": "f-import-db", "no": 11, "type": "control", "from": "importer", "to": "db", "label": "노트를 기록한다(이미 있으면 건너뜀)"},
+    {"id": "f-import-img", "no": 12, "type": "control", "from": "importer", "to": "note_images", "label": "이미지를 재인코딩해 올린다"}
   ],
   "trust_boundaries": [
     {"id": "tb-browser", "boundary": "브라우저 → FastAPI", "untrusted": "요청 본문, 쿠키 밖의 신원 주장, 화면에서 숨긴 버튼", "server_action": "모든 요청에서 세션을 확인하고 권한표대로 거부한다"},
@@ -112,40 +97,28 @@
   ],
   "layout": {
     "system": {
-      "zones": {
-        "client": [40, 150, 240, 180],
-        "external": [40, 400, 240, 170],
-        "vercel": [480, 60, 300, 540],
-        "supabase": [960, 60, 340, 540],
-        "onetime": [40, 650, 1260, 150]
-      },
-      "components": {
-        "browser": [20, 50, 200, 100],
-        "bedrock": [20, 45, 200, 90],
-        "static": [30, 30, 240, 66],
-        "api": [30, 110, 240, 400],
-        "auth": [30, 120, 280, 60],
-        "db": [30, 200, 280, 100],
-        "glossary_images": [30, 315, 280, 70],
-        "note_images": [30, 415, 280, 70],
-        "notion": [480, 30, 260, 90],
-        "importer": [950, 30, 280, 90]
-      },
+      "_note": "좌표는 모두 캔버스 절대값이다. 구성요소는 아이콘(60x60) 왼쪽 위 좌표이고 라벨은 아이콘 아래에 붙는다.",
+      "zones": {"client": [40, 230, 220, 200], "external": [40, 500, 220, 200], "vercel": [340, 80, 260, 350], "supabase": [700, 80, 240, 680], "onetime": [1080, 560, 410, 200]},
+      "components": {"browser": [120, 300], "bedrock": [120, 570], "static": [440, 140], "api": [440, 300], "auth": [790, 140], "db": [790, 300], "glossary_images": [790, 470], "note_images": [790, 640], "importer": [1210, 640], "notion": [1370, 640]},
       "flows": {
-        "f-static": {"exit": [1, 0.2], "entry": [0, 0.5]},
-        "f-api": {"exit": [1, 0.5], "entry": [0, 0.2]},
-        "f-auth": {"exit": [1, 0.1], "entry": [0, 0.5]},
-        "f-db": {"exit": [1, 0.35], "entry": [0, 0.5]},
-        "f-glossary-write": {"exit": [1, 0.6], "entry": [0, 0.5]},
-        "f-note-sign": {"exit": [1, 0.85], "entry": [0, 0.5]},
-        "f-ai": {"exit": [0, 0.8], "entry": [1, 0.5]},
-        "f-glossary-read": {"exit": [0.95, 0], "entry": [1, 0.5], "points": [[250, 30], [1320, 30], [1320, 410]], "label_x": -0.2},
-        "f-note-read": {"exit": [0.85, 0], "entry": [1, 0.5], "points": [[230, 20], [1340, 20], [1340, 510]], "label_x": 0.55},
-        "f-notion": {"exit": [0, 0.5], "entry": [1, 0.5]},
-        "f-import-img": {"exit": [0.5, 0], "entry": [0.5, 1], "label_x": -0.4},
-        "f-import-db": {"exit": [0, 0.2], "entry": [0, 0.8], "points": [[975, 698], [975, 340]], "label_x": -0.55}
+        "f-static": {"exit": [1, 0.25], "entry": [0, 0.5], "points": [[310, 315], [310, 170]]},
+        "f-api": {"exit": [1, 0.5], "entry": [0, 0.5]},
+        "f-auth": {"exit": [1, 0.25], "entry": [0, 0.5], "points": [[640, 315], [640, 170]]},
+        "f-db": {"exit": [1, 0.5], "entry": [0, 0.5]},
+        "f-glossary-write": {"exit": [1, 0.75], "entry": [0, 0.5], "points": [[660, 345], [660, 500]]},
+        "f-note-sign": {"exit": [1, 0.9], "entry": [0, 0.5], "points": [[620, 354], [620, 670]]},
+        "f-ai": {"exit": [0, 0.85], "entry": [1, 0.5], "points": [[320, 351], [320, 600]]},
+        "f-notion": {"exit": [1, 0.5], "entry": [0, 0.5]},
+        "f-import-db": {"exit": [0.5, 0], "entry": [1, 0.5], "points": [[1240, 330]]},
+        "f-import-img": {"exit": [0, 0.5], "entry": [1, 0.5]}
       },
-      "legend": [40, 820, 1260, 56]
+      "legend": [
+        {"box": [40, 800, 340, 120], "title": "요청 흐름 (실선)", "flows": [1, 2, 3, 4, 5]},
+        {"box": [400, 800, 380, 120], "title": "요청 흐름 (계속)", "flows": [6, 7, 8, 9]},
+        {"box": [800, 800, 330, 120], "title": "Notion 가져오기 (회색 점선, 처음 한 번)", "flows": [10, 11, 12]},
+        {"box": [1150, 800, 340, 120], "title": "테두리 색", "lines": ["빨강: 사용자 기기 (신뢰하지 않음)", "파랑: 우리가 운영하는 Vercel 프로젝트", "초록: Supabase", "회색 점선: 처음 한 번만 쓰는 영역"]}
+      ],
+      "footer": [40, 940, 1450, 50]
     },
     "endpoints": {
       "x": 40,

@@ -36,8 +36,8 @@ ROLE_ORDER = (("visitor", "방문자"), ("member", "사용자"), ("operator", "�
 GRID = "#bfbfbf"
 AWS_INK = "#232F3E"
 ICON_KEYS = ("image", "aws_shape", "aws_resource", "aws_group")
-COMPONENT_ICON = 40
-ZONE_ICON = 24
+NODE_ICON = 60
+ZONE_ICON = 22
 
 
 def validate_icon(owner, icon, allow_group):
@@ -63,7 +63,6 @@ def validate(model):
             ids.add(item["id"])
     zones = {z["id"] for z in model["zones"]}
     components = {c["id"] for c in model["components"]}
-    flows = {f["id"] for f in model["flows"]}
     groups = {g["id"] for g in model["endpoint_groups"]}
     for zone in model["zones"]:
         if zone["kind"] not in ZONE_STYLE:
@@ -73,10 +72,15 @@ def validate(model):
         if comp["zone"] not in zones:
             errors.append(f"{comp['id']}: 없는 zone {comp['zone']}")
         errors += validate_icon(comp["id"], comp.get("icon"), allow_group=False)
+    numbers = [f.get("no") for f in model["flows"]]
+    if len(set(numbers)) != len(numbers):
+        errors.append("flows의 no가 중복된다")
     for flow in model["flows"]:
         for end in (flow["from"], flow["to"]):
             if end not in components:
                 errors.append(f"{flow['id']}: 없는 구성요소 {end}")
+        if flow.get("type") not in ("data", "control"):
+            errors.append(f"{flow['id']}: type은 data 또는 control")
     for ep in model["endpoints"]:
         if ep["group"] not in groups:
             errors.append(f"{ep['id']}: 없는 그룹 {ep['group']}")
@@ -89,19 +93,16 @@ def validate(model):
     system = model["layout"]["system"]
     errors += [f"layout.system.zones에 {z} 없음" for z in sorted(zones - set(system["zones"]))]
     errors += [f"layout.system.components에 {c} 없음" for c in sorted(components - set(system["components"]))]
-    errors += [f"layout.system.flows에 없는 흐름 {f}" for f in sorted(set(system["flows"]) - flows)]
+    drawn = {f["id"] for f in model["flows"] if f.get("drawn", True)}
+    errors += [f"layout.system.flows에 그리지 않는 흐름 {f}" for f in sorted(set(system["flows"]) - drawn)]
+    listed = [n for item in system["legend"] for n in item.get("flows", ())]
+    errors += [f"범례에 없는 흐름 번호 {n}" for n in listed if n not in numbers]
+    errors += [f"범례에 빠진 흐름 번호 {n}" for n in numbers if n not in listed]
     order = model["layout"]["endpoints"]["target_order"]
     errors += [f"target_order에 없는 구성요소 {t}" for t in order if t not in components]
     used = {u for ep in model["endpoints"] for u in ep["uses"]}
     errors += [f"target_order에 {u} 없음" for u in sorted(used - set(order))]
     return errors
-
-
-def html_label(title, detail=None):
-    text = f"<b>{escape(title)}</b>"
-    if detail:
-        text += f"<br><font style=\"font-size:11px\">{escape(detail)}</font>"
-    return text
 
 
 def style(**kv):
@@ -125,14 +126,12 @@ class Page:
         x, y, w, h = box
         ET.SubElement(cell, "mxGeometry", x=str(x), y=str(y), width=str(w), height=str(h), **{"as": "geometry"})
 
-    def edge(self, cell_id, value, cell_style, source, target, points=(), label_x=None):
+    def edge(self, cell_id, value, cell_style, source, target, points=()):
         cell = ET.SubElement(
             self.root, "mxCell", id=cell_id, value=value, style=cell_style,
             edge="1", parent="1", source=source, target=target,
         )
         geometry = ET.SubElement(cell, "mxGeometry", relative="1", **{"as": "geometry"})
-        if label_x is not None:
-            geometry.set("x", str(label_x))
         if points:
             array = ET.SubElement(geometry, "Array", **{"as": "points"})
             for x, y in points:
@@ -144,49 +143,60 @@ def group_style(kind, icon):
     _, stroke, dashed = ZONE_STYLE[kind]
     if icon and "aws_group" in icon:
         return style(
-            shape="mxgraph.aws4.group", grIcon=f"mxgraph.aws4.{icon['aws_group']}", html="1", whiteSpace="wrap",
-            container="1", collapsible="0", verticalAlign="top", align="left", spacingLeft="30", fontStyle="1",
-            fontColor=AWS_INK, strokeColor=AWS_INK, fillColor="none", dashed="0",
+            shape="mxgraph.aws4.group", grIcon=f"mxgraph.aws4.{icon['aws_group']}", outlineConnect="0",
+            gradientColor="none", html="1", whiteSpace="wrap", fontSize="12", fontStyle="0", container="1",
+            pointerEvents="0", collapsible="0", recursiveResize="0", verticalAlign="top", align="left",
+            spacingLeft="30", fontColor=AWS_INK, strokeColor=AWS_INK, fillColor="none", dashed="0",
         )
     return style(
-        rounded="0", whiteSpace="wrap", html="1", container="1", collapsible="0", verticalAlign="top", align="left",
-        spacingLeft="40" if icon else "10", spacingTop="10" if icon else "4", fontStyle="1",
-        fontColor=AWS_INK, fillColor="none", strokeColor=stroke, strokeWidth="2", dashed="1" if dashed else "0",
+        rounded="0", whiteSpace="wrap", html="1", fontSize="12", fontStyle="0", container="1", collapsible="0",
+        recursiveResize="0", verticalAlign="top", align="left", spacingLeft="34" if icon else "8",
+        spacingTop="4" if icon else "2", fontColor=AWS_INK, fillColor="none", strokeColor=stroke,
+        strokeWidth="2", dashed="1" if dashed else "0",
     )
 
 
-def icon_style(icon):
+def icon_style(icon, labeled=False):
+    """aws_*는 aws-k8s-architecture-diagram 스킬 카탈로그(draw.io aws4)와 같은 스타일이다."""
+    label = (
+        {"fontColor": AWS_INK, "verticalLabelPosition": "bottom", "verticalAlign": "top", "align": "center",
+         "fontSize": "12", "fontStyle": "0"} if labeled else {}
+    )
     if "image" in icon:
         data = base64.b64encode((HERE / icon["image"]).read_bytes()).decode("ascii")
-        return style(shape="image", html="1", aspect="fixed", imageAspect="1", image=f"data:image/svg+xml,{data}")
+        return style(shape="image", html="1", aspect="fixed", imageAspect="1", **label, image=f"data:image/svg+xml,{data}")
     if "aws_resource" in icon:
         return style(
-            shape="mxgraph.aws4.resourceIcon", resIcon=f"mxgraph.aws4.{icon['aws_resource']}", html="1",
-            aspect="fixed", fillColor=icon.get("color", AWS_INK), strokeColor="#ffffff",
+            sketch="0", outlineConnect="0", fillColor=icon.get("color", AWS_INK), strokeColor="#ffffff", dashed="0",
+            html="1", aspect="fixed", **label, shape="mxgraph.aws4.resourceIcon",
+            resIcon=f"mxgraph.aws4.{icon['aws_resource']}",
         )
-    return style(shape=f"mxgraph.aws4.{icon['aws_shape']}", html="1", aspect="fixed", fillColor=AWS_INK, strokeColor="none")
+    return style(
+        sketch="0", outlineConnect="0", gradientColor="none", fillColor=AWS_INK, strokeColor="none", dashed="0",
+        html="1", aspect="fixed", pointerEvents="1", **label, shape=f"mxgraph.aws4.{icon['aws_shape']}",
+    )
 
 
-def box_style(kind, has_icon=False):
-    _, stroke, _ = ZONE_STYLE[kind]
-    extra = {"align": "left", "spacingLeft": str(12 + COMPONENT_ICON + 8)} if has_icon else {}
-    return style(rounded="1", whiteSpace="wrap", html="1", fillColor="#ffffff", strokeColor=stroke, **extra)
-
-
-def edge_style(route, dashed=False):
+def edge_style(route, kind):
+    """선 종류는 스킬 규칙을 따른다. data = 진한 실선(요청·데이터), control = 회색 점선(관리 흐름)."""
     extra = {}
     if "exit" in route:
         extra.update(exitX=route["exit"][0], exitY=route["exit"][1], exitDx="0", exitDy="0")
     if "entry" in route:
         extra.update(entryX=route["entry"][0], entryY=route["entry"][1], entryDx="0", entryDy="0")
-    return style(
-        edgeStyle="orthogonalEdgeStyle", rounded="1", html="1", endArrow="block", endFill="1",
-        labelBackgroundColor="#ffffff", fontSize="11", dashed="1" if dashed else "0", **extra,
-    )
+    base = dict(edgeStyle="orthogonalEdgeStyle", rounded="0", orthogonalLoop="1", jettySize="auto", html="1")
+    if kind == "control":
+        base.update(endArrow="open", endFill="0", strokeColor="#879196", strokeWidth="1", dashed="1", dashPattern="6 3")
+    else:
+        base.update(endArrow="classic", endFill="1", strokeColor=AWS_INK, strokeWidth="2")
+    return style(**base, fontSize="11", labelBackgroundColor="#ffffff", **extra)
 
 
 def text_style(**extra):
-    return style(text="1", html="1", align="left", verticalAlign="top", whiteSpace="wrap", fontSize="11", **extra)
+    """범례·출처 글 상자. 옅은 테두리 안에 여백을 두고 왼쪽 위부터 쓴다."""
+    return style(**{"rounded": "0", "html": "1", "whiteSpace": "wrap", "align": "left", "verticalAlign": "top",
+                    "spacingLeft": "8", "spacingTop": "4", "fontSize": "11", "strokeColor": "#D5DBDB",
+                    "fillColor": "#ffffff", **extra})
 
 
 def sources_line(meta):
@@ -197,37 +207,37 @@ def sources_line(meta):
 def build_system_page(model):
     page = Page("구성도", "system")
     layout = model["layout"]["system"]
-    zones = {z["id"]: z for z in model["zones"]}
+    origin = {}
     for zone in model["zones"]:
         icon = zone.get("icon")
-        page.vertex(f"zone-{zone['id']}", escape(zone["label"]), group_style(zone["kind"], icon), layout["zones"][zone["id"]])
+        box = layout["zones"][zone["id"]]
+        origin[zone["id"]] = box[:2]
+        page.vertex(f"zone-{zone['id']}", escape(zone["label"]), group_style(zone["kind"], icon), box)
         if icon and "aws_group" not in icon:
-            page.vertex(f"zone-{zone['id']}-icon", "", icon_style(icon), (10, 7, ZONE_ICON, ZONE_ICON), parent=f"zone-{zone['id']}")
+            page.vertex(f"zone-{zone['id']}-icon", "", icon_style(icon), (8, 6, ZONE_ICON, ZONE_ICON), parent=f"zone-{zone['id']}")
     for comp in model["components"]:
-        kind = zones[comp["zone"]]["kind"]
-        icon = comp.get("icon")
-        box = layout["components"][comp["id"]]
+        x, y = layout["components"][comp["id"]]
+        zx, zy = origin[comp["zone"]]
         page.vertex(
-            comp["id"], html_label(comp["label"], comp.get("detail")), box_style(kind, has_icon=bool(icon)),
-            box, parent=f"zone-{comp['zone']}",
+            comp["id"], f"{escape(comp['label'])}<br>{escape(comp['sub'])}", icon_style(comp["icon"], labeled=True),
+            (x - zx, y - zy, NODE_ICON, NODE_ICON), parent=f"zone-{comp['zone']}",
         )
-        if icon:
-            top = round((box[3] - COMPONENT_ICON) / 2)
-            page.vertex(f"{comp['id']}-icon", "", icon_style(icon), (12, top, COMPONENT_ICON, COMPONENT_ICON), parent=comp["id"])
     for flow in model["flows"]:
-        route = layout["flows"].get(flow["id"], {})
-        page.edge(
-            flow["id"], escape(flow["label"]).replace("\n", "<br>"),
-            edge_style(route, dashed=flow.get("style") == "direct-read"),
-            flow["from"], flow["to"], points=route.get("points", ()), label_x=route.get("label_x"),
-        )
-    note = (
-        sources_line(model["meta"])
-        + "<br>점선 화살표 = 브라우저가 Storage를 직접 읽는 경로. 회색 점선 칸 = 처음 한 번만 쓰는 Notion 가져오기."
-        + " 아이콘: AWS Architecture Icons(draw.io 내장), Supabase·Vercel 공식 로고."
-        + "<br>" + escape(model["icons"]["attribution"])
+        if flow.get("drawn", True):
+            route = layout["flows"].get(flow["id"], {})
+            page.edge(flow["id"], str(flow["no"]), edge_style(route, flow["type"]), flow["from"], flow["to"],
+                      points=route.get("points", ()))
+    by_no = {f["no"]: f for f in model["flows"]}
+    for i, item in enumerate(layout["legend"]):
+        lines = [f"{n}. {escape(by_no[n]['label'])}" for n in item.get("flows", ())]
+        lines += [escape(line) for line in item.get("lines", ())]
+        page.vertex(f"legend-{i + 1}", f"<b>{escape(item['title'])}</b><br>" + "<br>".join(lines),
+                    text_style(fontSize="12", fontColor=AWS_INK), item["box"])
+    footer = (
+        sources_line(model["meta"]) + " 아이콘: AWS Architecture Icons(draw.io 내장), Supabase·Vercel 공식 로고.<br>"
+        + escape(model["icons"]["attribution"])
     )
-    page.vertex("legend", note, text_style(), layout["legend"])
+    page.vertex("footer", footer, text_style(fontColor="#545B64"), layout["footer"])
     return page
 
 

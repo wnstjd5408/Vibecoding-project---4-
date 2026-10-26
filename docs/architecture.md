@@ -22,7 +22,7 @@ API spec v0.2의 엔드포인트 26개를 역할별 권한, 사용하는 구성�
 
 원본은 [`architecture/architecture.json`](architecture/architecture.json)이다. `.drawio`와 PNG는 생성물이므로 직접 고치지 않는다.
 
-1. `architecture.json`을 고친다. 구성요소·연결·엔드포인트는 위쪽에, 좌표는 `layout`에 있다.
+1. `architecture.json`을 고친다. 구성요소·연결·엔드포인트는 위쪽에, 좌표는 `layout`에 있다. 구성도는 AWS 아키텍처 다이어그램 형식(아이콘 아래 2줄 이하 라벨)이다. 선에는 `flows`의 번호만 그리고, 설명(`label`)은 그림 아래 범례에 한 줄씩 들어간다. `type`은 `data`(진한 실선, 요청·데이터 흐름)와 `control`(회색 점선, 관리 흐름) 중 하나다. 선을 그리면 다른 도형을 가로지르는 흐름은 `"drawn": false`로 두고 범례에만 적는다.
 2. 저장소 루트에서 다시 만든다. PNG 내보내기에는 [draw.io 데스크톱](https://www.drawio.com/)이 필요하다.
    ```bash
    python docs/architecture/generate_drawio.py --png
