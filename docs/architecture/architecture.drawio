@@ -1,0 +1,1064 @@
+<mxfile host="generate_drawio.py">
+  <diagram name="구성도" id="system">
+    <mxGraphModel grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" math="0" shadow="0" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="zone-client" value="사용자 기기 (신뢰하지 않음)" style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;fontStyle=0;container=1;collapsible=0;recursiveResize=0;verticalAlign=top;align=left;spacingLeft=34;spacingTop=4;fontColor=#232F3E;fillColor=none;strokeColor=#b85450;strokeWidth=2;dashed=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="230" width="220" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="zone-client-icon" value="" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;html=1;aspect=fixed;pointerEvents=1;shape=mxgraph.aws4.users;" vertex="1" parent="zone-client">
+          <mxGeometry x="8" y="6" width="22" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="zone-vercel" value="Vercel 프로젝트 (우리가 운영)" style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;fontStyle=0;container=1;collapsible=0;recursiveResize=0;verticalAlign=top;align=left;spacingLeft=34;spacingTop=4;fontColor=#232F3E;fillColor=none;strokeColor=#6c8ebf;strokeWidth=2;dashed=0;" vertex="1" parent="1">
+          <mxGeometry x="340" y="80" width="260" height="350" as="geometry" />
+        </mxCell>
+        <mxCell id="zone-vercel-icon" value="" style="shape=image;html=1;aspect=fixed;imageAspect=1;image=data:image/svg+xml,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMTUiIGhlaWdodD0iMTAwIiBmaWxsPSJub25lIiB2aWV3Qm94PSIwIDAgMTE1IDEwMCI+PHBhdGggZmlsbD0iYmxhY2siIGZpbGwtcnVsZT0iZXZlbm9kZCIgZD0iTTU3LjUgMCAxMTUgMTAwSDB6IiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIHN0eWxlPSJmaWxsOmJsYWNrO2ZpbGwtb3BhY2l0eToxOyIvPjwvc3ZnPg==;" vertex="1" parent="zone-vercel">
+          <mxGeometry x="8" y="6" width="22" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="zone-supabase" value="Supabase" style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;fontStyle=0;container=1;collapsible=0;recursiveResize=0;verticalAlign=top;align=left;spacingLeft=34;spacingTop=4;fontColor=#232F3E;fillColor=none;strokeColor=#82b366;strokeWidth=2;dashed=0;" vertex="1" parent="1">
+          <mxGeometry x="700" y="80" width="240" height="680" as="geometry" />
+        </mxCell>
+        <mxCell id="zone-supabase-icon" value="" style="shape=image;html=1;aspect=fixed;imageAspect=1;image=data:image/svg+xml,PHN2ZyB3aWR0aD0iMTA5IiBoZWlnaHQ9IjExMyIgdmlld0JveD0iMCAwIDEwOSAxMTMiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxwYXRoIGQ9Ik02My43MDc2IDExMC4yODRDNjAuODQ4MSAxMTMuODg1IDU1LjA1MDIgMTExLjkxMiA1NC45ODEzIDEwNy4zMTRMNTMuOTczOCA0MC4wNjI3TDk5LjE5MzUgNDAuMDYyN0MxMDcuMzg0IDQwLjA2MjcgMTExLjk1MiA0OS41MjI4IDEwNi44NTkgNTUuOTM3NEw2My43MDc2IDExMC4yODRaIiBmaWxsPSJ1cmwoI3BhaW50MF9saW5lYXIpIi8+CjxwYXRoIGQ9Ik02My43MDc2IDExMC4yODRDNjAuODQ4MSAxMTMuODg1IDU1LjA1MDIgMTExLjkxMiA1NC45ODEzIDEwNy4zMTRMNTMuOTczOCA0MC4wNjI3TDk5LjE5MzUgNDAuMDYyN0MxMDcuMzg0IDQwLjA2MjcgMTExLjk1MiA0OS41MjI4IDEwNi44NTkgNTUuOTM3NEw2My43MDc2IDExMC4yODRaIiBmaWxsPSJ1cmwoI3BhaW50MV9saW5lYXIpIiBmaWxsLW9wYWNpdHk9IjAuMiIvPgo8cGF0aCBkPSJNNDUuMzE3IDIuMDcxMDNDNDguMTc2NSAtMS41MzAzNyA1My45NzQ1IDAuNDQyOTM3IDU0LjA0MzQgNS4wNDFMNTQuNDg0OSA3Mi4yOTIySDkuODMxMTNDMS42NDAzOCA3Mi4yOTIyIC0yLjkyNzc1IDYyLjgzMjEgMi4xNjU1IDU2LjQxNzVMNDUuMzE3IDIuMDcxMDNaIiBmaWxsPSIjM0VDRjhFIi8+CjxkZWZzPgo8bGluZWFyR3JhZGllbnQgaWQ9InBhaW50MF9saW5lYXIiIHgxPSI1My45NzM4IiB5MT0iNTQuOTc0IiB4Mj0iOTQuMTYzNSIgeTI9IjcxLjgyOTUiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj4KPHN0b3Agc3RvcC1jb2xvcj0iIzI0OTM2MSIvPgo8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMzRUNGOEUiLz4KPC9saW5lYXJHcmFkaWVudD4KPGxpbmVhckdyYWRpZW50IGlkPSJwYWludDFfbGluZWFyIiB4MT0iMzYuMTU1OCIgeTE9IjMwLjU3OCIgeDI9IjU0LjQ4NDQiIHkyPSI2NS4wODA2IiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CjxzdG9wLz4KPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLW9wYWNpdHk9IjAiLz4KPC9saW5lYXJHcmFkaWVudD4KPC9kZWZzPgo8L3N2Zz4K;" vertex="1" parent="zone-supabase">
+          <mxGeometry x="8" y="6" width="22" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="zone-external" value="AWS Cloud (외부 AI)" style="shape=mxgraph.aws4.group;grIcon=mxgraph.aws4.group_aws_cloud_alt;outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=0;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;verticalAlign=top;align=left;spacingLeft=30;fontColor=#232F3E;strokeColor=#232F3E;fillColor=none;dashed=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="500" width="220" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="zone-onetime" value="Notion 가져오기" style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;fontStyle=0;container=1;collapsible=0;recursiveResize=0;verticalAlign=top;align=left;spacingLeft=8;spacingTop=2;fontColor=#232F3E;fillColor=none;strokeColor=#666666;strokeWidth=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="560" width="410" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="browser" value="브라우저&lt;br&gt;React 화면" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;html=1;aspect=fixed;pointerEvents=1;fontColor=#232F3E;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;shape=mxgraph.aws4.client;" vertex="1" parent="zone-client">
+          <mxGeometry x="80" y="70" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="static" value="정적 화면 파일&lt;br&gt;Vite 빌드" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;html=1;aspect=fixed;pointerEvents=1;fontColor=#232F3E;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;shape=mxgraph.aws4.documents;" vertex="1" parent="zone-vercel">
+          <mxGeometry x="100" y="60" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="api" value="FastAPI /api&lt;br&gt;Vercel 함수, 도쿄" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;html=1;aspect=fixed;pointerEvents=1;fontColor=#232F3E;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;shape=mxgraph.aws4.gear;" vertex="1" parent="zone-vercel">
+          <mxGeometry x="100" y="220" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="auth" value="Supabase Auth&lt;br&gt;HttpOnly 쿠키 세션" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;html=1;aspect=fixed;pointerEvents=1;fontColor=#232F3E;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;shape=mxgraph.aws4.ssl_padlock;" vertex="1" parent="zone-supabase">
+          <mxGeometry x="90" y="60" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="db" value="Postgres&lt;br&gt;RLS, service_role만" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;html=1;aspect=fixed;pointerEvents=1;fontColor=#232F3E;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;shape=mxgraph.aws4.generic_database;" vertex="1" parent="zone-supabase">
+          <mxGeometry x="90" y="220" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="glossary_images" value="사전 이미지 버킷&lt;br&gt;공개 읽기 제안" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;html=1;aspect=fixed;pointerEvents=1;fontColor=#232F3E;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;shape=mxgraph.aws4.bucket;" vertex="1" parent="zone-supabase">
+          <mxGeometry x="90" y="390" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="note_images" value="노트 이미지 버킷&lt;br&gt;비공개, 서명 URL" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;html=1;aspect=fixed;pointerEvents=1;fontColor=#232F3E;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;shape=mxgraph.aws4.bucket;" vertex="1" parent="zone-supabase">
+          <mxGeometry x="90" y="560" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="bedrock" value="Amazon Bedrock&lt;br&gt;gpt-6-luna 잠정" style="sketch=0;outlineConnect=0;fillColor=#01A88D;strokeColor=#ffffff;dashed=0;html=1;aspect=fixed;fontColor=#232F3E;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;" vertex="1" parent="zone-external">
+          <mxGeometry x="80" y="70" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="importer" value="가져오기 스크립트&lt;br&gt;운영자 로컬" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;html=1;aspect=fixed;pointerEvents=1;fontColor=#232F3E;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;shape=mxgraph.aws4.gear;" vertex="1" parent="zone-onetime">
+          <mxGeometry x="130" y="80" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="notion" value="Notion&lt;br&gt;허용한 페이지만" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;html=1;aspect=fixed;pointerEvents=1;fontColor=#232F3E;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;shape=mxgraph.aws4.documents;" vertex="1" parent="zone-onetime">
+          <mxGeometry x="290" y="80" width="60" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="f-static" value="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;endFill=1;strokeColor=#232F3E;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="browser" target="static">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="310" y="315" />
+              <mxPoint x="310" y="170" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f-api" value="2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;endFill=1;strokeColor=#232F3E;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="browser" target="api">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f-auth" value="3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;endFill=1;strokeColor=#232F3E;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="api" target="auth">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="640" y="315" />
+              <mxPoint x="640" y="170" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f-db" value="4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;endFill=1;strokeColor=#232F3E;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="api" target="db">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f-glossary-write" value="5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;endFill=1;strokeColor=#232F3E;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="api" target="glossary_images">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="660" y="345" />
+              <mxPoint x="660" y="500" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f-note-sign" value="6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;endFill=1;strokeColor=#232F3E;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.9;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="api" target="note_images">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="620" y="354" />
+              <mxPoint x="620" y="670" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f-ai" value="7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=classic;endFill=1;strokeColor=#232F3E;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;exitX=0;exitY=0.85;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="api" target="bedrock">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="320" y="351" />
+              <mxPoint x="320" y="600" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f-notion" value="10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=open;endFill=0;strokeColor=#879196;strokeWidth=1;dashed=1;dashPattern=6 3;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="importer" target="notion">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f-import-db" value="11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=open;endFill=0;strokeColor=#879196;strokeWidth=1;dashed=1;dashPattern=6 3;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="importer" target="db">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1240" y="330" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f-import-img" value="12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=open;endFill=0;strokeColor=#879196;strokeWidth=1;dashed=1;dashPattern=6 3;fontSize=11;labelBackgroundColor=#ffffff;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="importer" target="note_images">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-1" value="&lt;b&gt;요청 흐름 (실선)&lt;/b&gt;&lt;br&gt;1. 화면 파일을 받는다(HTTPS)&lt;br&gt;2. /api 요청. 세션 쿠키, 상태 변경은 Origin 검사&lt;br&gt;3. 로그인·로그아웃·계정 발급&lt;br&gt;4. secret key로 읽기·쓰기. 원자 작업은 SQL 함수&lt;br&gt;5. 사전 이미지 업로드·삭제" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=12;strokeColor=#D5DBDB;fillColor=#ffffff;fontColor=#232F3E;" vertex="1" parent="1">
+          <mxGeometry x="40" y="800" width="340" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-2" value="&lt;b&gt;요청 흐름 (계속)&lt;/b&gt;&lt;br&gt;6. 읽기 권한 확인 뒤 서명 URL 발급, 객체 삭제&lt;br&gt;7. AI 호출. 예약 → 호출 → 정산, OIDC(기본)·API 키(대체)&lt;br&gt;8. 서명 URL로 노트 이미지를 직접 읽는다(선 생략)&lt;br&gt;9. 공개 URL로 사전 이미지를 직접 읽는다(Q7 미정, 선 생략)" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=12;strokeColor=#D5DBDB;fillColor=#ffffff;fontColor=#232F3E;" vertex="1" parent="1">
+          <mxGeometry x="400" y="800" width="380" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-3" value="&lt;b&gt;Notion 가져오기 (회색 점선, 처음 한 번)&lt;/b&gt;&lt;br&gt;10. 허용한 페이지 본문만 읽는다&lt;br&gt;11. 노트를 기록한다(이미 있으면 건너뜀)&lt;br&gt;12. 이미지를 재인코딩해 올린다" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=12;strokeColor=#D5DBDB;fillColor=#ffffff;fontColor=#232F3E;" vertex="1" parent="1">
+          <mxGeometry x="800" y="800" width="330" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-4" value="&lt;b&gt;테두리 색&lt;/b&gt;&lt;br&gt;빨강: 사용자 기기 (신뢰하지 않음)&lt;br&gt;파랑: 우리가 운영하는 Vercel 프로젝트&lt;br&gt;초록: Supabase&lt;br&gt;회색 점선: 처음 한 번만 쓰는 영역" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=12;strokeColor=#D5DBDB;fillColor=#ffffff;fontColor=#232F3E;" vertex="1" parent="1">
+          <mxGeometry x="1150" y="800" width="340" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="footer" value="출처: CS 학습 노트 기술 검토 v0.2(3~8절 수락 2026-10-26), CS 학습 노트 백엔드 API spec v0.2(확인됨 2026-10-26). 원본과 다르면 원본을 따른다. 아이콘: AWS Architecture Icons(draw.io 내장), Supabase·Vercel 공식 로고.&lt;br&gt;Vercel, the Vercel design, Next.js and related marks, designs and logos are trademarks or registered trademarks of Vercel, Inc. or its affiliates in the US and other countries." style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=11;strokeColor=#D5DBDB;fillColor=#ffffff;fontColor=#545B64;" vertex="1" parent="1">
+          <mxGeometry x="40" y="940" width="1450" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram name="엔드포인트 표" id="endpoints">
+    <mxGraphModel grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" math="0" shadow="0" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="h-id" value="&lt;b&gt;ID&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#eeeeee;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="50" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="h-method" value="&lt;b&gt;메서드&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#eeeeee;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="90" y="40" width="70" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="h-path" value="&lt;b&gt;경로&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#eeeeee;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="160" y="40" width="380" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="h-visitor" value="&lt;b&gt;방문자&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#eeeeee;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="40" width="44" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="h-member" value="&lt;b&gt;사용자&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#eeeeee;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="40" width="44" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="h-operator" value="&lt;b&gt;운영자&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#eeeeee;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="40" width="44" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="h-auth" value="&lt;b&gt;Supabase Auth&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="40" width="96" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="h-db" value="&lt;b&gt;Postgres&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="40" width="96" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="h-note_images" value="&lt;b&gt;노트 이미지 버킷&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="40" width="96" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="h-glossary_images" value="&lt;b&gt;사전 이미지 버킷&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="40" width="96" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="h-bedrock" value="&lt;b&gt;Amazon Bedrock&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#fff2cc;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="40" width="96" height="44" as="geometry" />
+        </mxCell>
+        <mxCell id="g-account" value="&lt;b&gt;계정&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#dae8fc;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="84" width="1112" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E01-id" value="&lt;b&gt;E01&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="108" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E01-method" value="POST" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="108" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E01-path" value="/api/auth/login" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="108" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E01-visitor" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="108" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E01-member" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="108" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E01-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="108" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E01-auth" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="108" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E01-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="108" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E01-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="108" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E01-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="108" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E01-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="108" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E02-id" value="&lt;b&gt;E02&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="132" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E02-method" value="POST" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="132" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E02-path" value="/api/auth/logout" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="132" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E02-visitor" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="132" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E02-member" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="132" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E02-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="132" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E02-auth" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="132" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E02-db" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="132" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E02-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="132" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E02-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="132" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E02-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="132" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E03-id" value="&lt;b&gt;E03&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="156" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E03-method" value="GET" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="156" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E03-path" value="/api/me" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="156" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E03-visitor" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="156" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E03-member" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="156" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E03-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="156" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E03-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="156" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E03-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="156" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E03-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="156" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E03-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="156" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E03-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="156" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="g-notes" value="&lt;b&gt;노트 읽기&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#dae8fc;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="180" width="1112" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E04-id" value="&lt;b&gt;E04&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="204" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E04-method" value="GET" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="204" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E04-path" value="/api/notes" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="204" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E04-visitor" value="△" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="204" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E04-member" value="△" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="204" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E04-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="204" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E04-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="204" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E04-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="204" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E04-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="204" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E04-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="204" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E04-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="204" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E05-id" value="&lt;b&gt;E05&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="228" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E05-method" value="GET" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="228" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E05-path" value="/api/notes/{note_id}" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="228" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E05-visitor" value="△" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="228" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E05-member" value="△" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="228" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E05-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="228" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E05-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="228" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E05-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="228" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E05-note_images" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="228" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E05-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="228" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E05-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="228" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="g-terms" value="&lt;b&gt;사전·열람·즐겨찾기&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#dae8fc;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="252" width="1112" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E06-id" value="&lt;b&gt;E06&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="276" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E06-method" value="GET" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="276" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E06-path" value="/api/glossary/{term_id}" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="276" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E06-visitor" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="276" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E06-member" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="276" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E06-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="276" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E06-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="276" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E06-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="276" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E06-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="276" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E06-glossary_images" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="276" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E06-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="276" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E07-id" value="&lt;b&gt;E07&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="300" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E07-method" value="POST" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="300" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E07-path" value="/api/term-views" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="300" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E07-visitor" value="○" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="300" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E07-member" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="300" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E07-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="300" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E07-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="300" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E07-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="300" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E07-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="300" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E07-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="300" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E07-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="300" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E08-id" value="&lt;b&gt;E08&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="324" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E08-method" value="PUT" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="324" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E08-path" value="/api/favorites/{term_id}" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="324" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E08-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="324" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E08-member" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="324" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E08-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="324" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E08-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="324" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E08-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="324" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E08-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="324" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E08-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="324" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E08-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="324" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="g-ai" value="&lt;b&gt;AI 설명·신고&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#dae8fc;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="348" width="1112" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E09-id" value="&lt;b&gt;E09&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="372" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E09-method" value="POST" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="372" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E09-path" value="/api/ai/explanations" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="372" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E09-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="372" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E09-member" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="372" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E09-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="372" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E09-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="372" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E09-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="372" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E09-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="372" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E09-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="372" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E09-bedrock" value="AI" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#fff2cc;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="372" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E10-id" value="&lt;b&gt;E10&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="396" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E10-method" value="POST" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="396" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E10-path" value="/api/reports" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="396" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E10-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="396" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E10-member" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="396" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E10-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="396" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E10-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="396" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E10-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="396" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E10-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="396" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E10-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="396" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E10-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="396" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="g-quiz" value="&lt;b&gt;퀴즈&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#dae8fc;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="420" width="1112" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E11-id" value="&lt;b&gt;E11&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="444" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E11-method" value="POST" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="444" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E11-path" value="/api/quiz/today" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="444" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E11-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="444" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E11-member" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="444" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E11-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="444" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E11-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="444" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E11-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="444" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E11-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="444" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E11-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="444" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E11-bedrock" value="AI" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#fff2cc;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="444" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E12-id" value="&lt;b&gt;E12&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="468" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E12-method" value="POST" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="468" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E12-path" value="/api/quiz/items/{item_id}/answer" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="468" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E12-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="468" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E12-member" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="468" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E12-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="468" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E12-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="468" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E12-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="468" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E12-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="468" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E12-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="468" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E12-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="468" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E13-id" value="&lt;b&gt;E13&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="492" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E13-method" value="POST" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="492" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E13-path" value="/api/quiz/items/{item_id}/followups" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="492" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E13-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="492" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E13-member" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="492" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E13-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="492" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E13-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="492" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E13-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="492" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E13-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="492" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E13-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="492" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E13-bedrock" value="AI" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#fff2cc;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="492" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E14-id" value="&lt;b&gt;E14&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="516" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E14-method" value="PUT" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="516" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E14-path" value="/api/quiz/items/{item_id}/followups/{seq}/answer" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="516" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E14-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="516" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E14-member" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="516" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E14-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="516" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E14-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="516" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E14-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="516" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E14-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="516" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E14-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="516" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E14-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="516" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="g-admin-notes" value="&lt;b&gt;운영자 노트&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#dae8fc;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="540" width="1112" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E15-id" value="&lt;b&gt;E15&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="564" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E15-method" value="GET" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="564" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E15-path" value="/api/admin/notes/{note_id}" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="564" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E15-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="564" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E15-member" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="564" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E15-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="564" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E15-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="564" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E15-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="564" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E15-note_images" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="564" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E15-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="564" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E15-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="564" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E16-id" value="&lt;b&gt;E16&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="588" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E16-method" value="POST" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="588" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E16-path" value="/api/admin/notes" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="588" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E16-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="588" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E16-member" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="588" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E16-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="588" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E16-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="588" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E16-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="588" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E16-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="588" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E16-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="588" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E16-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="588" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E17-id" value="&lt;b&gt;E17&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="612" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E17-method" value="PATCH" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="612" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E17-path" value="/api/admin/notes/{note_id}" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="612" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E17-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="612" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E17-member" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="612" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E17-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="612" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E17-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="612" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E17-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="612" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E17-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="612" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E17-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="612" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E17-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="612" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E18-id" value="&lt;b&gt;E18&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="636" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E18-method" value="DELETE" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="636" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E18-path" value="/api/admin/notes/{note_id}" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="636" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E18-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="636" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E18-member" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="636" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E18-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="636" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E18-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="636" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E18-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="636" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E18-note_images" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="636" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E18-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="636" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E18-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="636" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="g-admin-glossary" value="&lt;b&gt;운영자 사전&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#dae8fc;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="660" width="1112" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E19-id" value="&lt;b&gt;E19&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="684" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E19-method" value="GET" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="684" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E19-path" value="/api/admin/glossary" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="684" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E19-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="684" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E19-member" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="684" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E19-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="684" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E19-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="684" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E19-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="684" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E19-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="684" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E19-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="684" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E19-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="684" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E20-id" value="&lt;b&gt;E20&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="708" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E20-method" value="POST" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="708" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E20-path" value="/api/admin/glossary" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="708" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E20-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="708" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E20-member" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="708" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E20-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="708" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E20-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="708" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E20-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="708" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E20-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="708" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E20-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="708" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E20-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="708" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E21-id" value="&lt;b&gt;E21&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="732" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E21-method" value="DELETE" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="732" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E21-path" value="/api/admin/glossary/{term_id}" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="732" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E21-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="732" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E21-member" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="732" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E21-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="732" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E21-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="732" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E21-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="732" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E21-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="732" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E21-glossary_images" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="732" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E21-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="732" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E22-id" value="&lt;b&gt;E22&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="756" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E22-method" value="POST" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="756" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E22-path" value="/api/admin/glossary/{term_id}/images" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="756" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E22-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="756" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E22-member" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="756" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E22-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="756" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E22-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="756" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E22-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="756" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E22-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="756" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E22-glossary_images" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="756" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E22-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="756" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E23-id" value="&lt;b&gt;E23&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="780" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E23-method" value="DELETE" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="780" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E23-path" value="/api/admin/glossary/{term_id}/images/{image_id}" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="780" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E23-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="780" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E23-member" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="780" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E23-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="780" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E23-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="780" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E23-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="780" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E23-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="780" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E23-glossary_images" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="780" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E23-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="780" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="g-admin-misc" value="&lt;b&gt;운영자 계정·신고&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#dae8fc;fontSize=11;align=left;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="804" width="1112" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E24-id" value="&lt;b&gt;E24&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="828" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E24-method" value="POST" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="828" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E24-path" value="/api/admin/users" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="828" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E24-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="828" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E24-member" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="828" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E24-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="828" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E24-auth" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="828" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E24-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="828" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E24-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="828" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E24-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="828" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E24-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="828" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E25-id" value="&lt;b&gt;E25&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="852" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E25-method" value="GET" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="852" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E25-path" value="/api/admin/reports" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="852" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E25-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="852" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E25-member" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="852" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E25-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="852" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E25-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="852" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E25-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="852" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E25-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="852" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E25-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="852" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E25-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="852" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E26-id" value="&lt;b&gt;E26&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="876" width="50" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E26-method" value="PATCH" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="90" y="876" width="70" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E26-path" value="/api/admin/reports/{report_id}" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;fontFamily=Courier New;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="160" y="876" width="380" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E26-visitor" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="876" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E26-member" value="✗" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="584" y="876" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E26-operator" value="✓" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="628" y="876" width="44" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E26-auth" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="672" y="876" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E26-db" value="●" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#d5e8d4;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="768" y="876" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E26-note_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="864" y="876" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E26-glossary_images" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="876" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="E26-bedrock" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=#bfbfbf;fillColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1056" y="876" width="96" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" value="권한: ✓ 허용, △ 공개 노트만, ○ 기록 없이 성공, ✗ 거부. 색칠한 칸 = 그 엔드포인트가 쓰는 구성요소(세션 확인은 빼고 셈). AI = Bedrock 호출(예약 → 호출 → 정산).&lt;br&gt;출처: CS 학습 노트 기술 검토 v0.2(3~8절 수락 2026-10-26), CS 학습 노트 백엔드 API spec v0.2(확인됨 2026-10-26). 원본과 다르면 원본을 따른다." style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=11;strokeColor=#D5DBDB;fillColor=#ffffff;" vertex="1" parent="1">
+          <mxGeometry x="40" y="912" width="1112" height="40" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

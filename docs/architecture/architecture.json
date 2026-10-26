@@ -1,0 +1,132 @@
+{
+  "meta": {
+    "title": "CS 학습 노트 아키텍처",
+    "sources": [
+      {"name": "CS 학습 노트 기술 검토", "version": "v0.2", "status": "3~8절 수락", "date": "2026-10-26", "where": "Linear, MEG-38 첨부"},
+      {"name": "CS 학습 노트 백엔드 API spec", "version": "v0.2", "status": "확인됨", "date": "2026-10-26", "where": "Linear, MEG-27 첨부"}
+    ],
+    "rule": "이 파일은 원본의 공개 요약이다. 원본과 다르면 원본을 따른다. 이 파일을 고친 뒤 generate_drawio.py로 architecture.drawio를 다시 만든다."
+  },
+  "icons": {
+    "note": "image는 각 회사 브랜드 페이지에서 받은 원본 그대로다. aws_resource·aws_shape·aws_group은 draw.io에 들어 있는 AWS Architecture Icons다.",
+    "attribution": "Vercel, the Vercel design, Next.js and related marks, designs and logos are trademarks or registered trademarks of Vercel, Inc. or its affiliates in the US and other countries.",
+    "sources": {"icons/vercel-symbol-black.svg": "https://vercel.com/geist/brands (Vercel Symbol Black)", "icons/supabase-logo-icon.svg": "https://supabase.com/brand-assets (logo kit, supabase-logo-icon.svg)"}
+  },
+  "zones": [
+    {"id": "client", "label": "사용자 기기 (신뢰하지 않음)", "kind": "untrusted", "icon": {"aws_shape": "users"}},
+    {"id": "vercel", "label": "Vercel 프로젝트 (우리가 운영)", "kind": "server", "icon": {"image": "icons/vercel-symbol-black.svg"}},
+    {"id": "supabase", "label": "Supabase", "kind": "supabase", "icon": {"image": "icons/supabase-logo-icon.svg"}},
+    {"id": "external", "label": "AWS Cloud (외부 AI)", "kind": "external", "icon": {"aws_group": "group_aws_cloud_alt"}},
+    {"id": "onetime", "label": "Notion 가져오기", "kind": "onetime"}
+  ],
+  "components": [
+    {"id": "browser", "zone": "client", "label": "브라우저", "icon": {"aws_shape": "client"}, "sub": "React 화면"},
+    {"id": "static", "zone": "vercel", "label": "정적 화면 파일", "icon": {"aws_shape": "documents"}, "sub": "Vite 빌드"},
+    {"id": "api", "zone": "vercel", "label": "FastAPI /api", "icon": {"aws_shape": "gear"}, "sub": "Vercel 함수, 도쿄"},
+    {"id": "auth", "zone": "supabase", "label": "Supabase Auth", "icon": {"aws_shape": "ssl_padlock"}, "sub": "HttpOnly 쿠키 세션"},
+    {"id": "db", "zone": "supabase", "label": "Postgres", "icon": {"aws_shape": "generic_database"}, "sub": "RLS, service_role만"},
+    {"id": "glossary_images", "zone": "supabase", "label": "사전 이미지 버킷", "icon": {"aws_shape": "bucket"}, "sub": "공개 읽기 제안"},
+    {"id": "note_images", "zone": "supabase", "label": "노트 이미지 버킷", "icon": {"aws_shape": "bucket"}, "sub": "비공개, 서명 URL"},
+    {"id": "bedrock", "zone": "external", "label": "Amazon Bedrock", "icon": {"aws_resource": "bedrock", "color": "#01A88D"}, "sub": "gpt-6-luna 잠정"},
+    {"id": "importer", "zone": "onetime", "label": "가져오기 스크립트", "icon": {"aws_shape": "gear"}, "sub": "운영자 로컬"},
+    {"id": "notion", "zone": "onetime", "label": "Notion", "icon": {"aws_shape": "documents"}, "sub": "허용한 페이지만"}
+  ],
+  "flows": [
+    {"id": "f-static", "no": 1, "type": "data", "from": "browser", "to": "static", "label": "화면 파일을 받는다(HTTPS)"},
+    {"id": "f-api", "no": 2, "type": "data", "from": "browser", "to": "api", "label": "/api 요청. 세션 쿠키, 상태 변경은 Origin 검사"},
+    {"id": "f-auth", "no": 3, "type": "data", "from": "api", "to": "auth", "label": "로그인·로그아웃·계정 발급"},
+    {"id": "f-db", "no": 4, "type": "data", "from": "api", "to": "db", "label": "secret key로 읽기·쓰기. 원자 작업은 SQL 함수"},
+    {"id": "f-glossary-write", "no": 5, "type": "data", "from": "api", "to": "glossary_images", "label": "사전 이미지 업로드·삭제"},
+    {"id": "f-note-sign", "no": 6, "type": "data", "from": "api", "to": "note_images", "label": "읽기 권한 확인 뒤 서명 URL 발급, 객체 삭제"},
+    {"id": "f-ai", "no": 7, "type": "data", "from": "api", "to": "bedrock", "label": "AI 호출. 예약 → 호출 → 정산, OIDC(기본)·API 키(대체)"},
+    {"id": "f-note-read", "no": 8, "type": "data", "from": "browser", "to": "note_images", "label": "서명 URL로 노트 이미지를 직접 읽는다(선 생략)", "drawn": false},
+    {"id": "f-glossary-read", "no": 9, "type": "data", "from": "browser", "to": "glossary_images", "label": "공개 URL로 사전 이미지를 직접 읽는다(Q7 미정, 선 생략)", "drawn": false},
+    {"id": "f-notion", "no": 10, "type": "control", "from": "importer", "to": "notion", "label": "허용한 페이지 본문만 읽는다"},
+    {"id": "f-import-db", "no": 11, "type": "control", "from": "importer", "to": "db", "label": "노트를 기록한다(이미 있으면 건너뜀)"},
+    {"id": "f-import-img", "no": 12, "type": "control", "from": "importer", "to": "note_images", "label": "이미지를 재인코딩해 올린다"}
+  ],
+  "trust_boundaries": [
+    {"id": "tb-browser", "boundary": "브라우저 → FastAPI", "untrusted": "요청 본문, 쿠키 밖의 신원 주장, 화면에서 숨긴 버튼", "server_action": "모든 요청에서 세션을 확인하고 권한표대로 거부한다"},
+    {"id": "tb-ai-response", "boundary": "FastAPI → AI", "untrusted": "AI 응답 전체", "server_action": "응답을 텍스트로만 저장·표시하고 응답 속 지시를 실행하지 않는다"},
+    {"id": "tb-ai-prompt", "boundary": "노트·사전·사용자 답변 → AI 프롬프트", "untrusted": "그 안의 문장(프롬프트 인젝션 가능)", "server_action": "자료 구역에 넣고 AI에 도구 권한을 주지 않는다"},
+    {"id": "tb-notion", "boundary": "Notion → 가져오기 스크립트", "untrusted": "페이지 본문", "server_action": "허용한 페이지의 본문 블록만 읽고 하위·링크 페이지는 따라가지 않는다"}
+  ],
+  "endpoint_groups": [
+    {"id": "g-account", "label": "계정"},
+    {"id": "g-notes", "label": "노트 읽기"},
+    {"id": "g-terms", "label": "사전·열람·즐겨찾기"},
+    {"id": "g-ai", "label": "AI 설명·신고"},
+    {"id": "g-quiz", "label": "퀴즈"},
+    {"id": "g-admin-notes", "label": "운영자 노트"},
+    {"id": "g-admin-glossary", "label": "운영자 사전"},
+    {"id": "g-admin-misc", "label": "운영자 계정·신고"}
+  ],
+  "roles_legend": {
+    "allow": "허용",
+    "public_only": "공개 노트만",
+    "no_record": "기록 없이 성공",
+    "deny": "거부"
+  },
+  "endpoints": [
+    {"id": "E01", "group": "g-account", "method": "POST", "path": "/api/auth/login", "roles": {"visitor": "allow", "member": "allow", "operator": "allow"}, "uses": ["auth", "db"]},
+    {"id": "E02", "group": "g-account", "method": "POST", "path": "/api/auth/logout", "roles": {"visitor": "allow", "member": "allow", "operator": "allow"}, "uses": ["auth"]},
+    {"id": "E03", "group": "g-account", "method": "GET", "path": "/api/me", "roles": {"visitor": "allow", "member": "allow", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E04", "group": "g-notes", "method": "GET", "path": "/api/notes", "roles": {"visitor": "public_only", "member": "public_only", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E05", "group": "g-notes", "method": "GET", "path": "/api/notes/{note_id}", "roles": {"visitor": "public_only", "member": "public_only", "operator": "allow"}, "uses": ["db", "note_images"]},
+    {"id": "E06", "group": "g-terms", "method": "GET", "path": "/api/glossary/{term_id}", "roles": {"visitor": "allow", "member": "allow", "operator": "allow"}, "uses": ["db", "glossary_images"]},
+    {"id": "E07", "group": "g-terms", "method": "POST", "path": "/api/term-views", "roles": {"visitor": "no_record", "member": "allow", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E08", "group": "g-terms", "method": "PUT", "path": "/api/favorites/{term_id}", "roles": {"visitor": "deny", "member": "allow", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E09", "group": "g-ai", "method": "POST", "path": "/api/ai/explanations", "roles": {"visitor": "deny", "member": "allow", "operator": "allow"}, "uses": ["db", "bedrock"], "ai_kind": "explain"},
+    {"id": "E10", "group": "g-ai", "method": "POST", "path": "/api/reports", "roles": {"visitor": "deny", "member": "allow", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E11", "group": "g-quiz", "method": "POST", "path": "/api/quiz/today", "roles": {"visitor": "deny", "member": "allow", "operator": "allow"}, "uses": ["db", "bedrock"], "ai_kind": "quiz"},
+    {"id": "E12", "group": "g-quiz", "method": "POST", "path": "/api/quiz/items/{item_id}/answer", "roles": {"visitor": "deny", "member": "allow", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E13", "group": "g-quiz", "method": "POST", "path": "/api/quiz/items/{item_id}/followups", "roles": {"visitor": "deny", "member": "allow", "operator": "allow"}, "uses": ["db", "bedrock"], "ai_kind": "followup"},
+    {"id": "E14", "group": "g-quiz", "method": "PUT", "path": "/api/quiz/items/{item_id}/followups/{seq}/answer", "roles": {"visitor": "deny", "member": "allow", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E15", "group": "g-admin-notes", "method": "GET", "path": "/api/admin/notes/{note_id}", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db", "note_images"]},
+    {"id": "E16", "group": "g-admin-notes", "method": "POST", "path": "/api/admin/notes", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E17", "group": "g-admin-notes", "method": "PATCH", "path": "/api/admin/notes/{note_id}", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E18", "group": "g-admin-notes", "method": "DELETE", "path": "/api/admin/notes/{note_id}", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db", "note_images"]},
+    {"id": "E19", "group": "g-admin-glossary", "method": "GET", "path": "/api/admin/glossary", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E20", "group": "g-admin-glossary", "method": "POST", "path": "/api/admin/glossary", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E21", "group": "g-admin-glossary", "method": "DELETE", "path": "/api/admin/glossary/{term_id}", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db", "glossary_images"]},
+    {"id": "E22", "group": "g-admin-glossary", "method": "POST", "path": "/api/admin/glossary/{term_id}/images", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db", "glossary_images"]},
+    {"id": "E23", "group": "g-admin-glossary", "method": "DELETE", "path": "/api/admin/glossary/{term_id}/images/{image_id}", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db", "glossary_images"]},
+    {"id": "E24", "group": "g-admin-misc", "method": "POST", "path": "/api/admin/users", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["auth", "db"]},
+    {"id": "E25", "group": "g-admin-misc", "method": "GET", "path": "/api/admin/reports", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E26", "group": "g-admin-misc", "method": "PATCH", "path": "/api/admin/reports/{report_id}", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db"]}
+  ],
+  "layout": {
+    "system": {
+      "_note": "좌표는 모두 캔버스 절대값이다. 구성요소는 아이콘(60x60) 왼쪽 위 좌표이고 라벨은 아이콘 아래에 붙는다.",
+      "zones": {"client": [40, 230, 220, 200], "external": [40, 500, 220, 200], "vercel": [340, 80, 260, 350], "supabase": [700, 80, 240, 680], "onetime": [1080, 560, 410, 200]},
+      "components": {"browser": [120, 300], "bedrock": [120, 570], "static": [440, 140], "api": [440, 300], "auth": [790, 140], "db": [790, 300], "glossary_images": [790, 470], "note_images": [790, 640], "importer": [1210, 640], "notion": [1370, 640]},
+      "flows": {
+        "f-static": {"exit": [1, 0.25], "entry": [0, 0.5], "points": [[310, 315], [310, 170]]},
+        "f-api": {"exit": [1, 0.5], "entry": [0, 0.5]},
+        "f-auth": {"exit": [1, 0.25], "entry": [0, 0.5], "points": [[640, 315], [640, 170]]},
+        "f-db": {"exit": [1, 0.5], "entry": [0, 0.5]},
+        "f-glossary-write": {"exit": [1, 0.75], "entry": [0, 0.5], "points": [[660, 345], [660, 500]]},
+        "f-note-sign": {"exit": [1, 0.9], "entry": [0, 0.5], "points": [[620, 354], [620, 670]]},
+        "f-ai": {"exit": [0, 0.85], "entry": [1, 0.5], "points": [[320, 351], [320, 600]]},
+        "f-notion": {"exit": [1, 0.5], "entry": [0, 0.5]},
+        "f-import-db": {"exit": [0.5, 0], "entry": [1, 0.5], "points": [[1240, 330]]},
+        "f-import-img": {"exit": [0, 0.5], "entry": [1, 0.5]}
+      },
+      "legend": [
+        {"box": [40, 800, 340, 120], "title": "요청 흐름 (실선)", "flows": [1, 2, 3, 4, 5]},
+        {"box": [400, 800, 380, 120], "title": "요청 흐름 (계속)", "flows": [6, 7, 8, 9]},
+        {"box": [800, 800, 330, 120], "title": "Notion 가져오기 (회색 점선, 처음 한 번)", "flows": [10, 11, 12]},
+        {"box": [1150, 800, 340, 120], "title": "테두리 색", "lines": ["빨강: 사용자 기기 (신뢰하지 않음)", "파랑: 우리가 운영하는 Vercel 프로젝트", "초록: Supabase", "회색 점선: 처음 한 번만 쓰는 영역"]}
+      ],
+      "footer": [40, 940, 1450, 50]
+    },
+    "endpoints": {
+      "x": 40,
+      "y": 40,
+      "header_height": 44,
+      "row_height": 24,
+      "widths": {"id": 50, "method": 70, "path": 380, "role": 44, "target": 96},
+      "target_order": ["auth", "db", "note_images", "glossary_images", "bedrock"]
+    }
+  }
+}
