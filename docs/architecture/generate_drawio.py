@@ -2,14 +2,16 @@
 
 사용법 (저장소 루트에서):
     python docs/architecture/generate_drawio.py          # .drawio 다시 만들기
-    python docs/architecture/generate_drawio.py --check  # JSON과 .drawio가 같은지 비교만
+    python docs/architecture/generate_drawio.py --check  # JSON과 .drawio, .drawio와 PNG가 맞는지 비교만
     python docs/architecture/generate_drawio.py --png    # .drawio와 함께 페이지별 PNG도 내보내기 (draw.io 데스크톱 필요)
 
 표준 라이브러리만 쓴다. 원본은 JSON이고 .drawio·PNG는 생성물이므로 직접 고치지 않는다.
+PNG는 내용 비교가 어려워, --png가 내보낸 .drawio의 해시를 PNG_STAMP에 남기고 --check가 그 값을 비교한다.
 """
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -23,6 +25,7 @@ HERE = Path(__file__).resolve().parent
 SOURCE = HERE / "architecture.json"
 TARGET = HERE / "architecture.drawio"
 PNG_PAGES = {1: HERE / "architecture-system.png", 2: HERE / "architecture-endpoints.png"}
+PNG_STAMP = HERE / "architecture-png.sha256"
 
 ZONE_STYLE = {
     "untrusted": ("#f8cecc", "#b85450", False),
@@ -326,21 +329,46 @@ def find_drawio_cli():
     return next((c for c in candidates if c and Path(c).exists()), None)
 
 
-def export_png():
+def drawio_digest(xml):
+    return hashlib.sha256(xml.encode("utf-8")).hexdigest()
+
+
+def export_png(xml):
     cli = find_drawio_cli()
     if not cli:
         sys.exit("draw.io 데스크톱을 찾지 못했다. 설치하거나 DRAWIO_CLI 환경변수에 실행 파일 경로를 넣는다.")
+    # 내보내기 도중 실패하면 PNG 두 장이 서로 다른 판일 수 있으므로 기록을 먼저 지운다.
+    PNG_STAMP.unlink(missing_ok=True)
     for index, out in PNG_PAGES.items():
-        subprocess.run(
+        result = subprocess.run(
             [cli, "-x", "-f", "png", "-p", str(index), "-b", "10", "--disable-gpu", "-o", str(out), str(TARGET)],
-            check=True, capture_output=True,
+            capture_output=True,
         )
+        if result.returncode != 0:
+            output = (result.stderr or result.stdout).decode("utf-8", errors="replace").strip()
+            sys.exit(f"draw.io 내보내기 실패({out.name}, 종료 코드 {result.returncode}):\n{output}")
         print(f"내보냄: {out.name}")
+    PNG_STAMP.write_text(drawio_digest(xml) + "\n", encoding="utf-8", newline="\n")
+    print(f"기록: {PNG_STAMP.name}")
+
+
+def check(xml):
+    current = TARGET.read_text(encoding="utf-8") if TARGET.exists() else ""
+    if current != xml:
+        sys.exit("architecture.drawio가 architecture.json과 다르다. 생성 스크립트를 --png로 다시 실행한다.")
+    stamp = PNG_STAMP.read_text(encoding="utf-8").strip() if PNG_STAMP.exists() else ""
+    if stamp != drawio_digest(xml):
+        sys.exit(f"PNG가 지금 architecture.drawio에서 내보낸 것이 아니다({PNG_STAMP.name} 불일치). --png로 다시 내보낸다.")
+    print("일치: architecture.drawio = architecture.json, PNG = architecture.drawio")
 
 
 def main():
+    # 콘솔 인코딩이 UTF-8이 아니어도 한글 출력에서 UnicodeEncodeError로 멈추지 않게 한다.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--check", action="store_true", help="파일을 쓰지 않고 JSON과 .drawio가 같은지만 확인한다")
+    parser.add_argument("--check", action="store_true", help="파일을 쓰지 않고 JSON과 .drawio, .drawio와 PNG가 맞는지만 확인한다")
     parser.add_argument("--png", action="store_true", help=".drawio를 만든 뒤 페이지별 PNG도 내보낸다")
     args = parser.parse_args()
 
@@ -351,16 +379,13 @@ def main():
     xml = render(model)
 
     if args.check:
-        current = TARGET.read_text(encoding="utf-8") if TARGET.exists() else ""
-        if current != xml:
-            sys.exit("architecture.drawio가 architecture.json과 다르다. 생성 스크립트를 다시 실행한다.")
-        print("일치: architecture.drawio = architecture.json")
+        check(xml)
         return
 
     TARGET.write_text(xml, encoding="utf-8", newline="\n")
     print(f"생성: {TARGET.name}")
     if args.png:
-        export_png()
+        export_png(xml)
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ API spec v0.2의 엔드포인트 26개를 역할별 권한, 사용하는 구성�
    ```bash
    python docs/architecture/generate_drawio.py --png
    ```
-3. 커밋 전에 JSON과 `.drawio`가 맞는지 확인한다. 다르면 종료 코드 1로 끝난다.
+3. 커밋 전에 JSON과 `.drawio`가 맞는지, PNG가 지금 `.drawio`에서 내보낸 것인지 확인한다. 둘 중 하나라도 다르면 종료 코드 1로 끝난다. PNG 확인은 `--png`가 남기는 `architecture-png.sha256`(내보낸 `.drawio`의 해시)과 지금 `.drawio`를 비교한다.
    ```bash
    python docs/architecture/generate_drawio.py --check
    ```
@@ -50,8 +50,8 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 1. 브라우저(React)는 FastAPI(`/api`)만 부른다. 브라우저에는 Supabase 키도 AI 키도 두지 않는다. (결정)
 2. FastAPI는 Supabase DB에 secret key(`service_role`)로 접근한다. 여러 문장을 한 트랜잭션으로 묶어야 하는 원자 작업(한도 예약, 퀴즈 선점, 노트·사전 무효화, 삭제 작업 기록)은 SQL 함수로 만들고 `service_role`에만 EXECUTE를 준다. 나머지 읽기·쓰기는 REST로 한다. (결정)
 3. AI는 FastAPI가 Amazon Bedrock(Converse API)으로 부른다. 인증은 `AI_AUTH_MODE`로 `oidc`(기본)와 `api_key`(대체)를 고른다. AI 자격증명도 FastAPI에만 있다. (결정, D-056)
-4. 노트 이미지는 비공개 버킷에 두고 FastAPI가 읽기 권한을 확인한 뒤 서명 URL을 내준다. (결정) 사전 이미지 버킷은 공개 읽기를 제안한다. (미정, Q7) 두 버킷 모두 쓰기는 FastAPI만 한다.
-5. Notion은 처음 한 번만 쓴다. 운영자가 로컬에서 가져오기 스크립트를 실행하고, 그 뒤로는 앱이 노트의 원본이다. 실시간 동기화는 하지 않는다. 가져오기가 끝나면 Notion 통합 공유를 해제하고 가져오기 전용 키를 폐기한다. (결정)
+4. 노트 이미지는 비공개 버킷에 두고 FastAPI가 읽기 권한을 확인한 뒤 서명 URL을 내준다. (결정) 사전 이미지 버킷은 공개 읽기를 제안한다. (미정, Q7) 앱이 도는 동안 두 버킷에 쓰는 것은 FastAPI뿐이다. 예외는 5번의 가져오기 스크립트로, 노트와 노트 이미지를 한 번 기록한다.
+5. Notion은 처음 한 번만 쓴다. 운영자가 로컬에서 가져오기 스크립트를 실행하고, 그 뒤로는 앱이 노트의 원본이다. 실시간 동기화는 하지 않는다. 가져오기가 끝나면 Notion 통합 공유를 해제하고 가져오기 전용 키를 폐기한다. (결정) 스크립트는 DB에 노트를, 노트 이미지 버킷에 이미지를 쓴다. 이때 쓸 Supabase 자격증명의 종류·범위와 가져오기 뒤 처리는 아직 정하지 않았다. 가져오기 스크립트 티켓에서 정한다. (미정)
 
 **신뢰 경계**
 
@@ -77,7 +77,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 | 즐겨찾기, 퀴즈·꼬리 질문, 틀림 신고 | 허용 | 허용 | 거부 |
 
 - 계정 회수, 과목 관리, AI 설명 검수 화면, 이미지 삭제 작업 점검 화면은 PRD에 근거가 없어 이번 범위 밖이다. 엔드포인트를 만들지 않는다. (결정, 2026-10-23)
-- 운영자가 아니면 공개 노트의 공개용 열만 돌려준다. 개인 학습 기록용 열(메모, 복습 필요 표시, 중요도, 공부 시간, 이해도)은 내보내지 않는다.
+- 운영자가 아니면 공개 노트의 공개용 열만 돌려준다. `notes` 표의 개인 학습 기록용 열(`memo`, `needs_review`, `importance`, `study_minutes`, `understanding`)은 내보내지 않는다.
 - 사용자 식별자는 요청 본문에서 받지 않고 세션에서만 꺼낸다(IDOR 방지). 즐겨찾기·열람 기록·퀴즈·답변 쿼리에는 모두 `user_id = 세션 사용자` 조건을 붙인다.
 - 역할과 활성 여부는 DB `profiles` 표가 원본이다. 사용자가 고칠 수 있는 값(`user_metadata` 등)으로 권한을 판단하지 않는다. 로그인이 필요한 모든 요청에서 `is_active`를 DB로 확인한다.
 - 공개 읽기에 비활성 계정의 세션이 붙어 오면 비로그인으로 취급한다.
@@ -93,7 +93,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 
 표·열·제약의 원본은 `supabase/migrations/`의 마이그레이션 SQL이다. 아래는 역할 요약이다.
 
-**보안 기본값:** 모든 표에 RLS를 켜고 `anon`·`authenticated` 권한을 회수한다. FastAPI(`service_role`)만 접근한다. 원자 작업 SQL 함수와 남은 스키마 보강은 별도 스키마 PR에서 만들고, AI는 원격 DB에 쓰지 않으므로 병합 뒤 사람이 적용한다(D-008).
+**보안 기본값:** 모든 표에 RLS를 켜고 `anon`·`authenticated` 권한을 회수한다. 앱이 도는 동안에는 FastAPI(`service_role`)만 접근한다. 처음 한 번 실행하는 가져오기 스크립트도 노트를 기록한다(자격증명은 2절 5번, 미정). 원자 작업 SQL 함수와 남은 스키마 보강은 별도 스키마 PR에서 만들고, AI는 원격 DB에 쓰지 않으므로 병합 뒤 사람이 적용한다(D-008).
 
 | 영역 | 표 | 역할 |
 |---|---|---|
