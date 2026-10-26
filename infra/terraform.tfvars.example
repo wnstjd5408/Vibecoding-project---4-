@@ -1,0 +1,14 @@
+# terraform.tfvars로 복사해 실제 값을 넣는다. terraform.tfvars는 커밋하지 않는다.
+
+alert_email        = "alerts@example.com"
+monthly_budget_usd = "0.0"
+
+# CloudTrail 콘솔 > 트레일 > cs-learning-audit의 S3 버킷 이름
+cloudtrail_bucket_name = "aws-cloudtrail-logs-ACCOUNTID-XXXXXXXX"
+
+# Billing 콘솔 > Cost Anomaly Detection의 모니터·구독 ARN 끝 UUID
+anomaly_monitor_id      = "00000000-0000-0000-0000-000000000000"
+anomaly_subscription_id = "00000000-0000-0000-0000-000000000000"
+
+# 백엔드 BEDROCK_REGION을 바꿨을 때만 적는다.
+# sts_event_region = "ap-northeast-1"

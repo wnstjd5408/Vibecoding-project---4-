@@ -1,0 +1,3 @@
+# backend.hcl로 복사해 상태 버킷 이름을 넣는다. backend.hcl은 커밋하지 않는다.
+bucket = "STATE-BUCKET-NAME"
+region = "ap-northeast-2"
