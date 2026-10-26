@@ -59,7 +59,7 @@ aws s3api get-bucket-encryption --bucket $b      # SSEAlgorithm: AES256
    ```powershell
    terraform plan -out=plan.tfplan
    ```
-   처음에는 `Plan: 9 to import, 10 to add, 0 to change, 0 to destroy.`가 나와야 한다. 가져오는 리소스에 `~`(변경)나 `-`(삭제)가 보이면 적용하지 말고 해당 부분 출력을 이슈에 남긴다. 출력을 옮길 때는 계정 ID, 이메일, 로그 버킷 이름을 가린다. ARN에도 계정 ID가 들어 있다. 코드를 고친 뒤 다시 `plan`한다.
+   처음에는 `Plan: 9 to import, 10 to add, 2 to change, 0 to destroy.`가 나와야 한다. 바뀌는 2건은 예산과 비용 이상 탐지 구독이다. 이메일·금액 변수가 `sensitive`라서 가져온 값에 가림 표시가 붙는 것뿐이며 실제 값은 같다(`limit_amount`에 "The value is unchanged"가 보인다). 2026-10-26 `sensitive`를 잠시 끄고 돌린 plan은 `0 to change`였다. 이 2건 말고 가져오는 리소스에 `~`(변경)나 `-`(삭제)가 보이면 적용하지 말고 해당 부분 출력을 이슈에 남긴다. 출력을 옮길 때는 계정 ID, 이메일, 로그 버킷 이름을 가린다. ARN에도 계정 ID가 들어 있다. 코드를 고친 뒤 다시 `plan`한다.
 
    plan 파일(`plan.tfplan`)에는 이메일·금액·계정 ID가 평문으로 들어간다. `.gitignore`가 막지만 적용 뒤에는 지운다.
 4. 적용한다.
