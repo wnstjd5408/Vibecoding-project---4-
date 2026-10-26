@@ -45,6 +45,27 @@
 
 만료 알림 기능은 없다. 만료일은 `list-service-specific-credentials`의 `ExpirationDate`로 확인하고 일정에 적어 둔다.
 
+## 평소 상태
+
+- OIDC가 동작하는 동안 대체 키는 두지 않는다. 남겨야 하면 `Inactive`로 둔다. `Active` 키는 대체 경로를 쓰는 기간에만 있다.
+- 2026-10-26 확인: 계정에 Bedrock 서비스 전용 자격증명이 없다. MEG-44 시험 키는 정리됐다.
+- 키 발급(`CreateServiceSpecificCredential`)은 감사 로그(CloudTrail)에 남는다. 이 이벤트의 알림 규칙은 MEG-99에서 추가한다.
+
+## 대체 경로를 다시 켤 때
+
+1. 남은 키가 있는지 본다.
+   ```
+   aws iam list-service-specific-credentials --user-name <사용자> --service-name bedrock.amazonaws.com
+   ```
+2. `Inactive` 키가 있고 `ExpirationDate`가 지나지 않았으면 `Active`로 바꾼다.
+   ```
+   aws iam update-service-specific-credential --user-name <사용자> --service-specific-credential-id <ID> --status Active
+   ```
+   키가 없거나 만료됐으면 위 "발급" 절차를 IAM 사용자·인라인 정책부터 따른다.
+3. 배포 환경변수 `AWS_BEARER_TOKEN_BEDROCK`에 키 값을 넣고 `AI_AUTH_MODE`를 `api_key`로 바꿔 배포한다.
+4. 합성 텍스트로 호출해 짧은 응답이 오는지 확인한다. 켠 날짜와 이유를 작업 이슈에 남긴다.
+5. OIDC가 복구되면 `AI_AUTH_MODE`를 `oidc`로 되돌려 배포하고, 환경변수의 키를 비운 뒤 키를 `Inactive`로 바꾼다. 다시 쓸 계획이 없으면 아래 "대체 경로를 끌 때" 순서로 정리한다.
+
 ## 대체 경로를 끌 때
 
 키(`Inactive` 후 삭제), 인라인 정책, IAM 사용자를 이 순서로 지우고 환경변수의 키를 비운다.
