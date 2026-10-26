@@ -38,7 +38,7 @@ resource "aws_sns_topic" "audit_alerts" {
   for_each = local.audit_alerts
 
   region = each.value.region
-  name   = "cs-learning-audit-alerts"
+  name   = "${var.owner}-cs-learning-audit-alerts"
 }
 
 resource "aws_sns_topic_subscription" "audit_alerts_email" {
@@ -54,7 +54,7 @@ resource "aws_cloudwatch_event_rule" "audit" {
   for_each = local.audit_alerts
 
   region        = each.value.region
-  name          = "cs-learning-${replace(each.key, "_", "-")}"
+  name          = "${var.owner}-cs-learning-${replace(each.key, "_", "-")}"
   description   = each.value.description
   event_pattern = jsonencode(each.value.pattern)
 
