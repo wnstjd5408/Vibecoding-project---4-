@@ -33,3 +33,13 @@ Thumbs.db
 
 # Claude Code 로컬 설정
 .claude/settings.local.json
+
+# Terraform (infra/) — 상태·변수·백엔드 설정에 계정 값이 들어간다. .terraform.lock.hcl은 커밋한다.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+*.tfplan
+backend.hcl
+crash.log
