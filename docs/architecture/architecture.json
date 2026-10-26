@@ -1,0 +1,151 @@
+{
+  "meta": {
+    "title": "CS 학습 노트 아키텍처",
+    "sources": [
+      {
+        "name": "CS 학습 노트 기술 검토",
+        "version": "v0.2",
+        "status": "3~8절 수락",
+        "date": "2026-10-26",
+        "where": "Linear, MEG-38 첨부"
+      },
+      {
+        "name": "CS 학습 노트 백엔드 API spec",
+        "version": "v0.2",
+        "status": "확인됨",
+        "date": "2026-10-26",
+        "where": "Linear, MEG-27 첨부"
+      }
+    ],
+    "rule": "이 파일은 원본의 공개 요약이다. 원본과 다르면 원본을 따른다. 이 파일을 고친 뒤 generate_drawio.py로 architecture.drawio를 다시 만든다."
+  },
+  "zones": [
+    {"id": "client", "label": "사용자 기기 (신뢰하지 않음)", "kind": "untrusted"},
+    {"id": "vercel", "label": "Vercel 프로젝트 (우리가 운영)", "kind": "server"},
+    {"id": "supabase", "label": "Supabase", "kind": "supabase"},
+    {"id": "external", "label": "외부 AI 서비스", "kind": "external"},
+    {"id": "onetime", "label": "Notion 가져오기 (처음 한 번)", "kind": "onetime"}
+  ],
+  "components": [
+    {"id": "browser", "zone": "client", "label": "브라우저", "detail": "React 화면. Supabase 키·AI 키 없음"},
+    {"id": "static", "zone": "vercel", "label": "정적 화면 파일", "detail": "React(Vite) 빌드 결과"},
+    {"id": "api", "zone": "vercel", "label": "FastAPI (/api)", "detail": "Vercel 함수, 도쿄(hnd1). 비밀값은 환경변수"},
+    {"id": "auth", "zone": "supabase", "label": "Supabase Auth", "detail": "계정·비밀번호 관리. 세션은 HttpOnly 쿠키"},
+    {"id": "db", "zone": "supabase", "label": "Postgres", "detail": "모든 표 RLS, anon·authenticated 권한 회수. 원자 작업은 SQL 함수(service_role만 EXECUTE)"},
+    {"id": "note_images", "zone": "supabase", "label": "노트 이미지 버킷", "detail": "비공개. FastAPI가 읽기 권한 확인 뒤 서명 URL 발급"},
+    {"id": "glossary_images", "zone": "supabase", "label": "사전 이미지 버킷", "detail": "공개 읽기 제안(Q7 미정). 쓰기는 FastAPI만"},
+    {"id": "bedrock", "zone": "external", "label": "Amazon Bedrock", "detail": "Converse API, 모델 gpt-6-luna(잠정). 도구 권한 없음"},
+    {"id": "importer", "zone": "onetime", "label": "가져오기 스크립트", "detail": "운영자 로컬에서 실행. 끝나면 공유 해제·전용 키 폐기"},
+    {"id": "notion", "zone": "onetime", "label": "Notion", "detail": "허용한 페이지 본문만 읽음"}
+  ],
+  "flows": [
+    {"id": "f-static", "from": "browser", "to": "static", "label": "화면 파일 (HTTPS)"},
+    {"id": "f-api", "from": "browser", "to": "api", "label": "/api JSON + 세션 쿠키\n상태 변경은 Origin 검사"},
+    {"id": "f-auth", "from": "api", "to": "auth", "label": "로그인·로그아웃·계정 발급"},
+    {"id": "f-db", "from": "api", "to": "db", "label": "secret key(service_role)\nREST + 원자 작업 SQL 함수"},
+    {"id": "f-note-sign", "from": "api", "to": "note_images", "label": "서명 URL 발급·객체 삭제"},
+    {"id": "f-glossary-write", "from": "api", "to": "glossary_images", "label": "업로드·삭제"},
+    {"id": "f-ai", "from": "api", "to": "bedrock", "label": "예약 → 호출 → 정산\nOIDC(기본) / API 키(대체)"},
+    {"id": "f-note-read", "from": "browser", "to": "note_images", "label": "서명 URL로 읽기", "style": "direct-read"},
+    {"id": "f-glossary-read", "from": "browser", "to": "glossary_images", "label": "공개 URL로 읽기(Q7 미정)", "style": "direct-read"},
+    {"id": "f-notion", "from": "importer", "to": "notion", "label": "허용한 페이지만 읽기"},
+    {"id": "f-import-db", "from": "importer", "to": "db", "label": "노트 기록(있으면 건너뜀)"},
+    {"id": "f-import-img", "from": "importer", "to": "note_images", "label": "이미지 재인코딩 뒤 업로드"}
+  ],
+  "trust_boundaries": [
+    {"id": "tb-browser", "boundary": "브라우저 → FastAPI", "untrusted": "요청 본문, 쿠키 밖의 신원 주장, 화면에서 숨긴 버튼", "server_action": "모든 요청에서 세션을 확인하고 권한표대로 거부한다"},
+    {"id": "tb-ai-response", "boundary": "FastAPI → AI", "untrusted": "AI 응답 전체", "server_action": "응답을 텍스트로만 저장·표시하고 응답 속 지시를 실행하지 않는다"},
+    {"id": "tb-ai-prompt", "boundary": "노트·사전·사용자 답변 → AI 프롬프트", "untrusted": "그 안의 문장(프롬프트 인젝션 가능)", "server_action": "자료 구역에 넣고 AI에 도구 권한을 주지 않는다"},
+    {"id": "tb-notion", "boundary": "Notion → 가져오기 스크립트", "untrusted": "페이지 본문", "server_action": "허용한 페이지의 본문 블록만 읽고 하위·링크 페이지는 따라가지 않는다"}
+  ],
+  "endpoint_groups": [
+    {"id": "g-account", "label": "계정"},
+    {"id": "g-notes", "label": "노트 읽기"},
+    {"id": "g-terms", "label": "사전·열람·즐겨찾기"},
+    {"id": "g-ai", "label": "AI 설명·신고"},
+    {"id": "g-quiz", "label": "퀴즈"},
+    {"id": "g-admin-notes", "label": "운영자 노트"},
+    {"id": "g-admin-glossary", "label": "운영자 사전"},
+    {"id": "g-admin-misc", "label": "운영자 계정·신고"}
+  ],
+  "roles_legend": {
+    "allow": "허용",
+    "public_only": "공개 노트만",
+    "no_record": "기록 없이 성공",
+    "deny": "거부"
+  },
+  "endpoints": [
+    {"id": "E01", "group": "g-account", "method": "POST", "path": "/api/auth/login", "roles": {"visitor": "allow", "member": "allow", "operator": "allow"}, "uses": ["auth", "db"]},
+    {"id": "E02", "group": "g-account", "method": "POST", "path": "/api/auth/logout", "roles": {"visitor": "allow", "member": "allow", "operator": "allow"}, "uses": ["auth"]},
+    {"id": "E03", "group": "g-account", "method": "GET", "path": "/api/me", "roles": {"visitor": "allow", "member": "allow", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E04", "group": "g-notes", "method": "GET", "path": "/api/notes", "roles": {"visitor": "public_only", "member": "public_only", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E05", "group": "g-notes", "method": "GET", "path": "/api/notes/{note_id}", "roles": {"visitor": "public_only", "member": "public_only", "operator": "allow"}, "uses": ["db", "note_images"]},
+    {"id": "E06", "group": "g-terms", "method": "GET", "path": "/api/glossary/{term_id}", "roles": {"visitor": "allow", "member": "allow", "operator": "allow"}, "uses": ["db", "glossary_images"]},
+    {"id": "E07", "group": "g-terms", "method": "POST", "path": "/api/term-views", "roles": {"visitor": "no_record", "member": "allow", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E08", "group": "g-terms", "method": "PUT", "path": "/api/favorites/{term_id}", "roles": {"visitor": "deny", "member": "allow", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E09", "group": "g-ai", "method": "POST", "path": "/api/ai/explanations", "roles": {"visitor": "deny", "member": "allow", "operator": "allow"}, "uses": ["db", "bedrock"], "ai_kind": "explain"},
+    {"id": "E10", "group": "g-ai", "method": "POST", "path": "/api/reports", "roles": {"visitor": "deny", "member": "allow", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E11", "group": "g-quiz", "method": "POST", "path": "/api/quiz/today", "roles": {"visitor": "deny", "member": "allow", "operator": "allow"}, "uses": ["db", "bedrock"], "ai_kind": "quiz"},
+    {"id": "E12", "group": "g-quiz", "method": "POST", "path": "/api/quiz/items/{item_id}/answer", "roles": {"visitor": "deny", "member": "allow", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E13", "group": "g-quiz", "method": "POST", "path": "/api/quiz/items/{item_id}/followups", "roles": {"visitor": "deny", "member": "allow", "operator": "allow"}, "uses": ["db", "bedrock"], "ai_kind": "followup"},
+    {"id": "E14", "group": "g-quiz", "method": "PUT", "path": "/api/quiz/items/{item_id}/followups/{seq}/answer", "roles": {"visitor": "deny", "member": "allow", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E15", "group": "g-admin-notes", "method": "GET", "path": "/api/admin/notes/{note_id}", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db", "note_images"]},
+    {"id": "E16", "group": "g-admin-notes", "method": "POST", "path": "/api/admin/notes", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E17", "group": "g-admin-notes", "method": "PATCH", "path": "/api/admin/notes/{note_id}", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E18", "group": "g-admin-notes", "method": "DELETE", "path": "/api/admin/notes/{note_id}", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db", "note_images"]},
+    {"id": "E19", "group": "g-admin-glossary", "method": "GET", "path": "/api/admin/glossary", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E20", "group": "g-admin-glossary", "method": "POST", "path": "/api/admin/glossary", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E21", "group": "g-admin-glossary", "method": "DELETE", "path": "/api/admin/glossary/{term_id}", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db", "glossary_images"]},
+    {"id": "E22", "group": "g-admin-glossary", "method": "POST", "path": "/api/admin/glossary/{term_id}/images", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db", "glossary_images"]},
+    {"id": "E23", "group": "g-admin-glossary", "method": "DELETE", "path": "/api/admin/glossary/{term_id}/images/{image_id}", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db", "glossary_images"]},
+    {"id": "E24", "group": "g-admin-misc", "method": "POST", "path": "/api/admin/users", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["auth", "db"]},
+    {"id": "E25", "group": "g-admin-misc", "method": "GET", "path": "/api/admin/reports", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db"]},
+    {"id": "E26", "group": "g-admin-misc", "method": "PATCH", "path": "/api/admin/reports/{report_id}", "roles": {"visitor": "deny", "member": "deny", "operator": "allow"}, "uses": ["db"]}
+  ],
+  "layout": {
+    "system": {
+      "zones": {
+        "client": [40, 150, 240, 180],
+        "external": [40, 400, 240, 160],
+        "vercel": [480, 60, 300, 540],
+        "supabase": [960, 60, 340, 540],
+        "onetime": [40, 650, 1260, 150]
+      },
+      "components": {
+        "browser": [20, 50, 200, 100],
+        "bedrock": [20, 50, 200, 80],
+        "static": [30, 30, 240, 66],
+        "api": [30, 110, 240, 400],
+        "auth": [30, 120, 280, 60],
+        "db": [30, 200, 280, 100],
+        "glossary_images": [30, 315, 280, 70],
+        "note_images": [30, 415, 280, 70],
+        "notion": [480, 30, 260, 90],
+        "importer": [950, 30, 280, 90]
+      },
+      "flows": {
+        "f-static": {"exit": [1, 0.2], "entry": [0, 0.5]},
+        "f-api": {"exit": [1, 0.5], "entry": [0, 0.2]},
+        "f-auth": {"exit": [1, 0.1], "entry": [0, 0.5]},
+        "f-db": {"exit": [1, 0.35], "entry": [0, 0.5]},
+        "f-glossary-write": {"exit": [1, 0.6], "entry": [0, 0.5]},
+        "f-note-sign": {"exit": [1, 0.85], "entry": [0, 0.5]},
+        "f-ai": {"exit": [0, 0.8], "entry": [1, 0.5]},
+        "f-glossary-read": {"exit": [0.95, 0], "entry": [1, 0.5], "points": [[250, 30], [1320, 30], [1320, 410]], "label_x": -0.2},
+        "f-note-read": {"exit": [0.85, 0], "entry": [1, 0.5], "points": [[230, 20], [1340, 20], [1340, 510]], "label_x": 0.55},
+        "f-notion": {"exit": [0, 0.5], "entry": [1, 0.5]},
+        "f-import-img": {"exit": [0.5, 0], "entry": [0.5, 1], "label_x": -0.4},
+        "f-import-db": {"exit": [0, 0.2], "entry": [0, 0.8], "points": [[975, 698], [975, 340]], "label_x": -0.55}
+      },
+      "legend": [40, 820, 1260, 40]
+    },
+    "endpoints": {
+      "x": 40,
+      "y": 40,
+      "header_height": 44,
+      "row_height": 24,
+      "widths": {"id": 50, "method": 70, "path": 380, "role": 44, "target": 96},
+      "target_order": ["auth", "db", "note_images", "glossary_images", "bedrock"]
+    }
+  }
+}
