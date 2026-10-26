@@ -9,6 +9,7 @@
 """
 
 import argparse
+import base64
 import json
 import os
 import shutil
@@ -33,6 +34,23 @@ ZONE_STYLE = {
 ROLE_SYMBOL = {"allow": "✓", "public_only": "△", "no_record": "○", "deny": "✗"}
 ROLE_ORDER = (("visitor", "방문자"), ("member", "사용자"), ("operator", "운영자"))
 GRID = "#bfbfbf"
+AWS_INK = "#232F3E"
+ICON_KEYS = ("image", "aws_shape", "aws_resource", "aws_group")
+COMPONENT_ICON = 40
+ZONE_ICON = 24
+
+
+def validate_icon(owner, icon, allow_group):
+    if icon is None:
+        return []
+    keys = [k for k in ICON_KEYS if k in icon]
+    if len(keys) != 1:
+        return [f"{owner}: icon에는 {', '.join(ICON_KEYS)} 중 하나만 둔다"]
+    if keys[0] == "aws_group" and not allow_group:
+        return [f"{owner}: aws_group은 zone에만 쓴다"]
+    if keys[0] == "image" and not (HERE / icon["image"]).is_file():
+        return [f"{owner}: 아이콘 파일 없음 {icon['image']}"]
+    return []
 
 
 def validate(model):
@@ -50,9 +68,11 @@ def validate(model):
     for zone in model["zones"]:
         if zone["kind"] not in ZONE_STYLE:
             errors.append(f"{zone['id']}: 알 수 없는 kind {zone['kind']}")
+        errors += validate_icon(zone["id"], zone.get("icon"), allow_group=True)
     for comp in model["components"]:
         if comp["zone"] not in zones:
             errors.append(f"{comp['id']}: 없는 zone {comp['zone']}")
+        errors += validate_icon(comp["id"], comp.get("icon"), allow_group=False)
     for flow in model["flows"]:
         for end in (flow["from"], flow["to"]):
             if end not in components:
@@ -119,18 +139,38 @@ class Page:
                 ET.SubElement(array, "mxPoint", x=str(x), y=str(y))
 
 
-def zone_style(kind):
-    fill, stroke, dashed = ZONE_STYLE[kind]
+def group_style(kind, icon):
+    """구성도의 영역. AWS 다이어그램처럼 채우지 않고 왼쪽 위에 아이콘을 둔다."""
+    _, stroke, dashed = ZONE_STYLE[kind]
+    if icon and "aws_group" in icon:
+        return style(
+            shape="mxgraph.aws4.group", grIcon=f"mxgraph.aws4.{icon['aws_group']}", html="1", whiteSpace="wrap",
+            container="1", collapsible="0", verticalAlign="top", align="left", spacingLeft="30", fontStyle="1",
+            fontColor=AWS_INK, strokeColor=AWS_INK, fillColor="none", dashed="0",
+        )
     return style(
-        rounded="1", arcSize="4", whiteSpace="wrap", html="1", container="1", collapsible="0",
-        verticalAlign="top", align="left", spacingLeft="10", spacingTop="4", fontStyle="1",
-        fillColor=fill, strokeColor=stroke, dashed="1" if dashed else "0",
+        rounded="0", whiteSpace="wrap", html="1", container="1", collapsible="0", verticalAlign="top", align="left",
+        spacingLeft="40" if icon else "10", spacingTop="10" if icon else "4", fontStyle="1",
+        fontColor=AWS_INK, fillColor="none", strokeColor=stroke, strokeWidth="2", dashed="1" if dashed else "0",
     )
 
 
-def box_style(kind):
+def icon_style(icon):
+    if "image" in icon:
+        data = base64.b64encode((HERE / icon["image"]).read_bytes()).decode("ascii")
+        return style(shape="image", html="1", aspect="fixed", imageAspect="1", image=f"data:image/svg+xml,{data}")
+    if "aws_resource" in icon:
+        return style(
+            shape="mxgraph.aws4.resourceIcon", resIcon=f"mxgraph.aws4.{icon['aws_resource']}", html="1",
+            aspect="fixed", fillColor=icon.get("color", AWS_INK), strokeColor="#ffffff",
+        )
+    return style(shape=f"mxgraph.aws4.{icon['aws_shape']}", html="1", aspect="fixed", fillColor=AWS_INK, strokeColor="none")
+
+
+def box_style(kind, has_icon=False):
     _, stroke, _ = ZONE_STYLE[kind]
-    return style(rounded="1", whiteSpace="wrap", html="1", fillColor="#ffffff", strokeColor=stroke)
+    extra = {"align": "left", "spacingLeft": str(12 + COMPONENT_ICON + 8)} if has_icon else {}
+    return style(rounded="1", whiteSpace="wrap", html="1", fillColor="#ffffff", strokeColor=stroke, **extra)
 
 
 def edge_style(route, dashed=False):
@@ -159,13 +199,21 @@ def build_system_page(model):
     layout = model["layout"]["system"]
     zones = {z["id"]: z for z in model["zones"]}
     for zone in model["zones"]:
-        page.vertex(f"zone-{zone['id']}", escape(zone["label"]), zone_style(zone["kind"]), layout["zones"][zone["id"]])
+        icon = zone.get("icon")
+        page.vertex(f"zone-{zone['id']}", escape(zone["label"]), group_style(zone["kind"], icon), layout["zones"][zone["id"]])
+        if icon and "aws_group" not in icon:
+            page.vertex(f"zone-{zone['id']}-icon", "", icon_style(icon), (10, 7, ZONE_ICON, ZONE_ICON), parent=f"zone-{zone['id']}")
     for comp in model["components"]:
         kind = zones[comp["zone"]]["kind"]
+        icon = comp.get("icon")
+        box = layout["components"][comp["id"]]
         page.vertex(
-            comp["id"], html_label(comp["label"], comp.get("detail")), box_style(kind),
-            layout["components"][comp["id"]], parent=f"zone-{comp['zone']}",
+            comp["id"], html_label(comp["label"], comp.get("detail")), box_style(kind, has_icon=bool(icon)),
+            box, parent=f"zone-{comp['zone']}",
         )
+        if icon:
+            top = round((box[3] - COMPONENT_ICON) / 2)
+            page.vertex(f"{comp['id']}-icon", "", icon_style(icon), (12, top, COMPONENT_ICON, COMPONENT_ICON), parent=comp["id"])
     for flow in model["flows"]:
         route = layout["flows"].get(flow["id"], {})
         page.edge(
@@ -176,6 +224,8 @@ def build_system_page(model):
     note = (
         sources_line(model["meta"])
         + "<br>점선 화살표 = 브라우저가 Storage를 직접 읽는 경로. 회색 점선 칸 = 처음 한 번만 쓰는 Notion 가져오기."
+        + " 아이콘: AWS Architecture Icons(draw.io 내장), Supabase·Vercel 공식 로고."
+        + "<br>" + escape(model["icons"]["attribution"])
     )
     page.vertex("legend", note, text_style(), layout["legend"])
     return page

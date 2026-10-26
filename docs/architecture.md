@@ -34,6 +34,15 @@ API spec v0.2의 엔드포인트 26개를 역할별 권한, 사용하는 구성�
 
 리뷰할 때는 `architecture.json`의 diff를 본다. 그림 변경은 JSON 변경에서 나온다.
 
+### 아이콘 출처
+
+- AWS(Bedrock, AWS Cloud 그룹, 일반 아이콘): draw.io에 들어 있는 AWS Architecture Icons. JSON에서는 `aws_resource`·`aws_shape`·`aws_group`으로 이름만 적는다.
+- Supabase: [브랜드 자산](https://supabase.com/brand-assets) 로고 키트의 `supabase-logo-icon.svg`를 바꾸지 않고 [`architecture/icons/`](architecture/icons/)에 두었다.
+- Vercel: [브랜드 페이지](https://vercel.com/geist/brands)의 Vercel Symbol Black을 바꾸지 않고 같은 폴더에 두었다. 흰 배경에는 검정 심볼을 쓴다는 가이드를 따른다.
+- 로고 파일은 고치지 않는다. 새 로고가 필요하면 각 회사 브랜드 페이지에서 받아 `architecture.json`의 `icons.sources`에 출처를 적는다.
+
+Vercel, the Vercel design, Next.js and related marks, designs and logos are trademarks or registered trademarks of Vercel, Inc. or its affiliates in the US and other countries.
+
 ## 2. 구성 · 신뢰 경계
 
 **구성**
