@@ -2,7 +2,7 @@
 
 AWS 계정의 비용 경보, 감사 로그, 감사 이벤트 알림을 Terraform으로 관리한다(MEG-99). AI는 코드와 PR만 만들고, `init`·`plan`·`apply`와 상태 버킷 생성은 사람이 한다.
 
-공개 저장소라서 계정 ID·이메일·예산 금액·버킷 이름은 커밋하지 않는다. 이 값은 `terraform.tfvars`와 `backend.hcl`에만 둔다. 두 파일은 `.gitignore`에 들어 있다.
+공개 저장소라서 계정 ID·이메일·예산 금액·버킷 이름은 커밋하지 않는다. 이 값은 `terraform.tfvars`와 `backend.hcl`에만 둔다. 두 파일은 `.gitignore`에 들어 있다. 상태 파일과 plan 파일에도 이 값이 평문으로 들어가므로 상태 버킷을 읽을 수 있는 사람은 비공개 값도 볼 수 있다.
 
 ## 관리하는 것
 
@@ -50,19 +50,22 @@ aws s3api get-bucket-encryption --bucket $b      # SSEAlgorithm: AES256
    Copy-Item backend.hcl.example backend.hcl
    Copy-Item terraform.tfvars.example terraform.tfvars
    ```
-   예산 금액은 콘솔 값과 같은 형식(소수점 한 자리 문자열, 예: `"100.0"`)으로 적는다. 모니터·구독 ID는 ARN의 마지막 UUID다.
+   모니터·구독 ID는 ARN의 마지막 UUID다.
 2. 초기화한다.
    ```powershell
    terraform init -backend-config=backend.hcl
    ```
 3. 계획을 만든다.
    ```powershell
-   terraform plan -out=tfplan
+   terraform plan -out=plan.tfplan
    ```
-   처음에는 `Plan: 9 to import, 10 to add, 0 to change, 0 to destroy.`가 나와야 한다. 가져오는 리소스에 `~`(변경)나 `-`(삭제)가 보이면 적용하지 말고 해당 부분 출력을 이슈에 남긴다. 계정 ID·이메일은 가리고 남긴다. 코드를 고친 뒤 다시 `plan`한다.
+   처음에는 `Plan: 9 to import, 10 to add, 0 to change, 0 to destroy.`가 나와야 한다. 가져오는 리소스에 `~`(변경)나 `-`(삭제)가 보이면 적용하지 말고 해당 부분 출력을 이슈에 남긴다. 출력을 옮길 때는 계정 ID, 이메일, 로그 버킷 이름을 가린다. ARN에도 계정 ID가 들어 있다. 코드를 고친 뒤 다시 `plan`한다.
+
+   plan 파일(`plan.tfplan`)에는 이메일·금액·계정 ID가 평문으로 들어간다. `.gitignore`가 막지만 적용 뒤에는 지운다.
 4. 적용한다.
    ```powershell
-   terraform apply tfplan
+   terraform apply plan.tfplan
+   Remove-Item plan.tfplan
    ```
 5. 받은편지함에서 `AWS Notification - Subscription Confirmation` 메일 2통의 확인 링크를 누른다.
 6. 다시 `terraform plan`을 실행해 `No changes.`인지 확인한다.
@@ -83,13 +86,21 @@ aws sts assume-role-with-web-identity --no-sign-request --region ap-northeast-1 
 
 **2. 서비스 전용 자격증명 생성 후 삭제 (us-east-1)**
 
-권한 없는 임시 사용자에 1일짜리 키를 만들고 바로 지운다. `--query`로 ID만 받아서 키 값은 화면에 나오지 않는다. 그래도 Claude Code의 `!` 대신 별도 터미널에서 실행한다.
+권한 없는 임시 사용자에 1일짜리 키를 만들고 바로 지운다. `--query`로 ID만 받아서 키 값은 화면에 나오지 않는다. 그래도 Claude Code의 `!` 대신 별도 터미널에서 실행한다. PowerShell은 명령이 실패해도 다음 줄로 넘어가므로 한 줄씩 실행하고 `실패`가 보이면 멈춘다.
 
 ```powershell
-aws iam create-user --user-name meg99-alert-test
-$id = aws iam create-service-specific-credential --user-name meg99-alert-test --service-name bedrock.amazonaws.com --credential-age-days 1 --query ServiceSpecificCredential.ServiceSpecificCredentialId --output text
-aws iam delete-service-specific-credential --user-name meg99-alert-test --service-specific-credential-id $id
-aws iam delete-user --user-name meg99-alert-test
+$u = "meg99-alert-test"
+aws iam create-user --user-name $u; if ($LASTEXITCODE) { "실패: 사용자 생성" }
+$id = aws iam create-service-specific-credential --user-name $u --service-name bedrock.amazonaws.com --credential-age-days 1 --query ServiceSpecificCredential.ServiceSpecificCredentialId --output text; if ($LASTEXITCODE -or -not $id) { "실패: 키 생성 또는 ID 없음" }
+aws iam delete-service-specific-credential --user-name $u --service-specific-credential-id $id; if ($LASTEXITCODE) { "실패: 키 삭제" }
+aws iam delete-user --user-name $u; if ($LASTEXITCODE) { "실패: 사용자 삭제" }
+aws iam get-user --user-name $u   # NoSuchEntity 오류가 나야 정리된 것이다
+```
+
+중간에 실패했으면 아래로 남은 키를 찾아 지운 뒤 사용자를 지운다.
+
+```powershell
+aws iam list-service-specific-credentials --user-name $u --query "ServiceSpecificCredentials[].ServiceSpecificCredentialId" --output text
 ```
 
 메일 수신 시각을 이슈에 남긴다.
@@ -97,7 +108,8 @@ aws iam delete-user --user-name meg99-alert-test
 ## 되돌리기
 
 - **알림만 끄기:** `alerts.tf`를 지우고 `plan`→`apply`한다. 토픽·구독·규칙 10개가 삭제된다.
-- **코드 변경 되돌리기:** 해당 PR을 revert한 뒤 `plan`으로 차이를 확인하고 `apply`한다.
+- **가져오기 PR(MEG-99)은 revert하지 않는다.** revert하면 가져온 예산·트레일·버킷 설정이 삭제 대상이 된다. 가져온 리소스는 아래 `removed` 블록으로만 관리에서 뺀다.
+- **이후 변경 되돌리기:** 가져오기 이후의 변경 PR은 revert한 뒤 `plan`으로 차이를 확인하고 `apply`한다. `plan`에 가져온 리소스의 삭제가 보이면 적용하지 않는다.
 - **가져온 리소스를 Terraform 관리에서 빼기:** 리소스 블록을 지우고 아래 블록을 넣어 `apply`한다. AWS에서는 지워지지 않는다.
   ```hcl
   removed {

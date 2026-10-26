@@ -19,7 +19,7 @@ variable "alert_email" {
 }
 
 variable "monthly_budget_usd" {
-  description = "월 예산 한도(USD). 콘솔 값과 같은 형식으로 적는다(소수점 한 자리 문자열, 예: \"100.0\")."
+  description = "월 예산 한도(USD), 문자열"
   type        = string
   sensitive   = true
 }

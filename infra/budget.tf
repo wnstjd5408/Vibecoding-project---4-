@@ -9,6 +9,9 @@ resource "aws_budgets_budget" "monthly" {
   time_period_start = var.budget_start
   metrics           = ["UnblendedCost"]
 
+  # 콘솔이 기본 결제 보기를 저장했다. 비워 두면 가져온 뒤 plan이 이 값을 지우려 한다.
+  billing_view_arn = "arn:aws:billing::${local.account_id}:billingview/primary"
+
   # 크레딧·환불을 빼고 실제 사용액만 센다.
   filter_expression {
     not {

@@ -39,7 +39,8 @@ Thumbs.db
 *.tfstate
 *.tfstate.*
 *.tfvars
-!*.tfvars.example
+*.tfvars.json
 *.tfplan
+tfplan
 backend.hcl
 crash.log
