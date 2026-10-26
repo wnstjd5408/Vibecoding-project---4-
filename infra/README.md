@@ -4,13 +4,24 @@ AWS 계정의 비용 경보, 감사 로그, 감사 이벤트 알림을 Terraform
 
 공개 저장소라서 계정 ID·이메일·예산 금액·버킷 이름은 커밋하지 않는다. 이 값은 `terraform.tfvars`와 `backend.hcl`에만 둔다. 두 파일은 `.gitignore`에 들어 있다. 상태 파일과 plan 파일에도 이 값이 평문으로 들어가므로 상태 버킷을 읽을 수 있는 사람은 비공개 값도 볼 수 있다.
 
+## 공용 실습 계정 규칙
+
+이 계정은 메가존클라우드가 여러 명에게 함께 준 실습 계정이고, 비용이 실제로 청구된다. `infra/`로 만들거나 바꾸는 리소스는 아래 규칙을 지킨다.
+
+- **Owner 태그:** 모든 리소스에 `Owner = 이메일 @ 앞부분` 태그를 단다. provider의 `default_tags`가 `var.owner` 값으로 자동으로 붙인다. Terraform 밖에서 만든 상태 버킷은 사람이 직접 태그를 단다("처음 한 번" 절).
+- **이름 접두사:** 새로 만드는 리소스 이름 앞에 `<owner>-`를 붙여 다른 사람 리소스와 구분한다. 콘솔에서 만들어 가져온 예산·이상 탐지 구독·트레일·로그 버킷은 이름을 바꾸면 새로 만들어지므로 이름을 그대로 두고 Owner 태그로 구분한다.
+- **정리:** 수업이 끝나면 직접 만든 리소스를 지운다. 절차와 확인 방법은 "정리(삭제) 방법" 절에 있다.
+- **시간 과금 리소스:** 이 폴더의 리소스(예산, 비용 이상 탐지, CloudTrail 관리 이벤트 트레일, S3, SNS, EventBridge)는 시간당 과금이 없다. EC2·NAT 게이트웨이·탄력적 IP·RDS·OpenSearch·SageMaker 엔드포인트처럼 켜 두는 동안 과금되는 리소스를 추가할 때는 쓴 직후 지우는 절차를 함께 적는다. EC2는 중지가 아니라 종료한다. 중지만 하면 EBS 볼륨과 탄력적 IP는 계속 과금된다.
+- **사용 금지:** AWS Marketplace 유료 구독, Support 플랜 변경, Shield Advanced 같은 고비용 구독 서비스는 만들지 않는다. 계획에 들어 있으면 만들기 전에 알린다.
+- **정기 점검:** 운영 담당자가 계정을 정기 점검한다. `Owner` 태그가 없거나 오래 쓰지 않은 리소스는 안내 없이 삭제될 수 있다. 보관할 데이터(예: CloudTrail 로그)는 따로 백업한다.
+
 ## 관리하는 것
 
 | 파일 | 리소스 | 리전 | 출처 |
 |---|---|---|---|
-| `budget.tf` | 월 예산 `cs-learning-monthly`와 경보 4개(실제 50·80·100%, 예상 100%), 비용 이상 탐지 모니터·구독 | 글로벌 | 콘솔에서 만든 것을 가져옴 |
+| `budget.tf` | 월 예산 `cs-learning-monthly`와 경보 4개(실제 50·80·100%, 예상 100%), 비용 이상 탐지 모니터 `<owner>-cs-learning-cost-monitor`·구독 `daily-cost-anomaly` | 글로벌 | 콘솔에서 만든 것을 가져옴 |
 | `cloudtrail.tf` | 트레일 `cs-learning-audit`, 로그 버킷과 공개 차단·암호화·소유권·정책 | ap-northeast-2 | 콘솔에서 만든 것을 가져옴 |
-| `alerts.tf` | SNS 토픽·이메일 구독, EventBridge 규칙·대상 | ap-northeast-1(STS), us-east-1(IAM) | 새로 만듦 |
+| `alerts.tf` | SNS 토픽 `<owner>-cs-learning-audit-alerts`·이메일 구독, EventBridge 규칙 `<owner>-cs-learning-…`·대상 | ap-northeast-1(STS), us-east-1(IAM) | 새로 만듦 |
 
 `imports.tf`의 `import` 블록이 콘솔 리소스를 상태로 가져온다. 가져온 리소스는 `plan`에서 변경·삭제가 0건이어야 한다.
 
@@ -23,21 +34,24 @@ EventBridge 규칙은 같은 리전의 SNS 토픽에만 보낼 수 있어서 리
 
 ## 처음 한 번: 상태 버킷 만들기 (사람)
 
-상태 파일 전용 S3 버킷을 만든다. 이름은 전역에서 겹치지 않아야 하므로 계정 ID를 붙이는 식으로 정한다. PowerShell 기준이다.
+상태 파일 전용 S3 버킷을 만든다. 이름은 전역에서 겹치지 않아야 하므로 owner 접두사와 계정 ID를 붙인다(예: `<owner>-cs-learning-tfstate-<계정 ID>`). 이 버킷은 Terraform 밖에서 만들므로 Owner 태그도 직접 단다. PowerShell 기준이다.
 
 ```powershell
 $b = "<상태 버킷 이름>"
+$o = "<owner>"
 aws s3api create-bucket --bucket $b --region ap-northeast-2 --create-bucket-configuration LocationConstraint=ap-northeast-2
 aws s3api put-bucket-versioning --bucket $b --versioning-configuration Status=Enabled
 aws s3api put-public-access-block --bucket $b --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+aws s3api put-bucket-tagging --bucket $b --tagging "TagSet=[{Key=Owner,Value=$o}]"
 ```
 
-새 버킷은 기본으로 SSE-S3 암호화가 켜진다. 세 설정을 확인한다.
+새 버킷은 기본으로 SSE-S3 암호화가 켜진다. 네 설정을 확인한다.
 
 ```powershell
 aws s3api get-bucket-versioning --bucket $b      # Status: Enabled
 aws s3api get-public-access-block --bucket $b    # 네 항목 모두 true
 aws s3api get-bucket-encryption --bucket $b      # SSEAlgorithm: AES256
+aws s3api get-bucket-tagging --bucket $b         # Owner 태그
 ```
 
 잠금은 S3 잠금 파일(`use_lockfile`)을 쓰므로 DynamoDB 테이블은 만들지 않는다.
@@ -50,7 +64,7 @@ aws s3api get-bucket-encryption --bucket $b      # SSEAlgorithm: AES256
    Copy-Item backend.hcl.example backend.hcl
    Copy-Item terraform.tfvars.example terraform.tfvars
    ```
-   모니터·구독 ID는 ARN의 마지막 UUID다.
+   `owner`에는 이메일 @ 앞부분을 적는다. 모니터·구독 ID는 ARN의 마지막 UUID다.
 2. 초기화한다.
    ```powershell
    terraform init -backend-config=backend.hcl
@@ -86,11 +100,12 @@ aws sts assume-role-with-web-identity --no-sign-request --region ap-northeast-1 
 
 **2. 서비스 전용 자격증명 생성 후 삭제 (us-east-1)**
 
-권한 없는 임시 사용자에 1일짜리 키를 만들고 바로 지운다. `--query`로 ID만 받아서 키 값은 화면에 나오지 않는다. 그래도 Claude Code의 `!` 대신 별도 터미널에서 실행한다. PowerShell은 명령이 실패해도 다음 줄로 넘어가므로 한 줄씩 실행하고 `실패`가 보이면 멈춘다.
+권한 없는 임시 사용자(owner 접두사와 Owner 태그를 붙인다)에 1일짜리 키를 만들고 바로 지운다. `--query`로 ID만 받아서 키 값은 화면에 나오지 않는다. 그래도 Claude Code의 `!` 대신 별도 터미널에서 실행한다. PowerShell은 명령이 실패해도 다음 줄로 넘어가므로 한 줄씩 실행하고 `실패`가 보이면 멈춘다.
 
 ```powershell
-$u = "meg99-alert-test"
-aws iam create-user --user-name $u; if ($LASTEXITCODE) { "실패: 사용자 생성" }
+$o = "<owner>"
+$u = "$o-meg99-alert-test"
+aws iam create-user --user-name $u --tags Key=Owner,Value=$o; if ($LASTEXITCODE) { "실패: 사용자 생성" }
 $id = aws iam create-service-specific-credential --user-name $u --service-name bedrock.amazonaws.com --credential-age-days 1 --query ServiceSpecificCredential.ServiceSpecificCredentialId --output text; if ($LASTEXITCODE -or -not $id) { "실패: 키 생성 또는 ID 없음" }
 aws iam delete-service-specific-credential --user-name $u --service-specific-credential-id $id; if ($LASTEXITCODE) { "실패: 키 삭제" }
 aws iam delete-user --user-name $u; if ($LASTEXITCODE) { "실패: 사용자 삭제" }
@@ -119,11 +134,47 @@ aws iam list-service-specific-credentials --user-name $u --query "ServiceSpecifi
     }
   }
   ```
-- `terraform destroy`는 쓰지 않는다. 로그 버킷은 `prevent_destroy`로 막아 두었다.
+- 수업 중에는 `terraform destroy`를 쓰지 않는다. 로그 버킷은 `prevent_destroy`로 막아 두었다. 수업이 끝난 뒤의 삭제는 아래 "정리(삭제) 방법"을 따른다.
+
+## 정리(삭제) 방법
+
+수업이 끝나면 이 폴더가 만든 리소스와 상태 버킷을 모두 지운다. 사람이 PowerShell에서 실행한다. `$o`는 owner, `$log`는 로그 버킷 이름, `$state`는 상태 버킷 이름이다.
+
+1. **백업:** 보관할 CloudTrail 로그가 있으면 내려받는다.
+   ```powershell
+   aws s3 sync "s3://$log" .\cloudtrail-backup
+   ```
+2. **트레일부터 지운다.** 트레일이 남아 있으면 로그가 계속 쌓여 버킷을 비울 수 없다.
+   ```powershell
+   terraform destroy -target="aws_cloudtrail.audit"
+   ```
+3. **로그 버킷을 비운다.** 로그 버킷은 버전 관리가 꺼져 있어 객체만 지우면 된다.
+   ```powershell
+   aws s3 rm "s3://$log" --recursive
+   ```
+4. **나머지를 지운다.** `cloudtrail.tf`에서 `prevent_destroy = true` 줄을 로컬에서만 지운 뒤 실행한다. 이 수정은 커밋하지 않는다.
+   ```powershell
+   terraform destroy
+   ```
+   마지막 줄이 `Destroy complete!`이고 오류가 없어야 한다.
+5. **상태 버킷을 지운다.** 버전 관리가 켜져 있어 이전 버전까지 지워야 한다. S3 콘솔에서 상태 버킷을 고르고 **비우기(Empty)** 다음 **삭제(Delete)** 를 누른다.
+6. **삭제 확인:** 아래 명령이 모두 빈 결과나 NotFound(404) 오류를 내야 한다.
+   ```powershell
+   aws budgets describe-budgets --account-id (aws sts get-caller-identity --query Account --output text) --query "Budgets[?BudgetName=='cs-learning-monthly']"
+   aws ce get-anomaly-monitors --query "AnomalyMonitors[?contains(MonitorName, '$o')]"
+   aws cloudtrail describe-trails --region ap-northeast-2 --query "trailList[?Name=='cs-learning-audit']"
+   aws sns list-topics --region ap-northeast-1 --query "Topics[?contains(TopicArn, '$o-')]"
+   aws sns list-topics --region us-east-1 --query "Topics[?contains(TopicArn, '$o-')]"
+   aws events list-rules --region ap-northeast-1 --name-prefix "$o-"
+   aws events list-rules --region us-east-1 --name-prefix "$o-"
+   aws s3api head-bucket --bucket $log     # 404
+   aws s3api head-bucket --bucket $state   # 404
+   ```
 
 ## 알아 둘 것
 
-- 비용 이상 탐지 모니터 이름이 콘솔에서 `Daily summaries`로 저장됐다. 가져오기에서 변경 0건을 맞추려고 그대로 두었다. 이름을 바꾸려면 가져오기가 끝난 뒤 별도 변경으로 고친다.
+- 비용 이상 탐지 모니터 이름은 콘솔에서 `Daily summaries`로 잘못 저장돼 있었다. 가져오기가 끝난 뒤 `<owner>-cs-learning-cost-monitor`로 고쳤다(제자리 변경).
+- `alerts.tf` 리소스 이름을 바꾸면 토픽과 구독이 새로 만들어지므로 확인 메일 2통을 다시 눌러야 한다.
 - `sts_event_region`은 백엔드 `BEDROCK_REGION`과 같아야 한다. 백엔드 리전을 바꾸면 이 값도 바꾼다.
 - 로컬 검사: `terraform fmt -check -recursive`, `terraform init -backend=false`, `terraform validate`. CI에서는 Terraform을 실행하지 않는다.
 - provider를 올릴 때는 `terraform providers lock -platform=windows_amd64 -platform=linux_amd64 -platform=darwin_arm64 -platform=darwin_amd64`로 잠금 파일을 갱신해 커밋한다.

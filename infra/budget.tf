@@ -1,4 +1,5 @@
 # MEG-95 1단계에서 콘솔로 만든 월 예산과 비용 이상 탐지. imports.tf로 가져온다.
+# 예산·구독 이름은 바꾸면 새로 만들어져서 owner 접두사 없이 둔다. Owner 태그로 구분한다.
 
 resource "aws_budgets_budget" "monthly" {
   name              = "cs-learning-monthly"
@@ -56,9 +57,8 @@ resource "aws_budgets_budget" "monthly" {
 }
 
 resource "aws_ce_anomaly_monitor" "services" {
-  # 콘솔에서 구독 이름이 모니터 이름으로 저장됐다. 이름을 바꾸면 변경이 생기므로
-  # 가져오기(AC-3)를 끝낸 뒤 별도 변경으로 고친다.
-  name              = "Daily summaries"
+  # 콘솔에서 구독 이름(Daily summaries)이 모니터 이름으로 잘못 저장돼 있던 것을 고친다.
+  name              = "${var.owner}-cs-learning-cost-monitor"
   monitor_type      = "DIMENSIONAL"
   monitor_dimension = "SERVICE"
 }

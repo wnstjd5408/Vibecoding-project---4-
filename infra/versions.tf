@@ -18,6 +18,13 @@ terraform {
 
 provider "aws" {
   region = var.home_region
+
+  # 공용 실습 계정 규칙: 만드는 모든 리소스에 Owner 태그를 단다(README "공용 실습 계정 규칙").
+  default_tags {
+    tags = {
+      Owner = var.owner
+    }
+  }
 }
 
 data "aws_caller_identity" "current" {}

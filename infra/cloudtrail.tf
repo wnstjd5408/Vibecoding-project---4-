@@ -1,4 +1,5 @@
 # MEG-95 2단계에서 콘솔로 만든 감사 트레일과 로그 버킷. imports.tf로 가져온다.
+# 트레일·버킷 이름은 바꾸면 새로 만들어져서 owner 접두사 없이 둔다. Owner 태그로 구분한다.
 
 locals {
   account_id = data.aws_caller_identity.current.account_id

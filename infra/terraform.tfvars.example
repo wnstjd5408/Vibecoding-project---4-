@@ -1,5 +1,8 @@
 # terraform.tfvars로 복사해 실제 값을 넣는다. terraform.tfvars는 커밋하지 않는다.
 
+# 이메일 @ 앞부분. Owner 태그와 이름 접두사에 쓴다.
+owner = "OWNER"
+
 alert_email        = "alerts@example.com"
 monthly_budget_usd = "0.0"
 
