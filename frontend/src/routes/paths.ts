@@ -17,6 +17,7 @@ export const operatorPaths = {
 
 // 개발 중에만 쓰는 경로. 제품 화면이 아니다.
 export const devPaths = {
+  mockup: '/dev/mockup', // MEG-113 전체 목업 검토. 제품 경로와 데이터는 분리한다.
   foundationDemo: '/dev/foundation', // 공통 기반 확인용 샘플 화면(MEG-105)
 } as const
 
