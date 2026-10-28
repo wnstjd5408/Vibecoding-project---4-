@@ -54,6 +54,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "boto3" },
     { name = "fastapi", extra = ["standard"] },
+    { name = "httpx" },
 ]
 
 [package.dev-dependencies]
@@ -65,6 +66,7 @@ dev = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.43.117" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.146.0" },
+    { name = "httpx", specifier = ">=0.28" },
 ]
 
 [package.metadata.requires-dev]
