@@ -109,34 +109,26 @@ data "aws_iam_policy_document" "read" {
     resources = [local.trail_arn]
   }
 
+  # 읽기 전용 와일드카드로 둔다. AWS provider가 새 버전에서 읽는 API가 늘어도 plan이 권한 부족으로
+  # 멈추지 않게 하려는 것이다. 버킷 단위 리소스라 로그 객체(GetObject)는 읽지 못한다.
+  # 2026-10-28 첫 CD 실행에서 s3:ListTagsForResource가 빠져 plan이 실패했다.
   statement {
-    sid = "ReadLogBucket"
-    actions = [
-      "s3:ListBucket",
-      "s3:GetBucket*",
-      "s3:GetEncryptionConfiguration",
-      "s3:GetLifecycleConfiguration",
-      "s3:GetReplicationConfiguration",
-      "s3:GetAccelerateConfiguration",
-    ]
+    sid       = "ReadLogBucket"
+    actions   = ["s3:Get*", "s3:List*"]
     resources = [local.log_bucket_arn]
   }
 
+  # SNS는 GetSubscriptionAttributes도 구독이 아니라 토픽 ARN으로 권한을 검사한다.
+  # 구독 ARN(토픽:*)에만 허용하면 거부된다(같은 실행에서 확인).
   statement {
     sid       = "ReadAlertTopics"
-    actions   = ["sns:GetTopicAttributes", "sns:ListTagsForResource", "sns:ListSubscriptionsByTopic"]
+    actions   = ["sns:Get*", "sns:List*"]
     resources = [local.sns_topic_arn]
   }
 
   statement {
-    sid       = "ReadAlertSubscriptions"
-    actions   = ["sns:GetSubscriptionAttributes"]
-    resources = ["${local.sns_topic_arn}:*"]
-  }
-
-  statement {
     sid       = "ReadAlertRules"
-    actions   = ["events:DescribeRule", "events:ListTargetsByRule", "events:ListTagsForResource"]
+    actions   = ["events:Describe*", "events:List*"]
     resources = [local.event_rule_arn]
   }
 

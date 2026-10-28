@@ -214,6 +214,11 @@ aws iam list-service-specific-credentials --user-name $u --query "ServiceSpecifi
 **실패했을 때**
 
 - **plan·init·apply가 실패:** 공개 로그라서 Terraform 출력을 남기지 않는다. 종료 코드만 보인다. 같은 커밋을 로컬에서 `plan`해 원인을 본다.
+- **plan 단계가 인증 뒤에 실패:** 공개 로그에는 출력이 없어서 어떤 호출이 거부됐는지 보이지 않는다. 읽기 호출은 CloudTrail 이벤트 기록에 남으므로 실행 시각 전후로 `GitHubActions` 세션의 거부 기록을 찾는다. 서울(`ap-northeast-2`), 도쿄(`ap-northeast-1`), 버지니아(`us-east-1`)를 모두 본다.
+  ```powershell
+  aws cloudtrail lookup-events --region us-east-1 --lookup-attributes AttributeKey=Username,AttributeValue=GitHubActions --start-time <UTC 시작 시각> --query "Events[].CloudTrailEvent" --output text
+  ```
+  결과 중 `errorCode`가 `AccessDenied`인 이벤트의 `errorMessage`에 거부된 동작과 리소스가 있다. 이벤트가 도착하는 데 몇 분 걸릴 수 있다. 2026-10-28 첫 실행은 `sns:GetSubscriptionAttributes`(SNS는 구독이 아니라 토픽 ARN으로 검사한다)와 `s3:ListTagsForResource`(로그 버킷 태그)가 빠져 있었다. 이 방법으로 찾았다. 권한을 더한 뒤 사람이 `infra/github-oidc`를 다시 적용한다.
 - **apply가 `AccessDenied`:** `infra/`에 새 리소스 종류를 추가했는데 apply 역할이 모르는 것이다. `infra/github-oidc/main.tf`의 정책에 권한을 더하는 PR을 올리고, 병합 뒤 사람이 로컬에서 `infra/github-oidc`를 적용한다. 의도적으로 뺀 권한(트레일·로그 버킷·로그 버킷 정책 삭제, IAM 쓰기)이 필요한 plan은 로컬에서 직접 적용한다.
 - **apply가 중간에 실패:** 일부 리소스는 이미 바뀌었을 수 있다. 상태를 믿고 로컬에서 `plan`해 차이를 본 뒤 다시 `main`에 고치는 PR을 올리거나 로컬에서 적용한다. 상태 파일은 apply가 실패해도 쓴 곳까지 기록된다.
 - **승인을 거절했거나 시간이 지났다:** plan 파일은 하루 안에 만료 규칙으로 사라진다. 다시 적용하려면 Actions에서 `Infra CD`를 `main`에서 수동 실행하거나 실행을 다시 돌린다. 오래된 plan은 상태가 바뀌었으면 적용되지 않는다.
