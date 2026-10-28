@@ -188,10 +188,11 @@ def attempt_login(limiter: RateLimiter, rule: RateRule, subject: str, password_o
     return "wrong"
 
 
-def test_parallel_failures_cannot_all_reach_the_password_check():
+def test_sequential_failures_stop_at_the_limit_before_the_password_check():
+    # 알고리즘 모형이다. 실제 동시성 보장은 SQL upsert가 맡고, 이 시험은 먼저 세는 순서만 확인한다.
     # 시도 100개가 모두 비밀번호 확인까지 가면 한도 5는 의미가 없다. 먼저 세므로 5개만 간다.
     limiter, _ = make_limiter()
-    rule = RateRule("login_failure", 5, 900)
+    rule = RateRule("login_failure", 5, 900, releasable=True)
 
     results = [attempt_login(limiter, rule, "victim", password_ok=False) for _ in range(100)]
 
@@ -201,7 +202,7 @@ def test_parallel_failures_cannot_all_reach_the_password_check():
 
 def test_successful_logins_are_released_and_never_lock_the_account():
     limiter, fake = make_limiter()
-    rule = RateRule("login_failure", 3, 900)
+    rule = RateRule("login_failure", 3, 900, releasable=True)
 
     results = [attempt_login(limiter, rule, "alice", password_ok=True) for _ in range(20)]
 
@@ -211,7 +212,7 @@ def test_successful_logins_are_released_and_never_lock_the_account():
 
 def test_a_success_gives_back_only_its_own_count():
     limiter, fake = make_limiter()
-    rule = RateRule("login_failure", 3, 900)
+    rule = RateRule("login_failure", 3, 900, releasable=True)
     key = f"login_failure:{fake.keyed_hash('alice')}"
 
     attempt_login(limiter, rule, "alice", password_ok=False)
@@ -226,7 +227,7 @@ def test_a_success_gives_back_only_its_own_count():
 def test_release_without_a_counter_is_harmless():
     limiter, fake = make_limiter()
 
-    limiter.release(RateRule("login_failure", 3, 900), "nobody")
+    limiter.release(RateRule("login_failure", 3, 900, releasable=True), "nobody")
 
     assert fake.hits(f"login_failure:{fake.keyed_hash('nobody')}", 900) == 0
 
@@ -253,7 +254,7 @@ def test_limiter_passes_limit_and_window_to_the_store():
             seen.append(("release", window_seconds))
 
     limiter = RateLimiter(Store(), lambda value: "h")
-    rule = RateRule("login_failure", 5, 900)
+    rule = RateRule("login_failure", 5, 900, releasable=True)
     limiter.check(rule, "x")
     limiter.release(rule, "x")
 
@@ -309,3 +310,22 @@ def test_unexpected_status_for_rpc_is_a_config_error():
 
     with pytest.raises(SupabaseConfigError):
         supabase_with(lambda request: httpx.Response(404, json={})).rpc("rate_limit_release", {})
+
+
+# 되돌릴 수 있는 규칙은 계정 키 규칙뿐이다
+def test_a_rule_that_is_not_releasable_cannot_be_released():
+    limiter, fake = make_limiter()
+    ip_rule = RateRule("login_ip", 5, 900)  # releasable 기본값은 false
+    limiter.check(ip_rule, "203.0.113.1")
+
+    with pytest.raises(ValueError):
+        limiter.release(ip_rule, "203.0.113.1")
+
+    assert fake.hits(f"login_ip:{fake.keyed_hash('203.0.113.1')}", 900) == 1
+
+
+def test_only_the_account_login_rule_is_releasable():
+    from app.rate_limit import LOGIN_FAILURE, PUBLIC_READ, SIGNED_URL, WRITE
+
+    assert LOGIN_FAILURE.releasable
+    assert not any(rule.releasable for rule in (PUBLIC_READ, SIGNED_URL, WRITE))

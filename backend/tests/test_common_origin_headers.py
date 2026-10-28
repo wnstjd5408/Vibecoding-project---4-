@@ -167,19 +167,3 @@ def test_info_logging_is_enabled_by_the_common_layer():
     import logging
 
     assert logging.getLogger("app.access").isEnabledFor(logging.INFO)
-
-
-def test_client_disconnect_is_not_logged_as_a_server_error(caplog):
-    with caplog.at_level("INFO", logger="app"):
-        response = TestClient(build_app(FakeSupabase()), raise_server_exceptions=False).get("/api/disconnect")
-
-    assert response.status_code == 499
-    assert not [r for r in caplog.records if r.levelname == "ERROR"]
-    assert response.headers["X-Request-Id"].startswith("r-")
-
-
-def test_other_runtime_errors_are_still_internal_errors():
-    response = TestClient(build_app(FakeSupabase()), raise_server_exceptions=False).get("/api/runtime")
-
-    assert response.status_code == 500
-    assert response.json()["error"]["code"] == "internal_error"

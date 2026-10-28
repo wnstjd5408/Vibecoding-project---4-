@@ -23,12 +23,16 @@ class RateRule:
     name: str
     limit: int
     window_seconds: int
+    # 성공했을 때 센 것을 되돌려도 되는 규칙. 계정 키로 세는 로그인 실패 제한만 true로 둔다.
+    # IP 키 규칙을 되돌릴 수 있으면 자기 계정으로 로그인해 IP 제한을 초기화할 수 있다.
+    releasable: bool = False
 
 
 # API spec 1.8의 제안 숫자다. 시험 뒤 조정하며, 확정은 각 엔드포인트 티켓이 한다.
 PUBLIC_READ = RateRule("public_read", 120, 60)
 SIGNED_URL = RateRule("signed_url", 60, 60)
-LOGIN_FAILURE = RateRule("login_failure", 5, 15 * 60)
+# 계정(이메일) 키용이다. IP 키용 로그인 제한은 성공도 세는 별도 규칙(releasable=False)을 MEG-63이 정한다.
+LOGIN_FAILURE = RateRule("login_failure", 5, 15 * 60, releasable=True)
 WRITE = RateRule("write", 30, 60)
 
 
@@ -108,6 +112,8 @@ class RateLimiter:
         모두 확인을 통과해 한도가 무력해지므로 쓰지 않는다. 되돌리는 것은 성공한 계정의 키뿐이다.
         IP 키까지 되돌리면 자기 계정으로 로그인해 IP 제한을 초기화할 수 있다.
         """
+        if not rule.releasable:
+            raise ValueError(f"rate rule {rule.name} cannot be released")
         self._store.release(self._key(rule, subject), rule.window_seconds)
 
 

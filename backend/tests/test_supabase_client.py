@@ -171,3 +171,10 @@ def test_valid_shape_but_oversized_token_is_rejected_without_a_request():
 
     assert client.get_auth_user_id(token) is None
     assert calls == []
+
+
+def test_realistic_large_payload_segment_is_accepted():
+    # user_metadata가 큰 계정의 토큰: 가운데 구간이 2800자여도 전체가 4096자 이하면 받는다.
+    token = "a" * 40 + "." + "b" * 2800 + "." + "c" * 86
+
+    assert client_with(lambda r: httpx.Response(200, json={"id": USER_ID})).get_auth_user_id(token) == USER_ID

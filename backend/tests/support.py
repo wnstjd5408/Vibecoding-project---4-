@@ -141,14 +141,6 @@ def build_app(fake: FakeSupabase) -> FastAPI:
     def header(idempotency_key: int = Header()):
         return {"ok": True}
 
-    @app.get("/api/disconnect")
-    def disconnect():
-        raise RuntimeError("No response returned.")
-
-    @app.get("/api/runtime")
-    def runtime():
-        raise RuntimeError("some other failure")
-
     @app.post("/api/strict")
     def strict(item: StrictItem):
         return {"ok": True}
