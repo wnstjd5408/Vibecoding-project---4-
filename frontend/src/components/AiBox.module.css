@@ -1,0 +1,9 @@
+/* AI가 만든 내용을 감싸는 연필 점선 상자. 글자는 ink다(연필은 테두리와 배지에만 쓴다) */
+.box {
+  padding: var(--space-3);
+  border: 1px dashed var(--pencil);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 22px;
+}

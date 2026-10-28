@@ -1,0 +1,18 @@
+/* 사전 용어. 형광 칠은 중복 신호이고 2px ink 밑줄이 주 신호다(칠 하나만으로 구분하지 않는다) */
+.term {
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--highlight);
+  box-shadow: 0 0 0 2px var(--highlight);
+  color: var(--ink);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-decoration-color: var(--ink);
+  text-underline-offset: 3px;
+}
+
+.interactive {
+  cursor: pointer;
+}

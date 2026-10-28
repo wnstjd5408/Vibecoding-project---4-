@@ -1,0 +1,11 @@
+/* 바텀시트 뒤를 어둡게 덮는 막. ink를 40%로 깐다 */
+.scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--ink);
+  opacity: 0.4;
+}
+
+.fixed {
+  position: fixed;
+}

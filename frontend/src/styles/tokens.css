@@ -1,0 +1,55 @@
+/* 디자인 토큰. 목업 v0.2의 ds/cs-note-ds/tokens.css(version 3)를 그대로 옮겼다.
+   디자인 시스템 v5와 같은지는 아직 확인되지 않았다(MEG-70 작업 기록). 값이 달라지면 이 파일만 고친다. */
+@font-face {
+  font-family: 'Pretendard';
+  src: url('/fonts/PretendardVariable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
+:root,
+[data-theme='light'] {
+  --surface-100: #f5f6f8; /* 종이. 페이지 바탕, 노트 본문 배경 */
+  --surface-200: #ffffff; /* 시트·카드의 흰 종이 */
+  --surface-300: #dde2e9; /* 장식 선, 구분선, 눌린 상태 배경 */
+  --line-strong: #76818f; /* 조작 요소의 경계(입력 칸, 시트 손잡이, 비활성 버튼 테두리) */
+  --ink: #16202f; /* 먹. 본문, 주요 버튼 배경, 포커스 링 */
+  --ink-muted: #566474; /* 보조 설명, 캡션, 자리표시 글자 */
+  --highlight: #ffe066; /* 형광펜. 사전 용어 */
+  --pencil: #4a586a; /* 연필. AI가 만든 내용의 점선 상자·배지 */
+  --red-pen: #c8352b; /* 빨간펜. 틀림 신고 */
+  --diff-low: #e4e8ee; /* 난이도 하 */
+  --diff-mid: #b9c3d1; /* 난이도 중 */
+}
+
+[data-theme='dark'] {
+  --surface-100: #12161d;
+  --surface-200: #1b212b;
+  --surface-300: #2c3543;
+  --line-strong: #74808f;
+  --ink: #eef1f5;
+  --ink-muted: #a9b4c2;
+  --highlight: #806a00;
+  --pencil: #b4bfcd;
+  --red-pen: #ff8a80;
+  --diff-low: #232b38;
+  --diff-mid: #3c485a;
+}
+
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --radius-sm: 4px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+
+  --font-sans: 'Pretendard', system-ui, -apple-system, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, menlo, consolas, monospace;
+}

@@ -1,5 +1,6 @@
 import type { RouteObject } from 'react-router'
 import { Suspense } from 'react'
+import ComponentShowcase from '../pages/ComponentShowcase.tsx'
 import FoundationDemo from '../pages/FoundationDemo.tsx'
 import Placeholder from '../pages/Placeholder.tsx'
 import { operatorRoutes } from './operatorRoutes.tsx'
@@ -16,5 +17,6 @@ export const appRoutes: RouteObject[] = [
     { index: true, element: <MockupCatalog /> },
     { path: ':screenId', element: <MockupScreen /> },
   ] },
+  { path: devPaths.componentShowcase, element: <ComponentShowcase /> },
   { path: '*', element: <Placeholder screenId="404" title="없는 경로" ticket="해당 없음" /> },
 ]
