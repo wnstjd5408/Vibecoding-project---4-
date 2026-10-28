@@ -1,0 +1,168 @@
+// 가짜 응답을 한곳에 모았다. API spec v0.2 3절 예시와 2.2절 응답 모양을 따르고, 값은 모두 합성이다.
+// 실제 API가 생기면 해당 엔드포인트의 항목만 지우거나 apiSource를 real로 두면 된다.
+import type { ApiErrorBody, NoteListResponse } from '../types.ts'
+import { getMockSession, setMockSession } from './session.ts'
+
+export type MockRequest = { method: string; path: string; query: URLSearchParams; body: unknown }
+export type MockResponse = { status: number; body?: unknown }
+
+type Route = {
+  method: string
+  pattern: RegExp
+  handle: (request: MockRequest, params: string[]) => MockResponse
+}
+
+// 오류 본문은 1.4 형식이다. message는 1.4.6의 영어 고정 문구를 그대로 쓴다.
+export function mockError(status: number, code: string, message: string, detail?: string): MockResponse {
+  const body: ApiErrorBody = { error: { code, message, request_id: 'r-mock-0001', ...(detail ? { detail } : {}) } }
+  return { status, body }
+}
+
+const loginRequired = () => mockError(401, 'login_required', 'Login is required')
+const notFound = () => mockError(404, 'not_found', 'Resource not found')
+
+// 합성 계정. 실제 계정·비밀번호가 아니다. 역할 값은 서버 계약(member·operator)과 같다.
+const ACCOUNTS = {
+  'member@example.test': { password: 'example-password', role: 'member', display_name: '합성 사용자' },
+  'operator@example.test': { password: 'example-password', role: 'operator', display_name: '합성 운영자' },
+} as const
+
+// E06 예시 2의 용어 7을 즐겨찾기했는지. 가짜 응답이 흉내 낸다.
+let favoriteTerm7 = false
+
+const SUBJECTS = [
+  { id: 1, name: '네트워크', note_count: 2 },
+  { id: 2, name: '운영체제', note_count: 1 },
+  { id: 3, name: '데이터베이스', note_count: 1 },
+]
+
+const NOTES = [
+  { id: 11, title: '예시 노트 · 요청이 서버까지 가는 길', studied_on: '2026-10-14', subjects: [SUBJECTS[0]], parent_note_id: null },
+  { id: 12, title: '예시 노트 · 프로세스가 번갈아 실행되는 이유', studied_on: '2026-10-09', subjects: [SUBJECTS[1]], parent_note_id: null },
+  { id: 13, title: '예시 노트 · 인덱스가 조회를 빠르게 하는 방식', studied_on: '2026-10-02', subjects: [SUBJECTS[2]], parent_note_id: null },
+  { id: 14, title: '예시 노트 · 캐시가 오래된 값을 돌려주는 경우', studied_on: '2026-09-27', subjects: [SUBJECTS[0]], parent_note_id: null },
+].map((note) => ({ ...note, subjects: note.subjects.map(({ id, name }) => ({ id, name })) }))
+
+const routes: Route[] = [
+  // 백엔드 상태 확인. 개발 서버 프록시가 실제 백엔드의 /health로 이어 주는 경로와 같은 모양이다.
+  { method: 'GET', pattern: /^\/api\/health$/, handle: () => ({ status: 200, body: { status: 'ok' } }) },
+  // E01 로그인. 맞지 않으면 사유를 구분하지 않고 401 invalid_credentials다.
+  {
+    method: 'POST',
+    pattern: /^\/api\/auth\/login$/,
+    handle: ({ body }) => {
+      const { email, password } = (body ?? {}) as { email?: string; password?: string }
+      const account = typeof email === 'string' && email in ACCOUNTS ? ACCOUNTS[email as keyof typeof ACCOUNTS] : null
+      if (!account || account.password !== password) {
+        return mockError(401, 'invalid_credentials', 'Invalid email or password')
+      }
+      setMockSession(account.role)
+      return { status: 200, body: { user: { role: account.role, display_name: account.display_name } } }
+    },
+  },
+  // E02 로그아웃. 세션이 없어도 204다.
+  {
+    method: 'POST',
+    pattern: /^\/api\/auth\/logout$/,
+    handle: () => {
+      setMockSession('visitor')
+      return { status: 204 }
+    },
+  },
+  // E03 내 상태. 비로그인도 200이다.
+  {
+    method: 'GET',
+    pattern: /^\/api\/me$/,
+    handle: () => {
+      const session = getMockSession()
+      if (session === 'visitor') return { status: 200, body: { authenticated: false } }
+      const account = session === 'operator' ? ACCOUNTS['operator@example.test'] : ACCOUNTS['member@example.test']
+      return { status: 200, body: { authenticated: true, role: account.role, display_name: account.display_name } }
+    },
+  },
+  // E04 과목·노트 목록. 운영자는 노트마다 공개 여부 등이 더 온다.
+  {
+    method: 'GET',
+    pattern: /^\/api\/notes$/,
+    handle: ({ query }) => {
+      const subjectId = query.get('subject_id')
+      const notes = subjectId ? NOTES.filter((note) => note.subjects.some((s) => String(s.id) === subjectId)) : NOTES
+      const operator = getMockSession() === 'operator'
+      const body: NoteListResponse = {
+        subjects: SUBJECTS,
+        notes: operator ? notes.map((note) => ({ ...note, is_published: true, revision: 1, needs_review: false })) : notes,
+      }
+      return { status: 200, body }
+    },
+  },
+  // E05 노트 읽기. 예시 1의 노트 11만 있다.
+  {
+    method: 'GET',
+    pattern: /^\/api\/notes\/(\d+)$/,
+    handle: (_request, [noteId]) => {
+      if (noteId !== '11') return notFound()
+      return {
+        status: 200,
+        body: {
+          id: 11,
+          revision: 3,
+          title: 'Example Note',
+          studied_on: '2026-10-14',
+          subjects: [{ id: 1, name: '네트워크' }],
+          sources: [{ url: 'https://example.test/doc', label: '예시 문서' }],
+          body_markdown: '이 노트는 ExampleTerm 을 설명합니다. UnknownWord 는 사전에 없습니다. ![그림](note-image:blk-1)',
+          images: {
+            'blk-1': {
+              url: 'https://storage.example.test/signed/EXAMPLE?token=EXAMPLE_ONLY',
+              alt: '그림',
+              expires_at: '2026-10-23T05:35:00Z',
+            },
+          },
+          glossary_terms: [{ term_id: 7, key: 'exampleterm', label: 'ExampleTerm' }],
+          glossary_spans: [{ term_id: 7, start: 6, end: 17 }],
+        },
+      }
+    },
+  },
+  // E06 용어 바텀시트. 예시 2의 용어 7만 있고, 방문자에게는 is_favorite 키가 없다.
+  {
+    method: 'GET',
+    pattern: /^\/api\/glossary\/(\d+)$/,
+    handle: (_request, [termId]) => {
+      if (termId !== '7') return notFound()
+      const body = {
+        term: { id: 7, key: 'exampleterm', label: 'ExampleTerm' },
+        body_markdown: '합성 설명 문장입니다.',
+        images: [{ id: 3, url: 'https://storage.example.test/glossary/EXAMPLE', alt: '합성 구조도' }],
+      }
+      return { status: 200, body: getMockSession() === 'visitor' ? body : { ...body, is_favorite: favoriteTerm7 } }
+    },
+  },
+  // E07 용어 열람 기록. 방문자는 오류 없이 recorded가 false다.
+  {
+    method: 'POST',
+    pattern: /^\/api\/term-views$/,
+    handle: () => ({ status: 200, body: { recorded: getMockSession() !== 'visitor' } }),
+  },
+  // E08 즐겨찾기. 방문자는 항상 401 login_required다.
+  {
+    method: 'PUT',
+    pattern: /^\/api\/favorites\/(\d+)$/,
+    handle: ({ body }, [termId]) => {
+      if (getMockSession() === 'visitor') return loginRequired()
+      if (termId !== '7') return notFound()
+      favoriteTerm7 = Boolean((body as { favorited?: boolean } | undefined)?.favorited)
+      return { status: 200, body: { term_id: 7, is_favorite: favoriteTerm7 } }
+    },
+  },
+]
+
+// 등록되지 않은 엔드포인트는 404 not_found로 답한다. 실제 백엔드에 없는 경로를 부른 것과 같다.
+export function handleMock(request: MockRequest): MockResponse {
+  for (const route of routes) {
+    if (route.method !== request.method) continue
+    const match = route.pattern.exec(request.path)
+    if (match) return route.handle(request, match.slice(1))
+  }
+  return notFound()
+}
