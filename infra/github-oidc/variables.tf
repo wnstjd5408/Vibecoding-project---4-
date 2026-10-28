@@ -26,10 +26,14 @@ variable "cloudtrail_bucket_name" {
   type        = string
 }
 
-variable "github_repository" {
-  description = "CD를 실행할 GitHub 저장소(owner/name). 역할 신뢰 정책의 sub를 이 저장소로 제한한다."
+# 이 저장소는 OIDC 토큰의 sub가 불변 형식이다(use_immutable_subject). 소유자·저장소 이름 뒤에 숫자 ID가
+# 붙는다. 이름만 쓴 옛 형식(owner/name)으로는 역할 전환이 거부된다(2026-10-28 MEG-100 첫 CD 실행).
+# 값은 `gh api repos/<owner>/<name>/actions/oidc/customization/sub`의 sub_claim_prefix에서
+# 앞의 "repo:"를 뺀 것이다. 두 ID는 공개 저장소의 공개 식별자라 커밋해도 된다.
+variable "github_subject_repository" {
+  description = "CD를 실행할 GitHub 저장소의 sub 클레임 표기(owner@ID/name@ID). 역할 신뢰 정책의 sub를 이 저장소로 제한한다."
   type        = string
-  default     = "wnstjd5408/Vibecoding-project---4-"
+  default     = "wnstjd5408@73061276/Vibecoding-project---4-@1421732974"
 }
 
 variable "plan_environment" {
