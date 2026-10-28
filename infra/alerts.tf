@@ -39,6 +39,11 @@ resource "aws_sns_topic" "audit_alerts" {
 
   region = each.value.region
   name   = "${var.owner}-cs-learning-audit-alerts"
+
+  # MEG-100: CD로 첫 변경을 적용해 보는 무해한 시험이다. 토픽 동작에는 영향이 없고 콘솔에서 용도를 알아보게 한다.
+  tags = {
+    Purpose = "audit-alerts"
+  }
 }
 
 resource "aws_sns_topic_subscription" "audit_alerts_email" {
