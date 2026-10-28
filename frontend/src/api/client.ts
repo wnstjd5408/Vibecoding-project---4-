@@ -49,7 +49,8 @@ export type ApiRequestInit = {
   signal?: AbortSignal
 }
 
-type Transported = { status: number; body: unknown }
+// malformed: 본문이 있는데 JSON으로 읽지 못했다(프록시가 못 찾아 앱 HTML을 돌려준 경우 등).
+type Transported = { status: number; body: unknown; malformed?: boolean }
 
 function buildUrl(path: string, query: ApiRequestInit['query']): string {
   const params = new URLSearchParams()
@@ -80,12 +81,15 @@ async function realTransport(url: string, init: ApiRequestInit): Promise<Transpo
   }
   const text = await response.text()
   let body: unknown
-  try {
-    body = text ? JSON.parse(text) : undefined
-  } catch {
-    body = undefined
+  let malformed = false
+  if (text) {
+    try {
+      body = JSON.parse(text)
+    } catch {
+      malformed = true
+    }
   }
-  return { status: response.status, body }
+  return { status: response.status, body, malformed }
 }
 
 function mockTransport(url: string, init: ApiRequestInit): Transported {
@@ -107,12 +111,22 @@ function isErrorBody(body: unknown): body is ApiErrorBody {
 // 응답을 가짜로 받을지 실제 백엔드에서 받을지는 호출하는 쪽이 아니라 환경변수 VITE_API_MOCK 한 곳이 정한다(api/source.ts).
 export async function apiFetch<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
   const url = buildUrl(path, init.query)
-  const { status, body } = getApiSource() === 'mock' ? mockTransport(url, init) : await realTransport(url, init)
+  const { status, body, malformed } = getApiSource() === 'mock' ? mockTransport(url, init) : await realTransport(url, init)
 
-  if (status >= 200 && status < 300) return body as T
+  if (status >= 200 && status < 300) {
+    // 204만 본문이 없어도 성공이다. 그 밖의 성공 응답은 JSON 본문이 있어야 한다.
+    // 깨진 JSON이나 빈 본문을 성공(undefined)으로 넘기면 호출한 쪽이 엉뚱한 곳에서 터지므로 여기서 오류로 알린다.
+    if (malformed || (status !== 204 && body === undefined)) throw unexpectedResponse(status)
+    return body as T
+  }
   if (isErrorBody(body)) throw new ApiError(status, body.error)
-  // 1.4 형식이 아닌 응답(프록시 오류 등). 서버 code와 겹치지 않는 클라이언트 code로 알린다.
-  throw new ApiError(status, {
+  // 1.4 형식이 아닌 오류 응답(프록시 오류 등)
+  throw unexpectedResponse(status)
+}
+
+// 서버가 약속한 형식이 아닌 응답. 서버 code와 겹치지 않는 클라이언트 code로 알린다.
+function unexpectedResponse(status: number): ApiError {
+  return new ApiError(status, {
     code: CLIENT_ERROR_CODES.unexpectedResponse,
     message: 'Unexpected response',
     request_id: '',

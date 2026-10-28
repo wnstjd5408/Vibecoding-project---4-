@@ -14,7 +14,7 @@ import DevNav from './DevNav.tsx'
 
 type Result = { kind: 'idle' } | { kind: 'loading' } | { kind: 'ok'; text: string } | { kind: 'error'; text: string }
 
-const ROLE_LABEL = { visitor: '방문자', user: '사용자', operator: '운영자' } as const
+const ROLE_LABEL = { visitor: '방문자', member: '사용자', operator: '운영자' } as const
 
 // 오류 종류별 안내. 키는 서버 code(와 클라이언트 code)이고 message 글자로는 고르지 않는다.
 const ERROR_LABEL: Record<string, string> = {
@@ -66,7 +66,7 @@ export default function FoundationDemo() {
 
   const wrongLogin = () => {
     setLogin({ kind: 'loading' })
-    apiFetch('/api/auth/login', { method: 'POST', body: { email: 'user@example.test', password: 'wrong' } })
+    apiFetch('/api/auth/login', { method: 'POST', body: { email: 'member@example.test', password: 'wrong' } })
       .then(() => setLogin({ kind: 'ok', text: '로그인됨' }))
       .catch((error: unknown) => setLogin({ kind: 'error', text: describeError(error) }))
   }
@@ -125,7 +125,7 @@ export default function FoundationDemo() {
           {auth.status === 'error' ? ' · 상태(E03)를 받지 못했습니다' : ''}
         </p>
         <p>
-          {(['visitor', 'user', 'operator'] as const).map((session) => (
+          {(['visitor', 'member', 'operator'] as const).map((session) => (
             <button
               key={session}
               type="button"

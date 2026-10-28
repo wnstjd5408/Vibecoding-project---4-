@@ -21,9 +21,9 @@ export function mockError(status: number, code: string, message: string, detail?
 const loginRequired = () => mockError(401, 'login_required', 'Login is required')
 const notFound = () => mockError(404, 'not_found', 'Resource not found')
 
-// 합성 계정. 실제 계정·비밀번호가 아니다.
+// 합성 계정. 실제 계정·비밀번호가 아니다. 역할 값은 서버 계약(member·operator)과 같다.
 const ACCOUNTS = {
-  'user@example.test': { password: 'example-password', role: 'user', display_name: '합성 사용자' },
+  'member@example.test': { password: 'example-password', role: 'member', display_name: '합성 사용자' },
   'operator@example.test': { password: 'example-password', role: 'operator', display_name: '합성 운영자' },
 } as const
 
@@ -76,7 +76,7 @@ const routes: Route[] = [
     handle: () => {
       const session = getMockSession()
       if (session === 'visitor') return { status: 200, body: { authenticated: false } }
-      const account = session === 'operator' ? ACCOUNTS['operator@example.test'] : ACCOUNTS['user@example.test']
+      const account = session === 'operator' ? ACCOUNTS['operator@example.test'] : ACCOUNTS['member@example.test']
       return { status: 200, body: { authenticated: true, role: account.role, display_name: account.display_name } }
     },
   },

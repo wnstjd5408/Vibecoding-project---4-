@@ -1,6 +1,7 @@
 // API spec v0.2의 요청·응답 모양 중 화면 공통 기반이 쓰는 것만 둔다. 화면별 응답 타입은 그 화면 티켓에서 더한다.
 
-export type Role = 'user' | 'operator'
+// 서버 계약의 역할 값이다. DB(profiles.role)와 E01·E03·E24 모두 'operator'와 'member'만 쓴다. 화면에서는 member를 "사용자"로 부른다.
+export type Role = 'member' | 'operator'
 
 // 1.4 오류 응답. 클라이언트는 code·detail·fields[].reason으로 분기한다. message는 영어 고정 문구라 분기에 쓰지 않는다.
 export type FieldError = { name: string; reason: string; message: string }
