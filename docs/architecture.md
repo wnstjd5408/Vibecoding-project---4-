@@ -187,7 +187,38 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 - **이미지 백업:** DB 덤프와 Supabase 백업에는 Storage 파일이 들어 있지 않다. 노트 이미지는 가져오기 직후 한 번 파일로 백업하고, 사전 이미지는 주기적으로 백업한다. (결정)
 - **복구:** 노트·사전·사용자 데이터는 최근 덤프로 되돌린다. Notion은 가져온 뒤로 갱신하지 않으므로 노트 본문의 복구 원본으로 쓰지 않는다. 노트 이미지는 Notion 페이지가 남아 있는 동안 복구 모드 가져오기로 다시 받을 수 있다.
 
-## 8. 아직 정하지 않은 것
+## 8. 외부 의존성 · 환경변수
+
+변수 이름과 용도만 적는다. 값(키·역할 ARN·프로젝트 주소)은 이 문서에도 저장소에도 두지 않는다. 로컬은 git이 무시하는 `backend/.env`, 배포는 Vercel 환경변수에 둔다. 이름 목록의 원본은 [`backend/.env.example`](../backend/.env.example)과 [`frontend/.env.example`](../frontend/.env.example)이다. 값이 빈 줄은 설정하지 않은 것으로 본다.
+
+**외부 의존성**
+
+| 의존성 | 용도 | 연결 방식 | 환경변수 |
+|---|---|---|---|
+| Supabase | DB(Postgres)와 이미지 버킷 | FastAPI가 secret key로 REST와 SQL 함수를 부른다(2절 2번) | `SUPABASE_URL`, `SUPABASE_SECRET_KEY` |
+| Amazon Bedrock | AI 설명·퀴즈·꼬리 질문(Converse API) | `oidc`(기본)는 요청의 Vercel OIDC 토큰을 STS 임시 자격증명으로 바꿔 서명한다. `api_key`(대체)는 장기 API 키를 Bearer로 보낸다. 절차는 [ai-credentials.md](ai-credentials.md) | `AI_AUTH_MODE`, `AWS_ROLE_ARN`, `AWS_BEARER_TOKEN_BEDROCK`, `BEDROCK_REGION`, `BEDROCK_MODEL_ID` |
+| Notion | 노트 처음 한 번 가져오기. 앱이 도는 동안은 부르지 않는다(2절 5번) | 운영자 로컬의 가져오기 스크립트가 읽기 전용 통합 토큰으로 허용한 데이터베이스만 읽는다. 스크립트는 아직 없다(MEG-85) | `NOTION_TOKEN`, `NOTION_DATABASE_ID` |
+| Vercel | React 화면과 FastAPI 함수 호스팅, OIDC 토큰 발급, 환경변수 보관 | 배포 대상(7절). OIDC 토큰은 요청에 실려 오며 환경변수가 아니다 | 없음 |
+
+**환경변수**
+
+| 이름 | 용도 | 기본값·규칙 | 어디에 두나 |
+|---|---|---|---|
+| `SUPABASE_URL` | Supabase 프로젝트 주소 | 필수 | 백엔드(로컬·Vercel) |
+| `SUPABASE_SECRET_KEY` | 백엔드 전용 secret key. RLS를 우회하므로 프런트엔드·로그·URL에 넣지 않는다 | 필수. 용도별로 키를 따로 만든다 | 백엔드(로컬·Vercel) |
+| `NOTION_TOKEN` | 가져오기 전용 읽기 통합 토큰 | 가져오기 때만. 끝나면 폐기한다(2절 5번) | 운영자 로컬 |
+| `NOTION_DATABASE_ID` | 가져올 노트 데이터베이스 | 가져오기 때만 | 운영자 로컬 |
+| `AI_AUTH_MODE` | Bedrock 인증 방식 `oidc` 또는 `api_key` | 비우면 `oidc`. 다른 값은 오류 | 백엔드(로컬·Vercel) |
+| `AWS_ROLE_ARN` | `oidc` 모드가 맡을 IAM 역할 | `oidc`에서 필수 | 백엔드(Vercel) |
+| `AWS_BEARER_TOKEN_BEDROCK` | `api_key` 모드의 장기 API 키. 만료 30일 | `api_key`에서 필수. 평소에는 비워 둔다 | 백엔드(Vercel, 대체 경로를 쓰는 동안만) |
+| `BEDROCK_REGION` | Bedrock 호출 리전 | 비우면 `ap-northeast-1` | 백엔드(선택) |
+| `BEDROCK_MODEL_ID` | 호출할 모델 ID. 응답에 내보내지 않는다(5절) | 비우면 `global.openai.gpt-6-luna` | 백엔드(선택) |
+| `VITE_API_BASE_URL` | 화면이 부를 API 주소 | 비우면 `http://localhost:8000`. `VITE_` 값은 브라우저에 노출되므로 비밀값을 넣지 않는다 | 프런트엔드 |
+
+- 가져오기 스크립트가 DB·버킷에 쓸 때 쓰는 가져오기 전용 secret key의 변수 이름은 아직 없다. 가져오기 구현(MEG-85)에서 정한다. (미정, D-070)
+- 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정)와 프런트엔드 API 주소뿐이다. Supabase·Notion 변수는 해당 기능 구현 때 읽는다.
+
+## 9. 아직 정하지 않은 것
 
 | 질문 | 막는가 | 상태 |
 |---|---|---|
