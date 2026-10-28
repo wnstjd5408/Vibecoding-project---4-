@@ -83,7 +83,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 - 공개 읽기에 비활성 계정의 세션이 붙어 오면 비로그인으로 취급한다.
 - 세션 쿠키는 `HttpOnly`·`Secure`·`SameSite=Lax`다. 상태를 바꾸는 요청(POST·PUT·PATCH·DELETE)은 `Origin` 헤더가 앱 주소일 때만 받고, 헤더가 없으면 거부한다(CSRF 방어). (제안)
 - GET은 상태를 바꾸거나 AI를 부르지 않는다. 열람 기록과 퀴즈 생성은 POST로만 받는다.
-- 로그인 실패는 계정·IP별로 제한한다. 공개 읽기와 서명 URL 발급에도 사용자(비로그인은 IP)별 분당 상한을 두고, 넘으면 429를 돌려준다. 카운터는 Vercel 방화벽 속도 제한을 먼저 검토한다. (제안, 숫자는 시험 뒤)
+- 로그인 실패는 계정·IP별로 제한한다. 공개 읽기와 서명 URL 발급에도 사용자(비로그인은 IP)별 분당 상한을 두고, 넘으면 429를 돌려준다. 카운터는 DB 표(`rate_limit_counters`)와 SQL 함수(`rate_limit_hit`)로 센다. Vercel Hobby 방화벽은 규칙이 프로젝트당 1개이고 세는 키가 IP·JA4뿐이라 사용자·계정별 제한을 맡지 못한다. (결정, MEG-62; 숫자는 제안, 시험 뒤)
 - 모든 `/api` 응답에 `Cache-Control: private, no-store`를 붙인다. 같은 주소가 역할에 따라 다른 내용을 주기 때문이다. (결정, 2026-10-23)
 - 신고는 그 용어의 현재 유효한 공유 AI 설명과 자기 퀴즈 문항에만 할 수 있다. 저장하지 않는 1회용 설명은 신고 대상이 아니다.
 - 최초 운영자는 Supabase 대시보드나 SQL로 직접 만든다. 자체 가입은 없다. 마지막 남은 운영자는 회수하거나 일반 사용자로 바꿀 수 없게 한다(회수·역할 변경 엔드포인트를 만들 때 적용). (제안)
@@ -104,7 +104,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 | 학습 기록 | `term_views`, `favorites`, `favorite_events` | 열람 기록(사용자·용어·KST 날짜별 1행), 즐겨찾기, 즐겨찾기 추가 이력 |
 | 퀴즈 | `quiz_sets`, `quiz_set_terms`, `quiz_items`, `quiz_answers`, `quiz_followups` | 사용자·날짜별 퀴즈 세트 1개, 후보 용어 스냅샷, 문항, 답, 꼬리 질문(문항당 최대 2개를 DB가 강제) |
 | 신고 | `reports` | AI 설명과 퀴즈 문항 중 정확히 하나를 가리킨다 |
-| 운영 | `ai_usage_ledger`, `storage_delete_jobs` | AI 비용 예약·정산 원장, Storage 객체 삭제 재시도 기록 |
+| 운영 | `ai_usage_ledger`, `storage_delete_jobs`, `rate_limit_counters` | AI 비용 예약·정산 원장, Storage 객체 삭제 재시도 기록, 속도 제한 카운터(고정 창, 키는 해시) |
 
 **구조 결정**
 
@@ -213,10 +213,11 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 | `AWS_BEARER_TOKEN_BEDROCK` | `api_key` 모드의 장기 API 키. 만료 30일 | `api_key`에서 필수. 평소에는 비워 둔다 | 백엔드(Vercel, 대체 경로를 쓰는 동안만) |
 | `BEDROCK_REGION` | Bedrock 호출 리전 | 비우면 `ap-northeast-1` | 백엔드(선택) |
 | `BEDROCK_MODEL_ID` | 호출할 모델 ID. 응답에 내보내지 않는다(5절) | 비우면 `global.openai.gpt-6-luna` | 백엔드(선택) |
+| `ALLOWED_ORIGINS` | 상태를 바꾸는 요청(POST·PUT·PATCH·DELETE)의 `Origin`으로 받을 출처 목록(쉼표로 구분). CORS 허용 출처도 같은 값이다 | 비우면 `http://localhost:5173`. 운영에서는 앱 주소로 설정한다 | 백엔드(로컬·Vercel) |
 | `VITE_API_BASE_URL` | 화면이 부를 API 주소 | 비우면 `http://localhost:8000`. `VITE_` 값은 브라우저에 노출되므로 비밀값을 넣지 않는다 | 프런트엔드 |
 
 - 가져오기 스크립트가 DB·버킷에 쓸 때 쓰는 가져오기 전용 secret key의 변수 이름은 아직 없다. 가져오기 구현(MEG-85)에서 정한다. (미정, D-070)
-- 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정)와 프런트엔드 API 주소뿐이다. Supabase·Notion 변수는 해당 기능 구현 때 읽는다.
+- 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정), `backend/app/config.py`(허용 출처), `backend/app/supabase.py`(Supabase 주소·secret key)와 프런트엔드 API 주소다. Notion 변수는 가져오기 구현 때 읽는다.
 
 ## 9. 아직 정하지 않은 것
 
