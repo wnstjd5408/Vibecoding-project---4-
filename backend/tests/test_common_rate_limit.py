@@ -10,6 +10,12 @@ from app.rate_limit import RateLimiter, RateResult, RateRule, SupabaseCounterSto
 from app.supabase import SupabaseClient
 from support import LIMITED_RULE, FakeSupabase, build_app, cookie
 
+@pytest.fixture(autouse=True)
+def on_vercel(monkeypatch):
+    # Vercel 위에서만 x-vercel-forwarded-for를 믿는다. 아래 시험은 Vercel 안에서 도는 것으로 본다.
+    monkeypatch.setenv("VERCEL", "1")
+
+
 USER_A = "00000000-0000-0000-0000-00000000000a"
 USER_B = "00000000-0000-0000-0000-00000000000b"
 
@@ -109,6 +115,24 @@ def test_client_ip_prefers_vercel_header_and_normalizes():
     assert client_ip(request_with({"x-vercel-forwarded-for": "2001:DB8:0:0:0:0:0:1"})) == "2001:db8::1"
 
 
+def test_vercel_header_is_ignored_outside_vercel(monkeypatch):
+    monkeypatch.delenv("VERCEL", raising=False)
+
+    assert client_ip(request_with({"x-vercel-forwarded-for": "198.51.100.7"})) == "203.0.113.50"
+
+
+def test_forged_vercel_header_outside_vercel_cannot_make_new_buckets(monkeypatch):
+    monkeypatch.delenv("VERCEL", raising=False)
+    client, _ = make_client()
+
+    statuses = [
+        client.get("/api/limited", headers={"x-vercel-forwarded-for": f"198.51.100.{n}"}).status_code
+        for n in range(1, 5)
+    ]
+
+    assert statuses == [200, 200, 429, 429]
+
+
 def test_client_ip_ignores_x_forwarded_for():
     assert client_ip(request_with({"x-forwarded-for": "198.51.100.7"})) == "203.0.113.50"
 
@@ -140,29 +164,71 @@ def test_check_counts_each_call_and_raises_over_the_limit():
     assert info.value.retry_after_seconds >= 1
 
 
-def test_failure_only_flow_peek_then_record():
-    # 로그인 실패 제한: 확인 전에 ensure_not_limited, 실패했을 때만 record.
+def test_window_rolls_over_with_time():
+    limiter, fake = make_limiter()
+    rule = RateRule("w", 1, 60)
+    limiter.check(rule, "u1")
+    with pytest.raises(ApiError):
+        limiter.check(rule, "u1")
+
+    fake.advance(60)
+
+    limiter.check(rule, "u1")
+
+
+# 로그인 실패 제한: 비밀번호를 확인하기 전에 먼저 세고, 성공하면 되돌린다
+def attempt_login(limiter: RateLimiter, rule: RateRule, subject: str, password_ok: bool) -> str:
+    try:
+        limiter.check(rule, subject)  # 확인 전에 센다
+    except ApiError:
+        return "blocked"
+    if password_ok:
+        limiter.release(rule, subject)
+        return "ok"
+    return "wrong"
+
+
+def test_parallel_failures_cannot_all_reach_the_password_check():
+    # 시도 100개가 모두 비밀번호 확인까지 가면 한도 5는 의미가 없다. 먼저 세므로 5개만 간다.
     limiter, _ = make_limiter()
-    rule = RateRule("login_failure", 2, 900)
+    rule = RateRule("login_failure", 5, 900)
 
-    for _ in range(5):  # 성공한 로그인은 세지 않으므로 몇 번을 해도 막히지 않는다
-        limiter.ensure_not_limited(rule, "email-key")
+    results = [attempt_login(limiter, rule, "victim", password_ok=False) for _ in range(100)]
 
-    limiter.record(rule, "email-key")  # 실패 1
-    limiter.ensure_not_limited(rule, "email-key")
-    limiter.record(rule, "email-key")  # 실패 2 = 한도
-    with pytest.raises(ApiError) as info:  # 다음 시도는 비밀번호를 확인하기 전에 막힌다
-        limiter.ensure_not_limited(rule, "email-key")
-
-    assert info.value.code == "rate_limited"
+    assert results.count("wrong") == 5
+    assert results.count("blocked") == 95
 
 
-def test_record_never_raises_even_over_the_limit():
-    limiter, _ = make_limiter()
-    rule = RateRule("login_failure", 1, 900)
+def test_successful_logins_are_released_and_never_lock_the_account():
+    limiter, fake = make_limiter()
+    rule = RateRule("login_failure", 3, 900)
 
-    for _ in range(3):
-        limiter.record(rule, "email-key")
+    results = [attempt_login(limiter, rule, "alice", password_ok=True) for _ in range(20)]
+
+    assert set(results) == {"ok"}
+    assert fake.hits(f"login_failure:{fake.keyed_hash('alice')}", 900) == 0
+
+
+def test_a_success_gives_back_only_its_own_count():
+    limiter, fake = make_limiter()
+    rule = RateRule("login_failure", 3, 900)
+    key = f"login_failure:{fake.keyed_hash('alice')}"
+
+    attempt_login(limiter, rule, "alice", password_ok=False)
+    attempt_login(limiter, rule, "alice", password_ok=False)
+    attempt_login(limiter, rule, "alice", password_ok=True)  # 세고 바로 되돌리므로 실패 2건은 남는다
+
+    assert fake.hits(key, 900) == 2
+    assert attempt_login(limiter, rule, "alice", password_ok=False) == "wrong"  # 3번째 실패
+    assert attempt_login(limiter, rule, "alice", password_ok=False) == "blocked"
+
+
+def test_release_without_a_counter_is_harmless():
+    limiter, fake = make_limiter()
+
+    limiter.release(RateRule("login_failure", 3, 900), "nobody")
+
+    assert fake.hits(f"login_failure:{fake.keyed_hash('nobody')}", 900) == 0
 
 
 def test_rule_name_and_subject_separate_counters():
@@ -179,17 +245,19 @@ def test_limiter_passes_limit_and_window_to_the_store():
     seen = []
 
     class Store:
-        def hit(self, key, limit, window_seconds, increment=True):
-            seen.append((limit, window_seconds, increment))
+        def hit(self, key, limit, window_seconds):
+            seen.append(("hit", limit, window_seconds))
             return RateResult(allowed=True, retry_after_seconds=7)
+
+        def release(self, key, window_seconds):
+            seen.append(("release", window_seconds))
 
     limiter = RateLimiter(Store(), lambda value: "h")
     rule = RateRule("login_failure", 5, 900)
     limiter.check(rule, "x")
-    limiter.ensure_not_limited(rule, "x")
-    limiter.record(rule, "x")
+    limiter.release(rule, "x")
 
-    assert seen == [(5, 900, True), (5, 900, False), (5, 900, True)]
+    assert seen == [("hit", 5, 900), ("release", 900)]
 
 
 # SupabaseClient / 카운터 저장소가 보내는 요청 모양
@@ -211,18 +279,33 @@ def test_counter_store_calls_rate_limit_hit_rpc():
     result = store.hit("k", 5, 900)
 
     assert seen["url"] == "https://project.supabase.co/rest/v1/rpc/rate_limit_hit"
-    assert seen["body"] == {"p_key": "k", "p_limit": 5, "p_window_seconds": 900, "p_increment": True}
+    assert seen["body"] == {"p_key": "k", "p_limit": 5, "p_window_seconds": 900}
     assert seen["auth"] == "Bearer sb_secret_test"
     assert result == RateResult(allowed=False, retry_after_seconds=12)
 
 
-def test_counter_store_sends_increment_false_for_peek():
+def test_counter_store_calls_rate_limit_release_rpc():
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
         seen["body"] = json.loads(request.content)
-        return httpx.Response(200, json=[{"allowed": True, "retry_after_seconds": 3}])
+        return httpx.Response(200, json=None)
 
-    SupabaseCounterStore(supabase_with(handler)).hit("k", 5, 900, increment=False)
+    SupabaseCounterStore(supabase_with(handler)).release("k", 900)
 
-    assert seen["body"]["p_increment"] is False
+    assert seen["url"] == "https://project.supabase.co/rest/v1/rpc/rate_limit_release"
+    assert seen["body"] == {"p_key": "k", "p_window_seconds": 900}
+
+
+@pytest.mark.parametrize("response", [httpx.Response(204), httpx.Response(200), httpx.Response(200, content=b"null")])
+def test_void_function_responses_are_accepted(response):
+    # 반환값이 없는 SQL 함수의 응답 모양: 204, 빈 200, null
+    assert supabase_with(lambda request: response).rpc("rate_limit_release", {}) is None
+
+
+def test_unexpected_status_for_rpc_is_a_config_error():
+    from app.supabase import SupabaseConfigError
+
+    with pytest.raises(SupabaseConfigError):
+        supabase_with(lambda request: httpx.Response(404, json={})).rpc("rate_limit_release", {})

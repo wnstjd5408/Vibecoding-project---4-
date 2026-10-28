@@ -51,6 +51,13 @@ class CommonMiddleware(BaseHTTPMiddleware):
         else:
             try:
                 response = await call_next(request)
+            except RuntimeError as exc:
+                if str(exc) != "No response returned.":
+                    response = internal_error_response(request, exc)
+                else:
+                    # 클라이언트가 응답을 받기 전에 연결을 끊었다. 서버 오류가 아니므로 ERROR 로그를 남기지 않는다.
+                    request.state.error_code = "client_disconnected"
+                    response = Response(status_code=499)
             except Exception as exc:  # 처리기에 닿기 전에 터진 예외도 같은 500 형식으로 낸다.
                 response = internal_error_response(request, exc)
 

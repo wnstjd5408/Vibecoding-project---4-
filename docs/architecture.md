@@ -83,7 +83,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 - 공개 읽기에 비활성 계정의 세션이 붙어 오면 비로그인으로 취급한다.
 - 세션 쿠키는 `HttpOnly`·`Secure`·`SameSite=Lax`다. 상태를 바꾸는 요청(POST·PUT·PATCH·DELETE)은 `Origin` 헤더가 앱 주소일 때만 받고, 헤더가 없으면 거부한다(CSRF 방어). (제안)
 - GET은 상태를 바꾸거나 AI를 부르지 않는다. 열람 기록과 퀴즈 생성은 POST로만 받는다.
-- 로그인 실패는 계정·IP별로 제한한다. 공개 읽기와 서명 URL 발급에도 사용자(비로그인은 IP)별 분당 상한을 두고, 넘으면 429를 돌려준다. 카운터는 DB 표(`rate_limit_counters`)와 SQL 함수(`rate_limit_hit`)로 센다. 키는 secret key로 서명한 해시라 이메일·IP 원문을 남기지 않고, 클라이언트 IP는 Vercel이 넣는 헤더나 소켓 주소만 믿는다. Vercel Hobby 방화벽은 규칙이 프로젝트당 1개이고 세는 키가 IP·JA4뿐이라 사용자·계정별 제한을 맡지 못한다. (결정, MEG-62; 숫자는 제안, 시험 뒤)
+- 로그인 실패는 계정·IP별로 제한한다. 공개 읽기와 서명 URL 발급에도 사용자(비로그인은 IP)별 분당 상한을 두고, 넘으면 429를 돌려준다. 카운터는 DB 표(`rate_limit_counters`)와 SQL 함수(`rate_limit_hit`)로 센다. 키는 secret key로 서명한 해시라 이메일·IP 원문을 남기지 않고, 클라이언트 IP는 소켓 주소를 쓰되 Vercel 위에서만 Vercel이 넣는 헤더를 믿는다. 로그인 실패 제한은 비밀번호를 확인하기 전에 먼저 세고 성공하면 되돌려(`rate_limit_release`) 동시 시도가 한도를 넘어 검증까지 가지 못하게 한다. Vercel Hobby 방화벽은 규칙이 프로젝트당 1개이고 세는 키가 IP·JA4뿐이라 사용자·계정별 제한을 맡지 못한다. (결정, MEG-62; 숫자는 제안, 시험 뒤)
 - 모든 `/api` 응답에 `Cache-Control: private, no-store`를 붙인다. 같은 주소가 역할에 따라 다른 내용을 주기 때문이다. (결정, 2026-10-23)
 - 신고는 그 용어의 현재 유효한 공유 AI 설명과 자기 퀴즈 문항에만 할 수 있다. 저장하지 않는 1회용 설명은 신고 대상이 아니다.
 - 최초 운영자는 Supabase 대시보드나 SQL로 직접 만든다. 자체 가입은 없다. 마지막 남은 운영자는 회수하거나 일반 사용자로 바꿀 수 없게 한다(회수·역할 변경 엔드포인트를 만들 때 적용). (제안)

@@ -6,6 +6,7 @@
 """
 
 import ipaddress
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -38,28 +39,35 @@ class RateResult:
 
 
 class CounterStore(Protocol):
-    def hit(self, key: str, limit: int, window_seconds: int, increment: bool = True) -> RateResult: ...
+    def hit(self, key: str, limit: int, window_seconds: int) -> RateResult: ...
+
+    def release(self, key: str, window_seconds: int) -> None: ...
 
 
 class SupabaseCounterStore:
     def __init__(self, supabase: SupabaseClient):
         self._supabase = supabase
 
-    def hit(self, key: str, limit: int, window_seconds: int, increment: bool = True) -> RateResult:
+    def hit(self, key: str, limit: int, window_seconds: int) -> RateResult:
         rows = self._supabase.rpc(
-            "rate_limit_hit",
-            {"p_key": key, "p_limit": limit, "p_window_seconds": window_seconds, "p_increment": increment},
+            "rate_limit_hit", {"p_key": key, "p_limit": limit, "p_window_seconds": window_seconds}
         )
         row = rows[0] if isinstance(rows, list) else rows
         return RateResult(allowed=bool(row["allowed"]), retry_after_seconds=max(int(row["retry_after_seconds"]), 1))
 
+    def release(self, key: str, window_seconds: int) -> None:
+        self._supabase.rpc("rate_limit_release", {"p_key": key, "p_window_seconds": window_seconds})
+
 
 def client_ip(request: Request) -> str:
-    """클라이언트 IP. Vercel이 넣는 헤더나 소켓 주소만 믿는다.
+    """클라이언트 IP. 소켓 주소를 쓰고, Vercel 위에서만 Vercel이 넣는 헤더를 믿는다.
 
-    X-Forwarded-For는 클라이언트가 보낸 값이 앞에 붙을 수 있어 쓰지 않는다.
+    X-Forwarded-For는 클라이언트가 보낸 값이 앞에 붙을 수 있어 쓰지 않는다. x-vercel-forwarded-for도
+    Vercel 밖에서는 클라이언트가 위조할 수 있으므로 Vercel 환경(VERCEL 환경변수)에서만 믿는다.
     """
-    candidates = [request.headers.get("x-vercel-forwarded-for", "").split(",")[0].strip()]
+    candidates = []
+    if os.environ.get("VERCEL"):
+        candidates.append(request.headers.get("x-vercel-forwarded-for", "").split(",")[0].strip())
     if request.client:
         candidates.append(request.client.host)
     for value in candidates:
@@ -92,18 +100,15 @@ class RateLimiter:
         if not result.allowed:
             self._raise(result)
 
-    def ensure_not_limited(self, rule: RateRule, subject: str) -> None:
-        """세지 않고 지금 한도에 닿았는지만 본다. 닿았으면 429를 낸다.
+    def release(self, rule: RateRule, subject: str) -> None:
+        """check로 센 한 건을 되돌린다.
 
-        로그인 실패 제한처럼 실패만 세는 경우: 확인 전에 이것을 부르고, 실패했을 때 record를 부른다.
+        로그인 실패 제한: 비밀번호를 확인하기 전에 check로 먼저 세고(동시 요청이 한도를 넘어 검증까지
+        가지 못한다), 로그인에 성공하면 release로 되돌린다. 확인만 하고 실패 뒤에 세는 방식은 동시 요청이
+        모두 확인을 통과해 한도가 무력해지므로 쓰지 않는다. 되돌리는 것은 성공한 계정의 키뿐이다.
+        IP 키까지 되돌리면 자기 계정으로 로그인해 IP 제한을 초기화할 수 있다.
         """
-        result = self._store.hit(self._key(rule, subject), rule.limit, rule.window_seconds, increment=False)
-        if not result.allowed:
-            self._raise(result)
-
-    def record(self, rule: RateRule, subject: str) -> None:
-        """한 건을 세기만 한다. 한도를 넘어도 오류를 내지 않는다(이미 처리한 요청의 사후 기록)."""
-        self._store.hit(self._key(rule, subject), rule.limit, rule.window_seconds)
+        self._store.release(self._key(rule, subject), rule.window_seconds)
 
 
 def get_rate_limiter(supabase: SupabaseClient = Depends(get_supabase)) -> RateLimiter:

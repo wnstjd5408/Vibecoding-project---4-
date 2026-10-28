@@ -232,3 +232,25 @@ def test_overlong_or_odd_field_names_become_body():
     response = post("/api/strict", {"title": "a", "x" * 200: 1})
 
     assert [f["name"] for f in response.json()["error"]["fields"]] == ["body"]
+
+
+# 검증 오류 사유: 빈 값은 required, 더 긴 최소 길이 미달은 out_of_range
+def test_empty_string_with_min_length_one_is_required():
+    response = post("/api/nonempty", {"name": ""})
+
+    assert response.json()["error"]["fields"][0]["reason"] == "required"
+
+
+def test_too_short_for_a_longer_minimum_is_out_of_range_not_required():
+    response = post("/api/min3", {"name": "ab"})
+
+    assert response.json()["error"]["fields"] == [
+        {"name": "name", "reason": "out_of_range", "message": "Value is out of range"}
+    ]
+
+
+def test_hyphenated_header_names_are_reported():
+    response = client.get("/api/header", headers={"idempotency-key": "x"})
+
+    assert response.status_code == 422
+    assert response.json()["error"]["fields"][0]["name"] == "idempotency-key"

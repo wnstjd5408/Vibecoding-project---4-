@@ -4,6 +4,7 @@ import pytest
 from app.supabase import Profile, SupabaseClient, SupabaseConfigError, SupabaseUnavailable
 
 USER_ID = "00000000-0000-0000-0000-00000000000a"
+JWT = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln-_bmFs"  # base64url 세 구간
 
 
 def client_with(handler) -> SupabaseClient:
@@ -20,26 +21,26 @@ def test_auth_user_check_uses_the_session_token_not_the_secret_key_as_bearer():
         seen["apikey"] = request.headers["apikey"]
         return httpx.Response(200, json={"id": USER_ID})
 
-    assert client_with(handler).get_auth_user_id("session-token") == USER_ID
+    assert client_with(handler).get_auth_user_id(JWT) == USER_ID
     assert seen == {
         "url": "https://project.supabase.co/auth/v1/user",
-        "authorization": "Bearer session-token",
+        "authorization": f"Bearer {JWT}",
         "apikey": "sb_secret_test",
     }
 
 
 @pytest.mark.parametrize("status", [400, 401, 403])
 def test_rejected_token_is_no_user(status):
-    assert client_with(lambda r: httpx.Response(status, json={})).get_auth_user_id("t") is None
+    assert client_with(lambda r: httpx.Response(status, json={})).get_auth_user_id(JWT) is None
 
 
 def test_malformed_auth_body_is_no_user():
-    assert client_with(lambda r: httpx.Response(200, json={"id": "not-a-uuid"})).get_auth_user_id("t") is None
+    assert client_with(lambda r: httpx.Response(200, json={"id": "not-a-uuid"})).get_auth_user_id(JWT) is None
 
 
 def test_auth_server_error_is_unavailable():
     with pytest.raises(SupabaseUnavailable):
-        client_with(lambda r: httpx.Response(503)).get_auth_user_id("t")
+        client_with(lambda r: httpx.Response(503)).get_auth_user_id(JWT)
 
 
 def test_network_failure_is_unavailable_without_cause_text():
@@ -47,7 +48,7 @@ def test_network_failure_is_unavailable_without_cause_text():
         raise httpx.ConnectTimeout("connect to secret-host timed out")
 
     with pytest.raises(SupabaseUnavailable) as info:
-        client_with(handler).get_auth_user_id("t")
+        client_with(handler).get_auth_user_id(JWT)
 
     assert "secret-host" not in str(info.value)
 
@@ -88,7 +89,7 @@ def test_from_env_requires_both_variables(monkeypatch):
 # 토큰 모양: 요청을 보내기 전에 걸러 낸다(비ASCII는 헤더를 만들 수 없어 예외가 된다)
 @pytest.mark.parametrize(
     "token",
-    ["éabc", "abc def", "abc\r\nX-Injected: 1", "", "a" * 4097, "토큰", "abc\x00", "abc;def", 'abc"'],
+    ["abc", "a.b", "a.b.c.d", "..", "a..c", "éabc.b.c", "abc def", "abc\r\nX-Injected: 1", "", "a" * 4097, "토큰", "abc\x00", "abc;def", 'abc"'],
 )
 def test_malformed_token_is_no_user_and_sends_no_request(token):
     calls = []
@@ -102,7 +103,7 @@ def test_malformed_token_is_no_user_and_sends_no_request(token):
 
 
 def test_jwt_shaped_token_is_sent():
-    token = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln-_bmFs+/="
+    token = JWT
 
     assert client_with(lambda r: httpx.Response(200, json={"id": USER_ID})).get_auth_user_id(token) == USER_ID
 
@@ -133,7 +134,7 @@ def test_transient_statuses_are_unavailable_for_every_call(status):
     with pytest.raises(SupabaseUnavailable):
         client_with(handler).rpc("rate_limit_hit", {})
     with pytest.raises(SupabaseUnavailable):
-        client_with(handler).get_auth_user_id("tok")
+        client_with(handler).get_auth_user_id(JWT)
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 404])
@@ -161,3 +162,12 @@ def test_keyed_hash_depends_on_the_secret_key():
     other = SupabaseClient("https://project.supabase.co", "another-secret", httpx.Client())
 
     assert client_with(lambda r: httpx.Response(200)).keyed_hash("x") != other.keyed_hash("x")
+
+
+def test_valid_shape_but_oversized_token_is_rejected_without_a_request():
+    calls = []
+    token = "a" * 2000 + "." + "b" * 2000 + "." + "c" * 200  # 각 구간은 상한 안이지만 전체가 4096자를 넘는다
+    client = client_with(lambda r: calls.append(r) or httpx.Response(200, json={"id": USER_ID}))
+
+    assert client.get_auth_user_id(token) is None
+    assert calls == []

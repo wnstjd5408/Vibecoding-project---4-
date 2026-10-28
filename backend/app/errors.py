@@ -126,8 +126,11 @@ def internal_error_response(
 
 def _reason_of(error: dict) -> str:
     kind = error.get("type", "")
-    if kind == "missing" or kind == "string_too_short":
+    if kind == "missing":
         return "required"
+    if kind == "string_too_short":
+        # 1자 이상 조건에서 짧다는 것은 빈 값이다. 그보다 긴 최소 길이는 범위 밖으로 본다(카탈로그에 too_short가 없다).
+        return "required" if (error.get("ctx") or {}).get("min_length", 1) <= 1 else "out_of_range"
     if kind in ("string_too_long", "too_long"):
         return "too_long"
     if kind.startswith(("greater_than", "less_than")):
@@ -139,7 +142,7 @@ def _reason_of(error: dict) -> str:
 
 _LOCATIONS = ("body", "query", "path", "header", "cookie")
 # 스키마에 있는 필드 이름 모양(점으로 중첩). 사용자가 보낸 임의 키가 응답에 되비치지 않게 한다.
-_SAFE_FIELD_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)*")
+_SAFE_FIELD_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*")
 _MAX_FIELD_NAME = 100
 
 

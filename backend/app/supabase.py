@@ -15,9 +15,11 @@ import httpx
 
 _TIMEOUT = httpx.Timeout(5.0, connect=3.0)
 
-# Supabase 액세스 토큰(JWT) 모양. 이 밖의 쿠키 값은 요청을 보내기 전에 무효로 본다.
-# 비ASCII 값은 HTTP 헤더로 만들 수 없어 예외가 되고, 긴 값은 낭비다.
-_TOKEN_SHAPE = re.compile(r"[A-Za-z0-9._~+/=-]{1,4096}")
+# Supabase 액세스 토큰(JWT) 모양: base64url 세 구간을 점으로 이은 것. 이 밖의 쿠키 값은 Auth를 부르기 전에
+# 무효로 본다. 비ASCII 값은 HTTP 헤더로 만들 수 없어 예외가 되고, 쓰레기 값마다 Auth 왕복이 생기는 것도 막는다.
+# 길이 4096은 브라우저 쿠키 크기 한계(약 4KB)와 맞춘 값이다.
+_TOKEN_SHAPE = re.compile(r"[A-Za-z0-9_-]{1,2048}\.[A-Za-z0-9_-]{1,2048}\.[A-Za-z0-9_-]{1,512}")
+_MAX_TOKEN_LENGTH = 4096
 
 # 재시도하면 풀릴 수 있는 응답. 그 밖의 4xx는 키·권한·주소 설정 오류로 본다.
 _TRANSIENT_STATUSES = frozenset({408, 425, 429})
@@ -68,7 +70,7 @@ class SupabaseClient:
 
         Auth 서버가 세션 유무까지 확인하므로 로그아웃·회수로 끊은 세션이 바로 거부된다.
         """
-        if not _TOKEN_SHAPE.fullmatch(access_token):
+        if len(access_token) > _MAX_TOKEN_LENGTH or not _TOKEN_SHAPE.fullmatch(access_token):
             return None
         response = self._request("GET", "/auth/v1/user", headers=self._headers(access_token))
         if response.status_code in (400, 401, 403):
@@ -103,8 +105,11 @@ class SupabaseClient:
 
     def rpc(self, name: str, payload: dict[str, Any]) -> Any:
         response = self._request("POST", f"/rest/v1/rpc/{name}", json=payload, headers=self._headers())
-        if response.status_code != 200:
+        # 반환값이 없는(void) 함수는 PostgREST가 204(본문 없음)나 빈 200으로 응답한다.
+        if response.status_code not in (200, 204):
             raise SupabaseConfigError(f"rpc {name} status {response.status_code}")
+        if response.status_code == 204 or not response.content:
+            return None
         return response.json()
 
 
