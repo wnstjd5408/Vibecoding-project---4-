@@ -90,27 +90,33 @@ aws s3api get-bucket-tagging --bucket $b         # Owner 태그
 
 **1. OIDC 역할 전환 실패 (ap-northeast-1)**
 
-일부러 잘못된 토큰으로 호출한다. 오류가 나는 것이 정상이다.
+형식이 틀린 토큰으로는 시험할 수 없다. 2026-10-26 `--web-identity-token invalid`로 호출하면 `InvalidIdentityToken`("not a valid JWT")이 났지만, 이틀 뒤까지 CloudTrail 기록이 없었고 규칙도 반응하지 않았다. 토큰 형식부터 틀린 요청은 CloudTrail에 남지 않는 것으로 보인다.
 
-```powershell
-aws sts assume-role-with-web-identity --no-sign-request --region ap-northeast-1 --role-arn <Bedrock 역할 ARN> --role-session-name meg99-alert-test --web-identity-token invalid
-```
-
-형식이 틀린 토큰의 실패가 CloudTrail에 남는지는 아직 확인하지 않았다. 메일이 오지 않고 이벤트 기록에도 없으면 만료된 실제 OIDC 토큰으로 다시 시험한다.
+이 규칙은 OIDC 공급자와 역할이 있는 상태에서 실제 토큰이 거부될 때(예: 2026-10-22에 기록된 `AccessDenied`) 반응한다. 지금 계정에는 OIDC 역할이 없어서 이 시험은 역할을 다시 만들 때 한다. 그 전에는 규칙 상태(`ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS`)와 구독 확인, 아래 2번 시험으로 SNS 전달 경로를 확인한다(2026-10-28 결정).
 
 **2. 서비스 전용 자격증명 생성 후 삭제 (us-east-1)**
 
-권한 없는 임시 사용자(owner 접두사와 Owner 태그를 붙인다)에 1일짜리 키를 만들고 바로 지운다. `--query`로 ID만 받아서 키 값은 화면에 나오지 않는다. 그래도 Claude Code의 `!` 대신 별도 터미널에서 실행한다. PowerShell은 명령이 실패해도 다음 줄로 넘어가므로 한 줄씩 실행하고 `실패`가 보이면 멈춘다.
+권한 없는 임시 사용자(owner 접두사와 Owner 태그를 붙인다)에 1일짜리 키를 만들고 바로 지운다. `--query`로 ID만 받아서 키 값은 화면에 나오지 않는다. 그래도 Claude Code의 `!` 대신 별도 PowerShell 창에서 실행한다.
+
+PowerShell은 명령이 실패해도 다음 줄로 넘어가므로 아래 블록은 실패하면 바로 멈춘다. `--tags` 값은 따옴표로 감싼다. 감싸지 않으면 PowerShell이 쉼표를 배열 구분자로 읽어 `ValidationError`가 난다.
 
 ```powershell
-$o = "<owner>"
-$u = "$o-meg99-alert-test"
-aws iam create-user --user-name $u --tags Key=Owner,Value=$o; if ($LASTEXITCODE) { "실패: 사용자 생성" }
-$id = aws iam create-service-specific-credential --user-name $u --service-name bedrock.amazonaws.com --credential-age-days 1 --query ServiceSpecificCredential.ServiceSpecificCredentialId --output text; if ($LASTEXITCODE -or -not $id) { "실패: 키 생성 또는 ID 없음" }
-aws iam delete-service-specific-credential --user-name $u --service-specific-credential-id $id; if ($LASTEXITCODE) { "실패: 키 삭제" }
-aws iam delete-user --user-name $u; if ($LASTEXITCODE) { "실패: 사용자 삭제" }
+$o = "<owner>"; $u = "$o-meg99-alert-test"
+& {
+  aws iam create-user --user-name $u --tags "Key=Owner,Value=$o" | Out-Null
+  if ($LASTEXITCODE) { "실패: 사용자 생성"; return }
+  $id = aws iam create-service-specific-credential --user-name $u --service-name bedrock.amazonaws.com --credential-age-days 1 --query ServiceSpecificCredential.ServiceSpecificCredentialId --output text
+  if ($LASTEXITCODE -or -not $id) { "실패: 키 생성 — 사용자만 지움"; aws iam delete-user --user-name $u; return }
+  aws iam delete-service-specific-credential --user-name $u --service-specific-credential-id $id
+  if ($LASTEXITCODE) { "실패: 키 삭제 — 아래 명령으로 정리"; return }
+  aws iam delete-user --user-name $u
+  if ($LASTEXITCODE) { "실패: 사용자 삭제 — 아래 명령으로 정리"; return }
+  "정리 완료"
+}
 aws iam get-user --user-name $u   # NoSuchEntity 오류가 나야 정리된 것이다
 ```
+
+이 규칙은 키 생성이 실패한 시도(예: 없는 사용자)에도 알림을 보낸다.
 
 중간에 실패했으면 아래로 남은 키를 찾아 지운 뒤 사용자를 지운다.
 
