@@ -7,6 +7,8 @@ app = FastAPI(title="Vibecoding project 4 API")
 install_common_layer(app)
 
 
-@app.get("/health")
+@app.get("/health", include_in_schema=False)
+@app.get("/api/health", summary="API server liveness")
 def health() -> dict[str, str]:
+    """API 서버 응답만 확인한다. DB·Auth·AI 연결을 검사하지 않는다."""
     return {"status": "ok"}

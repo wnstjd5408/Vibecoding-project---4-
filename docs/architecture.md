@@ -177,6 +177,9 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 ## 7. 배포 · 복구 원칙
 
 - **배포 대상:** Vercel 한 프로젝트에 React 화면과 FastAPI(`/api` 함수)를 함께 둔다. 함수 지역은 도쿄(hnd1)다. 비밀값은 Vercel 환경변수에 둔다. (결정, D-033)
+- **배포 구성:** 루트 `vercel.json`의 Services(Beta)로 `frontend/`(Vite)와 `backend/`(FastAPI, `app.main:app`)를 함께 빌드한다. `/api` 요청은 경로를 보존해 백엔드로 보내고 나머지는 프론트로 보낸다. 프론트의 깊은 경로는 `index.html`로 연결한다. 프로젝트 생성·미리보기 검증은 MEG-111에서 추적한다.
+- **헬스체크:** 인증 없이 `GET /api/health`가 `200 {"status":"ok"}`와 `Cache-Control: private, no-store`를 반환한다. API 서버 응답 여부만 확인하며 DB·Auth·AI를 호출하거나 연결 상태를 보장하지 않는다. 이 경로는 해당 서비스의 비밀값 없이 동작한다. 기존 `/health`는 호환용이며 새 호출은 `/api/health`를 쓴다. 로컬 Vite 프록시도 경로를 바꾸지 않는다. (결정, MEG-112)
+- **연결 확인 화면:** `/dev/foundation`에서 실제 백엔드 응답을 확인한다(`VITE_API_MOCK` 미설정 또는 `false`). 가짜 응답 모드의 `ok`는 서버 연결 증거가 아니다. 미구현 제품 API의 오류는 헬스체크 결과와 별개다.
 - **무료 한도:** 넘으면 해당 기능이 멈출 수 있다. 운영자가 주기적으로 사용량을 확인하고 공개 읽기에도 IP별 상한을 둔다. (제안)
 - **배포 전 검증:** CI에서 통합 테스트를 통과해야 배포한다. 비밀값은 `main` 전용 환경에 두고 PR 브랜치에서는 접근하지 못하게 한다. (결정)
 - **버킷 설정 대조:** 버킷의 공개 여부·파일 크기 제한·허용 형식은 마이그레이션 SQL로 만든다. 배포 전에 운영자가 원격 설정을 읽기 전용으로 조회해 마이그레이션과 대조한다. AI는 원격 Supabase에 쓰지 않는다. (제안)
@@ -214,10 +217,10 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 | `BEDROCK_REGION` | Bedrock 호출 리전 | 비우면 `ap-northeast-1` | 백엔드(선택) |
 | `BEDROCK_MODEL_ID` | 호출할 모델 ID. 응답에 내보내지 않는다(5절) | 비우면 `global.openai.gpt-6-luna` | 백엔드(선택) |
 | `ALLOWED_ORIGINS` | 상태를 바꾸는 요청(POST·PUT·PATCH·DELETE)의 `Origin`으로 받을 출처 목록(쉼표로 구분, `scheme://host[:port]`만). CORS 허용 출처도 같은 값이다 | 비우면 `http://localhost:5173`. `*`·경로가 든 값은 시작할 때 거부한다. 운영(`VERCEL_ENV=production`)에서 비우면 앱이 시작하지 않는다 | 백엔드(로컬·Vercel) |
-| `VITE_API_BASE_URL` | 화면이 부를 API 주소 | 비우면 `http://localhost:8000`. `VITE_` 값은 브라우저에 노출되므로 비밀값을 넣지 않는다 | 프런트엔드 |
+| `VITE_API_MOCK` | 가짜 응답과 실제 API 전환 | `true`일 때만 가짜 응답. 나머지는 같은 출처의 `/api`로 요청한다. `VITE_` 값에는 비밀값을 넣지 않는다 | 프런트엔드(빌드 시) |
 
 - 가져오기 스크립트가 DB·버킷에 쓸 때 쓰는 가져오기 전용 secret key의 변수 이름은 아직 없다. 가져오기 구현(MEG-85)에서 정한다. (미정, D-070)
-- 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정), `backend/app/config.py`(허용 출처), `backend/app/supabase.py`(Supabase 주소·secret key)와 프런트엔드 API 주소다. Notion 변수는 가져오기 구현 때 읽는다.
+- 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정), `backend/app/config.py`(허용 출처), `backend/app/supabase.py`(Supabase 주소·secret key), `frontend/src/api/source.ts`(가짜/실제 전환)다. `VITE_API_BASE_URL`은 사용하지 않는다. Notion 변수는 가져오기 구현 때 읽는다.
 
 ## 9. 아직 정하지 않은 것
 
