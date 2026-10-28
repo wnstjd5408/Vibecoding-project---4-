@@ -13,7 +13,10 @@ const userLinks: NavLink[] = [
 
 const operatorLinks: NavLink[] = [{ to: operatorPaths.home, label: 'F5-1a 운영자 노트 목록' }]
 
-const devLinks: NavLink[] = [{ to: devPaths.foundationDemo, label: '공통 기반 샘플' }]
+const devLinks: NavLink[] = [
+  { to: devPaths.foundationDemo, label: '공통 기반 샘플' },
+  { to: devPaths.mockup, label: '목업 v0.2 전체 화면' },
+]
 
 function LinkGroup({ title, links }: { title: string; links: NavLink[] }) {
   return (
