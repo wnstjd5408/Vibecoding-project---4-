@@ -56,6 +56,7 @@ AI 에이전트(Codex, Claude 등)가 이 저장소에서 작업할 때 따르�
 | M·L 작업 착수, 실험용 구현, 사용자 흐름·PRD·실험 문서 작성 | [docs/harness/spec-flow.md](docs/harness/spec-flow.md) |
 | 이슈를 In Review·Done으로 옮길 때, 조사·실험·릴리스 티켓, 배포가 AC에 있을 때 | [docs/harness/completion.md](docs/harness/completion.md) |
 | 이슈 착수·해제, 동시 작업 충돌, 계정·bypass, CI 구성, 실패→수정 시험 | [docs/harness/ops.md](docs/harness/ops.md) |
+| 시스템 구조·외부 연결·환경변수·권한·AI 호출 규칙을 확인하거나 바꿀 때 | [docs/architecture.md](docs/architecture.md) |
 
 ## 하네스 변경
 - 이 파일과 `docs/harness/`는 첫 제품 흐름(사용자 흐름 작성부터 첫 검증까지)을 끝낼 때까지 바꾸지 않는다. 보안 문제나 작업이 불가능한 충돌만 사람 승인으로 예외 처리한다.
