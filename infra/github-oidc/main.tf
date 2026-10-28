@@ -62,15 +62,17 @@ data "aws_iam_policy_document" "trust" {
   }
 }
 
+# IAM 역할의 description은 한글을 받지 않는다(ASCII와 Latin-1만). 한글을 쓰면 plan·validate는
+# 통과하고 apply의 CreateRole에서 ValidationError가 난다.
 resource "aws_iam_role" "plan" {
   name               = local.plan_role_name
-  description        = "infra/ plan용 읽기 전용 역할(GitHub Actions ${var.plan_environment})"
+  description        = "Read-only plan role for infra/ (GitHub Actions environment ${var.plan_environment})"
   assume_role_policy = data.aws_iam_policy_document.trust["plan"].json
 }
 
 resource "aws_iam_role" "apply" {
   name               = local.apply_role_name
-  description        = "infra/ apply용 역할(GitHub Actions ${var.apply_environment}, 필수 승인자)"
+  description        = "Apply role for infra/ (GitHub Actions environment ${var.apply_environment}, required reviewers)"
   assume_role_policy = data.aws_iam_policy_document.trust["apply"].json
 }
 

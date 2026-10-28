@@ -169,8 +169,8 @@ aws iam list-service-specific-credentials --user-name $u --query "ServiceSpecifi
    ```powershell
    cd infra\github-oidc
    Copy-Item terraform.tfvars.example terraform.tfvars   # 값을 채운다
-   terraform init -backend-config=..\backend.hcl
-   terraform plan -out=plan.tfplan
+   terraform init "-backend-config=../backend.hcl"
+   terraform plan "-out=plan.tfplan"
    terraform apply plan.tfplan
    Remove-Item plan.tfplan
    terraform output
@@ -228,6 +228,7 @@ aws iam list-service-specific-credentials --user-name $u --query "ServiceSpecifi
 - plan 파일에는 변수 값이 평문으로 들어 있다. 파일은 비공개·암호화된 상태 버킷에만 있고 하루 안에 지워진다. 그동안은 상태 버킷을 읽을 수 있는 사람이 볼 수 있다. plan 역할은 `plans/`에 쓰기만 하고 읽지 못한다. apply 역할만 읽는다.
 - Environment 비밀값은 저장소 관리자가 덮어쓸 수 있다. 비밀값을 바꾼 이력은 GitHub 감사 기록에 남는다.
 - OIDC 역할 전환이 거부되면 `infra/alerts.tf`의 STS 알림 규칙이 반응한다. 워크플로는 이 규칙이 보는 리전(`ap-northeast-1`)으로 역할을 요청한다.
+- IAM 역할의 `description`에는 한글을 쓰지 못한다(ASCII·Latin-1만). 한글이 있으면 `plan`·`validate`는 통과하고 `apply`의 `CreateRole`에서 `ValidationError`가 난다(2026-10-28 MEG-100 첫 `apply`에서 겪음). 중간에 실패한 `apply`는 이미 만든 리소스(OIDC 공급자)를 상태에 남기므로 코드를 고친 뒤 `plan`을 다시 만들어 적용한다.
 
 ## 정리(삭제) 방법
 
