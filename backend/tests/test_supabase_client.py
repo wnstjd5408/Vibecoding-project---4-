@@ -4,7 +4,8 @@ import pytest
 from app.supabase import Profile, SupabaseClient, SupabaseConfigError, SupabaseUnavailable
 
 USER_ID = "00000000-0000-0000-0000-00000000000a"
-JWT = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln-_bmFs"  # base64url 세 구간
+# 구조만 맞춘 가짜 값(base64url 세 구간). 실제 JWT처럼 보이는 값은 비밀 검사기가 오탐하므로 쓰지 않는다.
+JWT = "header-part.payload-part.signature_part"
 
 
 def client_with(handler) -> SupabaseClient:
