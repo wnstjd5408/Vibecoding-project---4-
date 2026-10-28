@@ -11,9 +11,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      // TODO(MEG-105): 백엔드가 /api/health를 갖게 되면 이 항목을 지운다. 지금 백엔드에는 /health만 있다.
-      '^/api/health$': { target: API_TARGET, rewrite: () => '/health' },
-      // 나머지 /api/*는 그대로 넘긴다. 엔드포인트 라우터는 prefix="/api"로 붙기 때문이다.
+      // 헬스체크를 포함한 /api/*를 경로 변경 없이 넘긴다.
       '/api': { target: API_TARGET },
     },
   },
