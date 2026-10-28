@@ -2,7 +2,6 @@
 // 쿠키 세션을 쓰므로 요청에 쿠키를 싣는다(credentials: 'include').
 import { handleMock } from './mocks/handlers.ts'
 import { getApiSource } from './source.ts'
-import type { ApiSource } from './source.ts'
 import type { ApiErrorBody, FieldError } from './types.ts'
 
 // 서버 응답이 아니라 클라이언트가 만든 code다. 서버 code(login_required 등)와 겹치지 않는다.
@@ -47,8 +46,6 @@ export type ApiRequestInit = {
   query?: Record<string, string | number | undefined>
   // Idempotency-Key 같은 추가 헤더
   headers?: Record<string, string>
-  // 지정하지 않으면 getApiSource()를 따른다. 한 호출만 가짜 응답이나 실제 백엔드로 보낼 때 쓴다.
-  source?: ApiSource
   signal?: AbortSignal
 }
 
@@ -107,10 +104,10 @@ function isErrorBody(body: unknown): body is ApiErrorBody {
 }
 
 // path는 '/api/me'처럼 spec의 경로를 그대로 쓴다. 성공하면 본문을 돌려주고(204는 undefined), 실패하면 ApiError를 던진다.
+// 응답을 가짜로 받을지 실제 백엔드에서 받을지는 호출하는 쪽이 아니라 환경변수 VITE_API_MOCK 한 곳이 정한다(api/source.ts).
 export async function apiFetch<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
   const url = buildUrl(path, init.query)
-  const source = init.source ?? getApiSource()
-  const { status, body } = source === 'mock' ? mockTransport(url, init) : await realTransport(url, init)
+  const { status, body } = getApiSource() === 'mock' ? mockTransport(url, init) : await realTransport(url, init)
 
   if (status >= 200 && status < 300) return body as T
   if (isErrorBody(body)) throw new ApiError(status, body.error)
