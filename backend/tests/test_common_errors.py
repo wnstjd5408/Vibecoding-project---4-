@@ -157,3 +157,78 @@ def test_supabase_outage_is_503():
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "service_unavailable"
+
+
+# 라우터·엔드포인트가 던진 HTTPException은 카탈로그 응답으로 바뀐다
+@pytest.mark.parametrize(
+    ("status", "code", "detail", "expected_status"),
+    [
+        (400, "bad_request", "malformed_json", 400),
+        (401, "login_required", None, 401),
+        (403, "forbidden", None, 403),
+        (404, "not_found", None, 404),
+        (405, "not_found", None, 404),
+        (413, "payload_too_large", None, 413),
+        (415, "unsupported_media_type", None, 415),
+        (422, "validation_failed", None, 422),
+        (429, "rate_limited", None, 429),
+    ],
+)
+def test_http_exceptions_map_to_catalog_errors(status, code, detail, expected_status):
+    response = client.get(f"/api/http/{status}")
+
+    assert response.status_code == expected_status
+    error = response.json()["error"]
+    assert (error["code"], error.get("detail")) == (code, detail)
+    assert error["message"] == CATALOG[(code, detail)][1]
+    assert "internal wording" not in response.text
+
+
+def test_unmapped_client_error_is_500_logged_as_warning(caplog):
+    with caplog.at_level("WARNING", logger="app.error"):
+        response = client.get("/api/http/418")
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "internal_error"
+    assert [r.levelname for r in caplog.records if r.name == "app.error"] == ["WARNING"]
+
+
+def test_server_side_http_exception_is_logged_as_error(caplog):
+    with caplog.at_level("WARNING", logger="app.error"):
+        response = client.get("/api/http/501")
+
+    assert response.status_code == 500
+    assert [r.levelname for r in caplog.records if r.name == "app.error"] == ["ERROR"]
+
+
+# 422 필드 이름: 스키마의 이름만 쓰고 사용자가 보낸 키는 되돌려 주지 않는다
+def post(path, body):
+    return client.post(path, headers=origin(), json=body)
+
+
+def test_unknown_key_name_is_not_echoed():
+    response = post("/api/strict", {"title": "a", "<script>secretkey": 1})
+
+    assert response.status_code == 422
+    assert response.json()["error"]["fields"] == [
+        {"name": "body", "reason": "invalid_format", "message": "Value format is invalid"}
+    ]
+    assert "secretkey" not in response.text
+
+
+def test_field_named_like_a_location_keeps_its_name():
+    response = post("/api/pathitem", {"path": 1})
+
+    assert [f["name"] for f in response.json()["error"]["fields"]] == ["path"]
+
+
+def test_nested_field_name_keeps_the_whole_path():
+    response = post("/api/parent", {"items": [{"path": 1}]})
+
+    assert [f["name"] for f in response.json()["error"]["fields"]] == ["items.0.path"]
+
+
+def test_overlong_or_odd_field_names_become_body():
+    response = post("/api/strict", {"title": "a", "x" * 200: 1})
+
+    assert [f["name"] for f in response.json()["error"]["fields"]] == ["body"]

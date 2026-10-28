@@ -5,7 +5,8 @@
 엔드포인트는 한도 값(RateRule)과 대상만 넘긴다.
 """
 
-import hashlib
+import ipaddress
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -37,48 +38,76 @@ class RateResult:
 
 
 class CounterStore(Protocol):
-    def hit(self, key: str, limit: int, window_seconds: int) -> RateResult: ...
+    def hit(self, key: str, limit: int, window_seconds: int, increment: bool = True) -> RateResult: ...
 
 
 class SupabaseCounterStore:
     def __init__(self, supabase: SupabaseClient):
         self._supabase = supabase
 
-    def hit(self, key: str, limit: int, window_seconds: int) -> RateResult:
+    def hit(self, key: str, limit: int, window_seconds: int, increment: bool = True) -> RateResult:
         rows = self._supabase.rpc(
-            "rate_limit_hit", {"p_key": key, "p_limit": limit, "p_window_seconds": window_seconds}
+            "rate_limit_hit",
+            {"p_key": key, "p_limit": limit, "p_window_seconds": window_seconds, "p_increment": increment},
         )
         row = rows[0] if isinstance(rows, list) else rows
         return RateResult(allowed=bool(row["allowed"]), retry_after_seconds=max(int(row["retry_after_seconds"]), 1))
 
 
-def counter_key(rule: RateRule, subject: str) -> str:
-    """저장하는 키. 이메일·IP·사용자 id 원문은 DB와 로그에 남기지 않고 해시만 쓴다."""
-    return f"{rule.name}:{hashlib.sha256(subject.encode()).hexdigest()[:32]}"
-
-
 def client_ip(request: Request) -> str:
-    # Vercel이 넣는 클라이언트 IP 헤더를 먼저 본다.
-    for header in ("x-vercel-forwarded-for", "x-forwarded-for"):
-        value = request.headers.get(header)
-        if value:
-            return value.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """클라이언트 IP. Vercel이 넣는 헤더나 소켓 주소만 믿는다.
+
+    X-Forwarded-For는 클라이언트가 보낸 값이 앞에 붙을 수 있어 쓰지 않는다.
+    """
+    candidates = [request.headers.get("x-vercel-forwarded-for", "").split(",")[0].strip()]
+    if request.client:
+        candidates.append(request.client.host)
+    for value in candidates:
+        try:
+            return str(ipaddress.ip_address(value))
+        except ValueError:
+            continue
+    return "unknown"
 
 
 class RateLimiter:
-    def __init__(self, store: CounterStore):
+    """키는 hasher로 해시해 저장한다. 이메일·IP·사용자 id 원문은 DB와 로그에 남기지 않는다.
+
+    호출 쪽은 이메일을 소문자·공백 정리한 뒤 넘긴다(같은 계정이 다른 키로 세어지지 않게).
+    """
+
+    def __init__(self, store: CounterStore, hasher: Callable[[str], str]):
         self._store = store
+        self._hasher = hasher
+
+    def _key(self, rule: RateRule, subject: str) -> str:
+        return f"{rule.name}:{self._hasher(subject)}"
+
+    def _raise(self, result: RateResult) -> None:
+        raise ApiError("rate_limited", retry_after_seconds=result.retry_after_seconds, stage="rate_limit")
 
     def check(self, rule: RateRule, subject: str) -> None:
-        """한도를 넘으면 429 rate_limited를 낸다. 카운터가 한 번 올라간다."""
-        result = self._store.hit(counter_key(rule, subject), rule.limit, rule.window_seconds)
+        """요청 한 건을 세고, 한도를 넘으면 429 rate_limited를 낸다."""
+        result = self._store.hit(self._key(rule, subject), rule.limit, rule.window_seconds)
         if not result.allowed:
-            raise ApiError("rate_limited", retry_after_seconds=result.retry_after_seconds, stage="rate_limit")
+            self._raise(result)
+
+    def ensure_not_limited(self, rule: RateRule, subject: str) -> None:
+        """세지 않고 지금 한도에 닿았는지만 본다. 닿았으면 429를 낸다.
+
+        로그인 실패 제한처럼 실패만 세는 경우: 확인 전에 이것을 부르고, 실패했을 때 record를 부른다.
+        """
+        result = self._store.hit(self._key(rule, subject), rule.limit, rule.window_seconds, increment=False)
+        if not result.allowed:
+            self._raise(result)
+
+    def record(self, rule: RateRule, subject: str) -> None:
+        """한 건을 세기만 한다. 한도를 넘어도 오류를 내지 않는다(이미 처리한 요청의 사후 기록)."""
+        self._store.hit(self._key(rule, subject), rule.limit, rule.window_seconds)
 
 
 def get_rate_limiter(supabase: SupabaseClient = Depends(get_supabase)) -> RateLimiter:
-    return RateLimiter(SupabaseCounterStore(supabase))
+    return RateLimiter(SupabaseCounterStore(supabase), supabase.keyed_hash)
 
 
 def rate_limited(rule: RateRule):

@@ -123,3 +123,47 @@ def test_cors_allows_credentials_only_for_allowed_origin():
     assert allowed.headers["access-control-allow-origin"] == ALLOWED_ORIGIN
     assert allowed.headers["access-control-allow-credentials"] == "true"
     assert "access-control-allow-origin" not in other.headers
+
+
+def test_unusual_methods_without_origin_are_rejected_too():
+    # 상태 변경 메서드를 목록으로 열거하지 않고 GET·HEAD·OPTIONS 밖은 전부 검사한다.
+    for method in ("PROPFIND", "MKCOL", "TRACE"):
+        assert_origin_rejected(client.request(method, "/api/write"))
+
+
+def test_head_does_not_need_origin():
+    assert client.head("/api/write").status_code != 403
+
+
+def test_origin_list_is_fixed_when_the_app_is_built(monkeypatch):
+    # CORS와 Origin 검사가 같은 목록을 쓴다. 뒤늦게 환경변수가 바뀌어도 둘이 어긋나지 않는다.
+    app_client = TestClient(build_app(FakeSupabase()))
+    monkeypatch.setenv("ALLOWED_ORIGINS", "https://late.example.com")
+
+    assert app_client.post("/api/write", headers=origin()).status_code == 200
+    assert_origin_rejected(app_client.post("/api/write", headers=origin("https://late.example.com")))
+
+
+def test_access_log_is_emitted_with_route_template(caplog):
+    with caplog.at_level("INFO", logger="app.access"):
+        response = client.get("/api/ping")
+
+    lines = [r.getMessage() for r in caplog.records if r.name == "app.access"]
+    assert len(lines) == 1
+    assert f"request_id={response.headers['X-Request-Id']}" in lines[0]
+    assert "path=/api/ping" in lines[0] and "status=200" in lines[0]
+
+
+def test_access_log_has_codes_and_no_origin_value(caplog):
+    with caplog.at_level("INFO", logger="app.access"):
+        client.post("/api/write", headers=origin("https://evil.example"))
+
+    line = next(r.getMessage() for r in caplog.records if r.name == "app.access")
+    assert "code=origin_not_allowed" in line and "stage=origin" in line
+    assert "evil.example" not in line
+
+
+def test_info_logging_is_enabled_by_the_common_layer():
+    import logging
+
+    assert logging.getLogger("app.access").isEnabledFor(logging.INFO)

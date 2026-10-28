@@ -3,7 +3,10 @@
 이 파일이 하는 일은 세 가지다: 세션 토큰 확인(Auth), profiles 조회(REST), SQL 함수 호출(RPC).
 """
 
+import hashlib
+import hmac
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -11,6 +14,13 @@ from typing import Any
 import httpx
 
 _TIMEOUT = httpx.Timeout(5.0, connect=3.0)
+
+# Supabase 액세스 토큰(JWT) 모양. 이 밖의 쿠키 값은 요청을 보내기 전에 무효로 본다.
+# 비ASCII 값은 HTTP 헤더로 만들 수 없어 예외가 되고, 긴 값은 낭비다.
+_TOKEN_SHAPE = re.compile(r"[A-Za-z0-9._~+/=-]{1,4096}")
+
+# 재시도하면 풀릴 수 있는 응답. 그 밖의 4xx는 키·권한·주소 설정 오류로 본다.
+_TRANSIENT_STATUSES = frozenset({408, 425, 429})
 
 
 class SupabaseUnavailable(Exception):
@@ -49,7 +59,7 @@ class SupabaseClient:
             response = self._http.request(method, f"{self._url}{path}", **kwargs)
         except httpx.HTTPError as exc:
             raise SupabaseUnavailable(type(exc).__name__) from None
-        if response.status_code >= 500:
+        if response.status_code >= 500 or response.status_code in _TRANSIENT_STATUSES:
             raise SupabaseUnavailable(f"status {response.status_code}")
         return response
 
@@ -58,6 +68,8 @@ class SupabaseClient:
 
         Auth 서버가 세션 유무까지 확인하므로 로그아웃·회수로 끊은 세션이 바로 거부된다.
         """
+        if not _TOKEN_SHAPE.fullmatch(access_token):
+            return None
         response = self._request("GET", "/auth/v1/user", headers=self._headers(access_token))
         if response.status_code in (400, 401, 403):
             return None
@@ -84,6 +96,10 @@ class SupabaseClient:
         if not rows:
             return None
         return Profile(role=rows[0]["role"], is_active=bool(rows[0]["is_active"]))
+
+    def keyed_hash(self, value: str) -> str:
+        """이메일·IP 같은 원문 대신 저장할 키. secret key로 서명한 해시라 값을 되돌려 추측하기 어렵다."""
+        return hmac.new(self._secret_key.encode(), value.encode(), hashlib.sha256).hexdigest()[:32]
 
     def rpc(self, name: str, payload: dict[str, Any]) -> Any:
         response = self._request("POST", f"/rest/v1/rpc/{name}", json=payload, headers=self._headers())

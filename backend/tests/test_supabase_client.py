@@ -83,3 +83,81 @@ def test_from_env_requires_both_variables(monkeypatch):
 
     with pytest.raises(SupabaseConfigError):
         SupabaseClient.from_env()
+
+
+# 토큰 모양: 요청을 보내기 전에 걸러 낸다(비ASCII는 헤더를 만들 수 없어 예외가 된다)
+@pytest.mark.parametrize(
+    "token",
+    ["éabc", "abc def", "abc\r\nX-Injected: 1", "", "a" * 4097, "토큰", "abc\x00", "abc;def", 'abc"'],
+)
+def test_malformed_token_is_no_user_and_sends_no_request(token):
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"id": USER_ID})
+
+    assert client_with(handler).get_auth_user_id(token) is None
+    assert calls == []
+
+
+def test_jwt_shaped_token_is_sent():
+    token = "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln-_bmFs+/="
+
+    assert client_with(lambda r: httpx.Response(200, json={"id": USER_ID})).get_auth_user_id(token) == USER_ID
+
+
+def test_non_ascii_cookie_through_the_real_client_is_anonymous_not_a_500():
+    from starlette.requests import Request
+
+    from app.auth import get_session_user
+
+    calls = []
+    real = client_with(lambda r: calls.append(r) or httpx.Response(401))
+    request = Request(
+        {"type": "http", "method": "GET", "path": "/api/ping", "query_string": b"",
+         "headers": [(b"cookie", b"cs_session=\xe9abc")]}
+    )
+
+    assert get_session_user(request, real) is None
+    assert calls == []
+
+
+# 재시도하면 풀릴 수 있는 응답은 503, 설정 오류는 500
+@pytest.mark.parametrize("status", [408, 425, 429, 500, 502, 503, 504])
+def test_transient_statuses_are_unavailable_for_every_call(status):
+    handler = lambda r: httpx.Response(status, json={})  # noqa: E731
+
+    with pytest.raises(SupabaseUnavailable):
+        client_with(handler).get_profile(USER_ID)
+    with pytest.raises(SupabaseUnavailable):
+        client_with(handler).rpc("rate_limit_hit", {})
+    with pytest.raises(SupabaseUnavailable):
+        client_with(handler).get_auth_user_id("tok")
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404])
+def test_other_client_errors_on_data_calls_are_config_errors(status):
+    handler = lambda r: httpx.Response(status, json={})  # noqa: E731
+
+    with pytest.raises(SupabaseConfigError):
+        client_with(handler).get_profile(USER_ID)
+    with pytest.raises(SupabaseConfigError):
+        client_with(handler).rpc("rate_limit_hit", {})
+
+
+# 저장 키 해시: secret key로 서명한 HMAC
+def test_keyed_hash_is_stable_and_hides_the_input():
+    client = client_with(lambda r: httpx.Response(200, json=[]))
+
+    one = client.keyed_hash("203.0.113.1")
+
+    assert one == client.keyed_hash("203.0.113.1")
+    assert one != client.keyed_hash("203.0.113.2")
+    assert "203.0.113.1" not in one and len(one) == 32
+
+
+def test_keyed_hash_depends_on_the_secret_key():
+    other = SupabaseClient("https://project.supabase.co", "another-secret", httpx.Client())
+
+    assert client_with(lambda r: httpx.Response(200)).keyed_hash("x") != other.keyed_hash("x")

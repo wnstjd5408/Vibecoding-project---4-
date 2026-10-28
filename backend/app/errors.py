@@ -5,6 +5,7 @@
 
 import logging
 import os
+import re
 import traceback
 import uuid
 
@@ -114,10 +115,12 @@ def _failure_site(exc: BaseException) -> str:
     return f"{type(exc).__name__} at {os.path.basename(last.filename)}:{last.lineno}"
 
 
-def internal_error_response(request: Request, exc: BaseException) -> JSONResponse:
+def internal_error_response(
+    request: Request, exc: BaseException, level: int = logging.ERROR
+) -> JSONResponse:
     request_id = request_id_of(request)
     request.state.error_code = "internal_error"
-    logger.error("request_id=%s stage=internal %s", request_id, _failure_site(exc))
+    logger.log(level, "request_id=%s stage=internal %s", request_id, _failure_site(exc))
     return build_error_response(request_id, "internal_error")
 
 
@@ -134,9 +137,23 @@ def _reason_of(error: dict) -> str:
     return "invalid_format"
 
 
+_LOCATIONS = ("body", "query", "path", "header", "cookie")
+# 스키마에 있는 필드 이름 모양(점으로 중첩). 사용자가 보낸 임의 키가 응답에 되비치지 않게 한다.
+_SAFE_FIELD_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)*")
+_MAX_FIELD_NAME = 100
+
+
 def _field_name(error: dict) -> str:
-    loc = [str(part) for part in error.get("loc", ()) if part not in ("body", "query", "path", "header")]
-    return ".".join(loc) or "body"
+    loc = [str(part) for part in error.get("loc", ())]
+    if loc and loc[0] in _LOCATIONS:
+        loc = loc[1:]
+    # 모델에 없는 키(extra_forbidden)의 이름은 사용자가 정한 값이라 쓰지 않는다.
+    if error.get("type") == "extra_forbidden" and loc:
+        loc = loc[:-1]
+    name = ".".join(loc)
+    if not name or len(name) > _MAX_FIELD_NAME or not _SAFE_FIELD_NAME.fullmatch(name):
+        return "body"
+    return name
 
 
 async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
@@ -165,8 +182,25 @@ async def handle_validation_error(request: Request, exc: RequestValidationError)
     return await handle_api_error(request, ApiError("validation_failed", fields=fields, stage="validate"))
 
 
+# 라우터·Starlette·엔드포인트가 던지는 HTTPException을 카탈로그의 응답으로 바꾼다.
+# 405는 404 not_found로 맞춘다(카탈로그에 405가 없고 대상 유무를 구분해 알리지 않는다).
+_HTTP_STATUS_TO_ERROR: dict[int, tuple[str, str | None]] = {
+    400: ("bad_request", "malformed_json"),
+    401: ("login_required", None),
+    403: ("forbidden", None),
+    404: ("not_found", None),
+    405: ("not_found", None),
+    413: ("payload_too_large", None),
+    415: ("unsupported_media_type", None),
+    422: ("validation_failed", None),
+    429: ("rate_limited", None),
+}
+
+
 async def handle_http_exception(request: Request, exc: StarletteHTTPException) -> JSONResponse:
-    # 라우터가 만드는 404·405는 같은 not_found로 맞춘다. 대상 유무를 구분해 알리지 않는다.
-    if exc.status_code in (404, 405):
-        return await handle_api_error(request, ApiError("not_found"))
-    return internal_error_response(request, exc)
+    mapped = _HTTP_STATUS_TO_ERROR.get(exc.status_code)
+    if mapped is not None:
+        return await handle_api_error(request, ApiError(*mapped))
+    # 카탈로그에 대응이 없는 상태는 500으로 내되 서버 실패가 아니라 경고로 남긴다.
+    level = logging.WARNING if 400 <= exc.status_code < 500 else logging.ERROR
+    return internal_error_response(request, exc, level)

@@ -1,10 +1,12 @@
 """공통 계층 시험용 앱과 가짜 Supabase. 네트워크·DB 없이 돈다."""
 
+import hashlib
 import time
 from dataclasses import dataclass, field
 
 from fastapi import Depends, FastAPI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.auth import SessionUser, get_session_user, require_login, require_operator
 from app.common import install_common_layer
@@ -40,8 +42,11 @@ class FakeSupabase:
             raise SupabaseUnavailable("down")
         return self.profiles.get(user_id)
 
+    def keyed_hash(self, value: str) -> str:
+        return hashlib.sha256(f"fake-secret:{value}".encode()).hexdigest()[:32]
+
     def rpc(self, name: str, payload: dict):
-        """rate_limit_hit과 같은 고정 창 계산."""
+        """rate_limit_hit과 같은 고정 창 계산(p_increment가 false이면 세지 않고 닿았는지만 본다)."""
         assert name == "rate_limit_hit"
         if self.down:
             raise SupabaseUnavailable("down")
@@ -49,15 +54,37 @@ class FakeSupabase:
         window = int(payload["p_window_seconds"])
         now = time.time()
         start = int(now // window)
-        hits = self._counters.get((payload["p_key"], start), 0) + 1
-        self._counters[(payload["p_key"], start)] = hits
+        counter_key = (payload["p_key"], start)
+        if payload["p_increment"]:
+            hits = self._counters.get(counter_key, 0) + 1
+            self._counters[counter_key] = hits
+            allowed = hits <= payload["p_limit"]
+        else:
+            allowed = self._counters.get(counter_key, 0) < payload["p_limit"]
         retry_after = max(int((start + 1) * window - now) + 1, 1)
-        return [{"allowed": hits <= payload["p_limit"], "retry_after_seconds": retry_after}]
+        return [{"allowed": allowed, "retry_after_seconds": retry_after}]
 
 
 class Item(BaseModel):
     title: str = Field(min_length=1, max_length=5)
     understanding: int = Field(ge=1, le=5)
+
+
+class StrictItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str
+
+
+class PathItem(BaseModel):
+    path: str
+
+
+class Child(BaseModel):
+    path: str
+
+
+class Parent(BaseModel):
+    items: list[Child]
 
 
 def build_app(fake: FakeSupabase) -> FastAPI:
@@ -84,6 +111,22 @@ def build_app(fake: FakeSupabase) -> FastAPI:
     @app.post("/api/items")
     def create_item(item: Item):
         return {"ok": True}
+
+    @app.post("/api/strict")
+    def strict(item: StrictItem):
+        return {"ok": True}
+
+    @app.post("/api/pathitem")
+    def pathitem(item: PathItem):
+        return {"ok": True}
+
+    @app.post("/api/parent")
+    def parent(item: Parent):
+        return {"ok": True}
+
+    @app.get("/api/http/{status}")
+    def http_status(status: int):
+        raise StarletteHTTPException(status, "internal wording must not leak")
 
     @app.get("/api/boom")
     def boom():

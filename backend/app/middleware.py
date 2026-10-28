@@ -10,12 +10,12 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import Response
 
-from app.config import allowed_origins
 from app.errors import ApiError, build_error_response, internal_error_response, new_request_id
 
 logger = logging.getLogger("app.access")
 
-STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# 상태를 바꾸지 않는 메서드. 이 밖의 메서드(POST·PUT·PATCH·DELETE와 낯선 메서드)는 전부 Origin을 검사한다.
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 API_PREFIX = "/api"
 
 
@@ -28,7 +28,8 @@ def origin_allowed(request: Request) -> bool:
     origin = request.headers.get("origin")
     if origin is None:
         return False
-    return origin.strip().rstrip("/").lower() in allowed_origins()
+    # 목록은 앱을 만들 때 한 번 정해 CORS와 같은 값을 쓴다.
+    return origin.strip().rstrip("/").lower() in request.app.state.allowed_origins
 
 
 class CommonMiddleware(BaseHTTPMiddleware):
@@ -38,7 +39,7 @@ class CommonMiddleware(BaseHTTPMiddleware):
         request.state.request_id = new_request_id()
         api = is_api_path(request.url.path)
 
-        if api and request.method in STATE_CHANGING_METHODS and not origin_allowed(request):
+        if api and request.method.upper() not in SAFE_METHODS and not origin_allowed(request):
             # 허용 목록 밖이었다는 사실만 남기고 Origin 값 원문은 남기지 않는다.
             error = ApiError("origin_not_allowed", stage="origin")
             request.state.error_code, request.state.error_detail, request.state.error_stage = (
