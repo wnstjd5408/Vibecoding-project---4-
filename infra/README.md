@@ -180,6 +180,7 @@ aws iam list-service-specific-credentials --user-name $u --query "ServiceSpecifi
    - `infra-plan`: Deployment branches and tags를 **Selected branches and tags**로 하고 `main`만 넣는다.
    - `infra-apply`: 같은 배포 브랜치 규칙에 **Required reviewers**로 승인자를 넣는다. 승인자가 병합한 사람과 같아서 "Prevent self-review"는 끈다. 승인은 여전히 별도 클릭이다.
    - 이 브랜치 규칙이 `main` 밖의 브랜치가 두 역할을 맡지 못하게 하는 장치다. 역할 신뢰 정책은 저장소와 Environment 이름만 보고 브랜치는 보지 않는다.
+   - 신뢰 정책의 `sub`는 이 저장소의 불변 형식(`repo:<owner>@<소유자 ID>/<name>@<저장소 ID>:environment:<이름>`)이다. 이름만 쓴 `repo:<owner>/<name>:environment:…`로는 역할 전환이 거부된다(`Not authorized to perform sts:AssumeRoleWithWebIdentity`). 값은 `gh api repos/<owner>/<name>/actions/oidc/customization/sub`의 `sub_claim_prefix`에서 확인하고, `variables.tf`의 `github_subject_repository`에 있다. 저장소를 다른 소유자로 넘기거나 새로 만들면 ID가 바뀌므로 이 값을 고쳐 다시 적용한다.
 4. **비밀값 넣기:** 저장소 비밀값이 아니라 각 Environment의 Secrets에 넣는다. 저장소 비밀값은 `main` 밖의 브랜치 워크플로도 읽을 수 있다.
 
    | Environment | 이름 | 값 |
