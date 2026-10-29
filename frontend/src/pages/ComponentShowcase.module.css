@@ -179,3 +179,14 @@
   font-size: 14px;
   line-height: 22px;
 }
+
+/* 선택된 글자(SelectionAction이 이 요소 기준으로 아래에 뜬다) */
+.selected {
+  position: relative;
+  display: inline-block;
+  background: var(--highlight);
+  border-radius: var(--radius-sm);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}

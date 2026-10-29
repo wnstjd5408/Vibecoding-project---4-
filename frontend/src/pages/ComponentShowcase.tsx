@@ -3,25 +3,27 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import {
-  AccountIcon,
-  AiBox,
+  AiBadge,
   AppHeader,
-  Badge,
   BottomSheet,
   Button,
-  Card,
-  Chip,
   DifficultyChip,
-  ExpandIcon,
   FavoriteToggle,
-  Field,
-  GlossaryTerm,
-  IconButton,
-  IconLinkButton,
   LinkButton,
   NoteListItem,
+  QuizCard,
   Scrim,
+  SelectionAction,
+  StateMessage,
+  TermLink,
+  TextField,
 } from '../components/index.ts'
+// 디자인 시스템 공식 목록에는 없어 index.ts에서 내보내지 않는 내부 부품
+import { AiBox } from '../components/AiBox.tsx'
+import { Badge } from '../components/Badge.tsx'
+import { Chip } from '../components/Chip.tsx'
+import { IconButton, IconLinkButton } from '../components/IconButton.tsx'
+import { AccountIcon, ExpandIcon } from '../components/icons.tsx'
 import { devPaths, noteReadPath } from '../routes/paths.ts'
 import styles from './ComponentShowcase.module.css'
 
@@ -149,7 +151,7 @@ export default function ComponentShowcase() {
               </LinkButton>
             </div>
           </Row>
-          <Row label="IconButton · IconLinkButton (aria-label 필수)">
+          <Row label="(내부용) IconButton · IconLinkButton (aria-label 필수)">
             <div className={styles.inline}>
               <IconButton label="내 계정">
                 <AccountIcon />
@@ -168,7 +170,7 @@ export default function ComponentShowcase() {
         </Section>
 
         <Section title="3. 선택·표시">
-          <Row label="Chip · 선택 / 미선택 (눌러 보세요)">
+          <Row label="(내부용) Chip · 선택 / 미선택 (눌러 보세요)">
             <div className={styles.inline}>
               {SUBJECTS.map((name) => (
                 <Chip key={name} selected={subject === name} onClick={() => setSubject(name)}>
@@ -177,10 +179,10 @@ export default function ComponentShowcase() {
               ))}
             </div>
           </Row>
-          <Row label="Badge · 사전 / AI 생성">
+          <Row label="AiBadge · AI 생성 / (내부용) Badge · 사전">
             <div className={styles.inline}>
+              <AiBadge />
               <Badge tone="dictionary">사전</Badge>
-              <Badge tone="ai">AI 생성</Badge>
             </div>
           </Row>
           <Row label="DifficultyChip · 하 / 중 / 상">
@@ -190,35 +192,70 @@ export default function ComponentShowcase() {
               <DifficultyChip level="high" />
             </div>
           </Row>
-          <Row label="GlossaryTerm · 본문 속 사전 용어(누르면 시트가 열린다)">
+          <Row label="TermLink · 본문 속 사전 용어(누르면 시트가 열린다)">
             <p className={styles.body}>
-              브라우저가 주소를 입력받으면 먼저 <GlossaryTerm onClick={() => setSheet('dictionary')}>DNS</GlossaryTerm>에 물어 서버의
+              브라우저가 주소를 입력받으면 먼저 <TermLink onClick={() => setSheet('dictionary')}>DNS</TermLink>에 물어 서버의
               위치를 찾아요.
             </p>
           </Row>
-          <Row label="AiBox · AI가 만든 내용을 감싸는 점선 상자">
+          <Row label="SelectionAction · 글자를 고르면 선택 영역 아래에 뜨는 버튼">
+            <p className={styles.body}>
+              같은 요청이 반복되면{' '}
+              <span className={styles.selected}>
+                캐시
+                <SelectionAction onClick={() => setSheet('ai')} />
+              </span>
+              가 이전 응답을 다시 써서 시간을 줄여요.
+            </p>
+            <div style={{ height: 52 }} aria-hidden="true" />
+          </Row>
+          <Row label="(내부용) AiBox · AI가 만든 내용을 감싸는 점선 상자">
             <AiBox label="AI 생성 설명">
               하나의 연결을 여러 요청이 나눠 쓰는 방식이에요. 합성 문구 예시예요.
             </AiBox>
           </Row>
         </Section>
 
-        <Section title="4. 입력 칸과 카드">
-          <Row label="Field · 한 줄 / 여러 줄 / 비활성">
+        <Section title="4. 입력 칸·퀴즈 카드·상태 안내">
+          <Row label="TextField · 한 줄 / 여러 줄 / 비활성">
             <div style={{ display: 'grid', gap: 12 }}>
-              <Field label="이메일" type="email" placeholder="name@example.com" autoComplete="off" />
-              <Field label="내 답" multiline placeholder="답을 입력해요" />
-              <Field label="비활성" disabled defaultValue="입력할 수 없어요" />
+              <TextField label="이메일" type="email" placeholder="name@example.com" autoComplete="off" />
+              <TextField label="내 답" multiline placeholder="답을 입력해요" />
+              <TextField label="비활성" disabled defaultValue="입력할 수 없어요" />
             </div>
           </Row>
-          <Row label="Card">
-            <Card>
-              <h3 className={styles.cardTitle}>오늘 풀 퀴즈가 없어요</h3>
-              <p className={styles.bodySmall}>노트에서 용어를 열어 보면 다음 날 퀴즈가 만들어져요.</p>
-              <LinkButton to={devPaths.componentShowcase} variant="primary">
-                노트 보러 가기
-              </LinkButton>
-            </Card>
+          <Row label="QuizCard (퀴즈 문항 카드)">
+            <QuizCard>
+              <div className={styles.cardBadges}>
+                <AiBadge />
+                <DifficultyChip level="low" />
+              </div>
+              <h3 className={styles.cardTitle}>HTTP와 HTTPS의 차이를 한 문장으로 말해 보세요.</h3>
+              <p className={styles.bodySmall}>합성 문구 예시예요.</p>
+            </QuizCard>
+          </Row>
+          <Row label="StateMessage · 빈 상태(F3-3b 문구)">
+            <StateMessage
+              kind="empty"
+              title="오늘 풀 퀴즈가 없어요"
+              description="노트에서 용어를 열어 보면 다음 날 퀴즈가 만들어져요."
+              action={
+                <LinkButton to={devPaths.componentShowcase} variant="primary">
+                  노트 보러 가기
+                </LinkButton>
+              }
+            />
+          </Row>
+          <Row label="StateMessage · 로딩 / 오류 (목업에 화면이 없어 문구는 임시)">
+            <div style={{ display: 'grid', gap: 12 }}>
+              <StateMessage kind="loading" title="불러오는 중이에요" description="잠시만 기다려 주세요." />
+              <StateMessage
+                kind="error"
+                title="불러오지 못했어요"
+                description="잠시 뒤 다시 시도해 주세요."
+                action={<Button>다시 시도</Button>}
+              />
+            </div>
           </Row>
         </Section>
 
@@ -291,18 +328,18 @@ export default function ComponentShowcase() {
           <Row label="F3-3a 퀴즈 문항 조립">
             <div className={styles.frame}>
               <div className={styles.frameBody}>
-                <Card>
+                <QuizCard>
                   <div className={styles.cardBadges}>
-                    <Badge tone="ai">AI 생성</Badge>
+                    <AiBadge />
                     <DifficultyChip level="mid" />
                   </div>
                   <h3 className={styles.cardTitle}>DNS를 한 문장으로 설명해 보세요.</h3>
-                  <Field label="내 답" multiline placeholder="답을 입력해요" />
+                  <TextField label="내 답" multiline placeholder="답을 입력해요" />
                   <div className={styles.cardActions}>
                     <Button variant="primary">답하기</Button>
                     <Button variant="report">오류 신고</Button>
                   </div>
-                </Card>
+                </QuizCard>
               </div>
             </div>
           </Row>
@@ -313,7 +350,7 @@ export default function ComponentShowcase() {
         open={sheet === 'dictionary'}
         onClose={() => setSheet(null)}
         badge={<Badge tone="dictionary">사전</Badge>}
-        title={<GlossaryTerm>DNS</GlossaryTerm>}
+        title={<TermLink>DNS</TermLink>}
       >
         <p className={styles.bodySmall}>
           도메인 이름을 서버의 숫자 주소로 바꿔 주는 이름 찾기 서비스예요. 합성 문구 예시예요.
@@ -327,7 +364,7 @@ export default function ComponentShowcase() {
       <BottomSheet
         open={sheet === 'ai'}
         onClose={() => setSheet(null)}
-        badge={<Badge tone="ai">AI 생성</Badge>}
+        badge={<AiBadge />}
         title="멀티플렉싱"
       >
         <div style={{ marginBottom: 16 }}>

@@ -16,17 +16,22 @@ type BottomSheetProps = {
 }
 
 // 아래에서 올라오는 모달 시트. 브라우저 기본 모달(dialog)을 써서 아래를 브라우저가 처리한다.
-//  - 열 때 첫 조작(닫기 버튼)에 포커스가 가고, 포커스는 시트 안에 갇힌다
+//  - 열 때 제목으로 포커스가 가고(디자인 시스템 접근성 규칙), 포커스는 시트 안에 갇힌다
 //  - 배경은 조작할 수 없고, Esc로 닫힌다
 //  - 닫으면 시트를 연 버튼으로 포커스가 돌아간다
 export function BottomSheet({ open, onClose, title, badge, closeLabel = '닫기', children }: BottomSheetProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
+  const titleRef = useRef<HTMLHeadingElement>(null)
   const titleId = useId()
 
   useEffect(() => {
     const dialog = dialogRef.current
     if (!dialog) return
-    if (open && !dialog.open) dialog.showModal()
+    if (open && !dialog.open) {
+      dialog.showModal()
+      // showModal은 첫 조작(닫기 버튼)에 포커스를 두므로, 제목으로 옮긴다.
+      titleRef.current?.focus({ preventScroll: true })
+    }
     if (!open && dialog.open) dialog.close()
   }, [open])
 
@@ -60,7 +65,7 @@ export function BottomSheet({ open, onClose, title, badge, closeLabel = '닫기'
           </button>
         </div>
         {badge ? <div className={styles.badge}>{badge}</div> : null}
-        <h2 id={titleId} className={styles.title}>
+        <h2 id={titleId} ref={titleRef} tabIndex={-1} className={styles.title}>
           {title}
         </h2>
         {children}
