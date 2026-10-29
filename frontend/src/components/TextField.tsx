@@ -19,11 +19,14 @@ export function TextField(props: InputTextFieldProps | TextAreaTextFieldProps) {
   const errorId = `${id}-error`
   const { label, hint, error, multiline, ...rest } = props
   const describedBy = [rest['aria-describedby'], hint ? hintId : null, error ? errorId : null].filter(Boolean).join(' ') || undefined
+  // 비활성은 disabled가 아니라 aria-disabled를 권장한다(포커스를 받아 스크린 리더가 존재를 알린다). 이때는 값을 못 바꾸게 readonly도 함께 건다.
+  const ariaDisabled = rest['aria-disabled'] === true || rest['aria-disabled'] === 'true'
   const common = {
     id,
     className: styles.control,
     'aria-invalid': error ? true : undefined,
     'aria-describedby': describedBy,
+    ...(ariaDisabled ? { readOnly: true } : null),
   }
   return (
     <div>

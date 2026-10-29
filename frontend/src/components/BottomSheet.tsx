@@ -58,6 +58,7 @@ export function BottomSheet({ open, onClose, title, badge, closeLabel = '닫기'
       ref={dialogRef}
       className={styles.dialog}
       aria-labelledby={titleId}
+      aria-modal="true"
       onCancel={(event) => {
         // Esc는 브라우저가 바로 닫지 않게 막고, 부모가 open을 바꾸게 한다.
         event.preventDefault()

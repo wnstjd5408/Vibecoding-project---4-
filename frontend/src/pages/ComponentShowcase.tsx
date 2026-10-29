@@ -256,7 +256,7 @@ export default function ComponentShowcase() {
               <TextField label="내 답" multiline placeholder="답을 입력해요" />
               <TextField label="안내가 있는 칸" hint="영문 소문자와 숫자만 쓸 수 있어요." defaultValue="abc" />
               <TextField label="오류가 있는 칸" error="답을 입력해 주세요." defaultValue="" />
-              <TextField label="비활성" disabled defaultValue="입력할 수 없어요" />
+              <TextField label="비활성 (aria-disabled + readonly)" aria-disabled="true" defaultValue="입력할 수 없어요" />
             </div>
           </Row>
           <Row label="QuizCard (퀴즈 문항 카드)">

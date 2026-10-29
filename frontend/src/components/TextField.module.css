@@ -34,7 +34,6 @@ textarea.control {
 /* 비활성: aria-disabled(+readonly)도 같은 모양. 배경과 테두리는 surface-300 */
 .control:disabled,
 .control[aria-disabled='true'] {
-  background: var(--surface-300);
   border-color: var(--surface-300);
   color: var(--ink-muted);
   cursor: not-allowed;
