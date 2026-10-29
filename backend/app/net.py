@@ -31,12 +31,15 @@ def ip_bucket(ip: str) -> str:
     """속도 제한 키로 쓸 IP 묶음. IPv6는 /64로 묶는다.
 
     한 사용자(회선)가 보통 /64 하나를 받아 그 안의 주소를 마음대로 바꿀 수 있어서, 주소 하나씩 세면
-    제한을 우회할 수 있다. IPv4와 알 수 없는 값은 그대로 쓴다.
+    제한을 우회할 수 있다. IPv4와 알 수 없는 값은 그대로 쓴다. IPv4를 담은 IPv6 주소(::ffff:a.b.c.d)는
+    IPv4로 푼다. 그대로 /64로 묶으면 모든 IPv4 사용자가 한 묶음(::/64)이 된다.
     """
     try:
         address = ipaddress.ip_address(ip)
     except ValueError:
         return ip
+    if address.version == 6 and address.ipv4_mapped is not None:
+        return str(address.ipv4_mapped)
     if address.version == 6:
         return str(ipaddress.ip_network(f"{address}/64", strict=False))
     return ip

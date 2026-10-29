@@ -469,3 +469,33 @@ def test_auth_config_error_on_login_is_500_and_not_counted_as_a_failure(client, 
     assert response.status_code == 500
     assert response.json()["error"]["code"] == "internal_error"
     assert fake.hits(f"login_failure:{fake.keyed_hash('email:member@example.test')}", 15 * 60) == 0
+
+
+def test_logging_in_again_after_the_old_access_token_expired_still_revokes_it(client, fake):
+    first = set_cookies(login(client))
+    old_refresh = first[REFRESH_COOKIE]["value"].split(".", 2)[2]
+    fake.expire_access(first[SESSION_COOKIE]["value"])
+
+    login_again = client.post(
+        "/api/auth/login",
+        json={"email": "member@example.test", "password": "right-pw"},
+        headers={**origin(), **cookie_header(first)},
+    )
+
+    assert login_again.status_code == 200
+    assert not fake.session_alive(old_refresh)
+
+
+@pytest.mark.parametrize(
+    "ip, bucket",
+    [
+        ("203.0.113.9", "203.0.113.9"),
+        ("::ffff:203.0.113.9", "203.0.113.9"),
+        ("2001:db8:0:1::abcd", "2001:db8:0:1::/64"),
+        ("unknown", "unknown"),
+    ],
+)
+def test_ip_bucket(ip, bucket):
+    from app.net import ip_bucket
+
+    assert ip_bucket(ip) == bucket

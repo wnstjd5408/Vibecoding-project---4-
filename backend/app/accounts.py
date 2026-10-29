@@ -45,6 +45,23 @@ def _release_account(limiter: RateLimiter, email: str) -> None:
         logger.warning("stage=rate_limit release failed: %s", type(exc).__name__)
 
 
+def _end_browser_session(request: Request, supabase: SupabaseClient) -> None:
+    """이 요청의 세션 쿠키가 가리키는 Auth 세션을 끊는다. Auth 오류는 그대로 올린다.
+
+    액세스 토큰이 만료됐으면 리프레시 쿠키로 갱신해서 얻은 토큰으로 끊는다. 리프레시 토큰이 Auth에
+    살아 남지 않게 한다.
+    """
+    access_token = request.cookies.get(SESSION_COOKIE)
+    if access_token and supabase.sign_out(access_token):
+        return
+    refresh = decode_refresh_cookie(supabase.keyed_hash, request.cookies.get(REFRESH_COOKIE))
+    if refresh is None:
+        return
+    session = supabase.refresh_session(refresh.refresh_token, forwarded_ip(request))
+    if session is not None:
+        supabase.sign_out(session.access_token)
+
+
 @router.post("/auth/login", summary="E01 login")
 def login(
     body: LoginRequest,
@@ -77,10 +94,11 @@ def login(
         revoke_quietly(supabase, session.access_token)
         raise ApiError("invalid_credentials", stage="auth")
     _release_account(limiter, body.email)
-    previous = request.cookies.get(SESSION_COOKIE)
-    if previous and previous != session.access_token:
+    try:
         # 같은 브라우저에서 다시 로그인하면 쿠키에서 밀려나는 옛 세션을 Auth에서도 끊는다.
-        revoke_quietly(supabase, previous)
+        _end_browser_session(request, supabase)
+    except Exception as exc:  # noqa: BLE001 — 새 로그인은 이미 성공했다
+        logger.warning("stage=auth previous session revoke failed: %s", type(exc).__name__)
     stage_session(
         request, supabase.keyed_hash, session.access_token, session.refresh_token, session.expires_in, new_deadline()
     )
@@ -92,15 +110,8 @@ def logout(request: Request, supabase: SupabaseClient = Depends(get_supabase)) -
     """세션이 없어도 204다. Auth 쪽 세션도 끊는다(scope=local). Auth가 실패해도 쿠키는 지운다."""
     # 무엇이 실패하든 쿠키는 지운다. 사용자의 로그아웃 의도가 Auth 상태에 막히지 않게 한다.
     stage_clear(request)
-    access_token = request.cookies.get(SESSION_COOKIE)
     try:
-        revoked = bool(access_token) and supabase.sign_out(access_token)
-        refresh = None if revoked else decode_refresh_cookie(supabase.keyed_hash, request.cookies.get(REFRESH_COOKIE))
-        if refresh is not None:
-            # 액세스 토큰이 만료됐으면 갱신해서 얻은 토큰으로 끊는다. 리프레시 토큰이 Auth에 살아 남지 않게 한다.
-            session = supabase.refresh_session(refresh.refresh_token, forwarded_ip(request))
-            if session is not None:
-                supabase.sign_out(session.access_token)
+        _end_browser_session(request, supabase)
     except Exception as exc:  # noqa: BLE001 — 장애·설정 오류 모두 로그만 남기고 204로 끝낸다
         logger.warning("stage=auth logout revoke failed: %s", type(exc).__name__)
     return Response(status_code=204)
