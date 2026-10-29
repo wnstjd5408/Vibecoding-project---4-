@@ -4,7 +4,7 @@ import type { FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { AppHeader, Button, StateMessage, TextField } from '../components/index.ts'
 import { useAuth } from '../auth/useAuth.ts'
-import { classifyLoginFailure, landingPath, login } from '../auth/login.ts'
+import { classifyLoginFailure, confirmLogin, landingPath, login } from '../auth/login.ts'
 import type { LoginFailure } from '../auth/login.ts'
 import { userPaths } from '../routes/paths.ts'
 import styles from './LoginPage.module.css'
@@ -38,15 +38,25 @@ export default function LoginPage() {
     setSubmitting(true)
     setFailure(null)
     try {
-      const { user } = await login(email, password)
-      // E03으로 로그인 상태를 갱신한 뒤 이동한다. 이동한 화면이 처음부터 로그인 상태를 읽는다.
-      await refresh()
-      navigate(landingPath(user.role), { replace: true })
+      await login(email, password)
+      // E03으로 로그인 상태를 갱신하고, 상태가 확인됐을 때만 이동한다. 이동한 화면이 처음부터 로그인 상태를 읽는다.
+      const confirmed = await confirmLogin(refresh)
+      if (!confirmed.ok) {
+        // 로그인은 됐는데 상태를 확인하지 못했다(E03 실패·쿠키 미적용). 성공으로 보내지 않고 안내한다. 비밀번호는 남겨 다시 시도하기 쉽게 한다.
+        setFailure({ kind: 'unavailable' })
+        setSubmitting(false)
+        return
+      }
+      navigate(landingPath(confirmed.role), { replace: true })
     } catch (error) {
-      setFailure(classifyLoginFailure(error))
-      // 입력한 이메일은 남기고 비밀번호만 비운다. 다시 입력하도록 비밀번호 칸으로 포커스를 옮긴다.
-      setPassword('')
-      passwordRef.current?.focus()
+      const next = classifyLoginFailure(error)
+      setFailure(next)
+      // 계정 정보가 틀렸을 때만 이메일은 남기고 비밀번호를 비운 뒤 비밀번호 칸으로 포커스를 옮긴다.
+      // 서버·네트워크 문제일 때는 입력을 그대로 두어 한 번에 다시 시도할 수 있게 한다.
+      if (next.kind === 'credentials') {
+        setPassword('')
+        passwordRef.current?.focus()
+      }
       setSubmitting(false)
     }
   }

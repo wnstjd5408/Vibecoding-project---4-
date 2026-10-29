@@ -1,6 +1,7 @@
 import { apiFetch, isApiError } from '../api/client.ts'
 import type { LoginResponse, Role } from '../api/types.ts'
 import { userPaths } from '../routes/paths.ts'
+import type { AuthState } from './authContext.ts'
 
 // E01 로그인. 성공하면 서버가 세션 쿠키를 심고 역할과 이름을 준다. 실패하면 ApiError를 던진다.
 // 비밀번호는 요청 본문으로만 보내고 어디에도 남기지 않는다.
@@ -25,4 +26,16 @@ export function classifyLoginFailure(error: unknown): LoginFailure {
   if (isApiError(error, 'invalid_credentials')) return { kind: 'credentials' }
   if (isApiError(error, 'rate_limited')) return { kind: 'rate_limited', retryAfterSeconds: error.retryAfterSeconds }
   return { kind: 'unavailable' }
+}
+
+// 로그인(E01) 직후 로그인 상태를 확인한 결과. 이동은 확인된 상태일 때만 한다.
+//  - ok: E03이 로그인 상태와 역할을 확인했다. 이 역할로 이동한다
+//  - 그 밖: E03을 받지 못했거나(네트워크 오류·503), 쿠키가 적용되지 않아 비로그인으로 읽혔다. 이동하지 않고 안내한다
+export type LoginConfirmation = { ok: true; role: Role } | { ok: false }
+
+// refresh()는 E03이 실패해도 예외를 던지지 않고 status가 'error'인 상태를 돌려준다. 완료를 성공으로 보지 않고 상태를 확인한다.
+export async function confirmLogin(refresh: () => Promise<AuthState>): Promise<LoginConfirmation> {
+  const state = await refresh()
+  if (state.status !== 'ready' || state.role === 'visitor') return { ok: false }
+  return { ok: true, role: state.role }
 }

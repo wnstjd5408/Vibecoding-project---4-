@@ -105,3 +105,25 @@ test('실패 종류는 서버 message가 아니라 code로 가른다', async ({ 
   expect(result.network).toEqual({ kind: 'unavailable' })
   expect(result.notAnApiError).toEqual({ kind: 'unavailable' })
 })
+
+test('로그인 직후 상태가 확인된 경우에만 이동한다(E03 실패·쿠키 미적용이면 이동하지 않는다)', async ({ page }) => {
+  await page.goto('/login')
+  const result = await page.evaluate(async () => {
+    const { confirmLogin } = await import('/src/auth/login.ts')
+    const state = (status: string, role: string) => ({ status, role, displayName: null })
+    return {
+      member: await confirmLogin(async () => state('ready', 'member') as never),
+      operator: await confirmLogin(async () => state('ready', 'operator') as never),
+      // E03이 네트워크 오류·503으로 실패하면 refresh는 예외 없이 status 'error', role 'visitor'를 돌려준다
+      stateError: await confirmLogin(async () => state('error', 'visitor') as never),
+      // 쿠키가 적용되지 않아 E03이 authenticated: false를 돌려주면 ready이지만 방문자다
+      stillVisitor: await confirmLogin(async () => state('ready', 'visitor') as never),
+      stillLoading: await confirmLogin(async () => state('loading', 'visitor') as never),
+    }
+  })
+  expect(result.member).toEqual({ ok: true, role: 'member' })
+  expect(result.operator).toEqual({ ok: true, role: 'operator' })
+  expect(result.stateError).toEqual({ ok: false })
+  expect(result.stillVisitor).toEqual({ ok: false })
+  expect(result.stillLoading).toEqual({ ok: false })
+})
