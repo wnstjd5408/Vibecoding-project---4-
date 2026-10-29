@@ -333,3 +333,61 @@ def test_disabled_email_provider_is_a_config_error_not_a_wrong_password():
     body = {"code": 422, "error_code": "email_provider_disabled", "msg": "Email logins are disabled"}
     with pytest.raises(SupabaseConfigError):
         client_with(lambda r: httpx.Response(422, json=body)).sign_in_with_password("a@b.c", "x")
+
+
+# --- E04 과목·노트 조회 (MEG-71) ---
+
+
+def capture(rows):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["params"] = dict(request.url.params)
+        seen["authorization"] = request.headers["authorization"]
+        return httpx.Response(200, json=rows)
+
+    return seen, handler
+
+
+def test_list_notes_for_non_operator_filters_published_in_db_and_skips_operator_columns():
+    rows = [{"id": 1, "title": "t", "studied_on": None, "parent_note_id": None, "note_subjects": []}]
+    seen, handler = capture(rows)
+
+    assert client_with(handler).list_notes(include_unpublished=False) == rows
+    assert seen == {
+        "path": "/rest/v1/notes",
+        "params": {
+            "select": "id,title,studied_on,parent_note_id,note_subjects(subject_id)",
+            "order": "studied_on.desc.nullslast,id.desc",
+            "is_published": "eq.true",
+        },
+        "authorization": "Bearer sb_secret_test",
+    }
+
+
+def test_list_notes_for_operator_reads_all_notes_and_operator_columns():
+    seen, handler = capture([])
+
+    client_with(handler).list_notes(include_unpublished=True)
+
+    assert "is_published" not in seen["params"]
+    assert seen["params"]["select"].endswith(",is_published,revision,needs_review")
+
+
+def test_list_subjects_reads_id_and_name_in_id_order():
+    seen, handler = capture([{"id": 1, "name": "네트워크"}])
+
+    assert client_with(handler).list_subjects() == [{"id": 1, "name": "네트워크"}]
+    assert seen["path"] == "/rest/v1/subjects"
+    assert seen["params"] == {"select": "id,name", "order": "id.asc"}
+
+
+def test_notes_select_rejected_is_a_config_error():
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(401, json=INVALID_KEY)).list_notes(include_unpublished=False)
+
+
+def test_notes_select_server_error_is_unavailable():
+    with pytest.raises(SupabaseUnavailable):
+        client_with(lambda r: httpx.Response(503)).list_subjects()
