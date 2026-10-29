@@ -1,0 +1,29 @@
+.chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 var(--space-3);
+  border: 1px solid;
+  border-radius: var(--radius-pill);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+}
+
+/* 난이도는 밝기 차이와 글자 라벨(난이도 하·중·상)로 함께 구분한다 */
+.low {
+  border-color: var(--line-strong);
+  background: var(--diff-low);
+}
+
+.mid {
+  border-color: var(--diff-mid);
+  background: var(--diff-mid);
+}
+
+.high {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--surface-100);
+}

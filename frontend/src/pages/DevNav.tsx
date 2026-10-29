@@ -16,6 +16,7 @@ const operatorLinks: NavLink[] = [{ to: operatorPaths.home, label: 'F5-1a 운영
 const devLinks: NavLink[] = [
   { to: devPaths.foundationDemo, label: '공통 기반 샘플' },
   { to: devPaths.mockup, label: '목업 v0.2 전체 화면' },
+  { to: devPaths.componentShowcase, label: '공통 컴포넌트' },
 ]
 
 function LinkGroup({ title, links }: { title: string; links: NavLink[] }) {
