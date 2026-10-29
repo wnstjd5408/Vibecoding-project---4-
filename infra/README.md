@@ -241,6 +241,10 @@ aws iam list-service-specific-credentials --user-name $u --query "ServiceSpecifi
 
 Vercel 배포의 FastAPI가 장기 키 없이 Bedrock을 부를 때 맡는 역할이다. 백엔드는 요청 헤더의 Vercel OIDC 토큰을 STS(`ap-northeast-1`)에 넘겨 임시 자격증명을 받는다(`backend/app/bedrock.py`, `docs/ai-credentials.md`). 운영 결정과 검증은 MEG-118에서 추적한다.
 
+![Vercel OIDC로 Bedrock을 호출하는 구성: FastAPI → STS → OIDC 공급자·역할 → Bedrock](vercel-oidc/architecture.drawio.svg)
+
+그림의 원본은 `vercel-oidc/architecture.spec.json`이다. `~/.claude/skills/aws-k8s-architecture-diagram`의 생성기(`build_diagram.js`)로 `.drawio`를 만들고 draw.io CLI로 `.drawio.svg`를 내보낸다. `.drawio.svg`를 draw.io에서 직접 고치면 명세와 어긋나므로 명세를 고쳐 다시 만든다.
+
 **구성**
 
 - 공급자: Vercel 프로젝트가 team issuer 모드라서 URL은 `https://oidc.vercel.com/<team>`, audience는 기본값 `https://vercel.com/<team>`이다. 프로젝트 설정에서 issuer 모드를 바꾸면 공급자 URL도 바뀌어 역할 전환이 거부된다.
