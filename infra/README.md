@@ -23,6 +23,7 @@ AWS 계정의 비용 경보, 감사 로그, 감사 이벤트 알림을 Terraform
 | `cloudtrail.tf` | 트레일 `cs-learning-audit`, 로그 버킷과 공개 차단·암호화·소유권·정책 | ap-northeast-2 | 콘솔에서 만든 것을 가져옴 |
 | `alerts.tf` | SNS 토픽 `<owner>-cs-learning-audit-alerts`·이메일 구독, EventBridge 규칙 `<owner>-cs-learning-…`·대상 | ap-northeast-1(STS), us-east-1(IAM) | 새로 만듦 |
 | `github-oidc/` | GitHub OIDC 공급자, IAM 역할 `<owner>-infra-plan`·`<owner>-infra-apply` | 글로벌 | 새로 만듦. CD 전용이며 상태 파일이 따로다. CD가 아니라 사람이 로컬에서 적용한다 |
+| `vercel-oidc/` | Vercel OIDC 공급자(team issuer), IAM 역할 `<owner>-vercel-bedrock-prd`·`<owner>-vercel-bedrock-preview`와 Bedrock 호출 정책 | 글로벌(호출 리전 ap-northeast-1) | 새로 만듦(MEG-119). 상태 파일이 따로이고 사람이 로컬에서 적용한다. "Vercel OIDC 역할" 절 참고 |
 
 `imports.tf`의 `import` 블록이 콘솔 리소스를 상태로 가져온다. 가져온 리소스는 `plan`에서 변경·삭제가 0건이어야 한다.
 
@@ -145,11 +146,11 @@ aws iam list-service-specific-credentials --user-name $u --query "ServiceSpecifi
 
 ## CD로 적용 (MEG-100)
 
-`infra/` 변경을 `main`에 병합하면 `.github/workflows/infra-cd.yml`이 plan을 만들고, 사람이 승인한 뒤에 같은 plan을 적용한다. 로컬 AWS 자격증명이 없어도 `infra/`를 바꿀 수 있다. 첫 적용과 `infra/github-oidc/` 변경은 CD 대상이 아니고 사람이 로컬에서 한다.
+`infra/` 변경을 `main`에 병합하면 `.github/workflows/infra-cd.yml`이 plan을 만들고, 사람이 승인한 뒤에 같은 plan을 적용한다. 로컬 AWS 자격증명이 없어도 `infra/`를 바꿀 수 있다. 첫 적용과 `infra/github-oidc/`·`infra/vercel-oidc/` 변경은 CD 대상이 아니고 사람이 로컬에서 한다.
 
 **흐름**
 
-1. `infra/*.tf`나 `infra/.terraform.lock.hcl`을 바꾼 PR이 `main`에 병합된다. README·예시 파일만 바꾼 병합과 `infra/github-oidc/`는 실행하지 않는다. 수동 실행(`workflow_dispatch`)도 된다. PR 단계에서는 plan이 돌지 않는다. PR 검토 때는 로컬 `plan`을 쓴다.
+1. `infra/*.tf`나 `infra/.terraform.lock.hcl`을 바꾼 PR이 `main`에 병합된다. README·예시 파일만 바꾼 병합과 하위 폴더(`infra/github-oidc/`, `infra/vercel-oidc/`)는 실행하지 않는다. 수동 실행(`workflow_dispatch`)도 된다. PR 단계에서는 plan이 돌지 않는다. PR 검토 때는 로컬 `plan`을 쓴다.
 2. **Plan** job(Environment `infra-plan`)이 OIDC로 읽기 전용 역할 `<owner>-infra-plan`을 맡아 `plan`을 만든다. 로그에는 `Plan: …` 줄과 바뀌는 리소스 주소·동작 목록만 남는다. 바뀔 것이 없으면 여기서 끝난다.
 3. plan 파일을 상태 버킷의 `plans/<실행 번호>.tfplan`에 올린다. 공개 저장소의 Actions 아티팩트는 쓰지 않는다.
 4. **Apply** job(Environment `infra-apply`)은 필수 승인자가 승인하기 전에는 시작하지 않는다. 승인하면 역할 `<owner>-infra-apply`를 맡아 올린 plan 파일만 적용하고 파일을 지운다. 그 사이 상태가 바뀌었으면 Terraform이 적용을 거부한다.
@@ -226,7 +227,7 @@ aws iam list-service-specific-credentials --user-name $u --query "ServiceSpecifi
 **되돌리기**
 
 - 변경을 되돌리려면 변경 PR을 revert하는 PR을 올려 병합하고 CD 승인을 거친다. 가져온 리소스를 삭제하는 revert는 위 "되돌리기" 절의 주의를 따른다.
-- CD를 끄려면 `.github/workflows/infra-cd.yml`을 지우는 PR을 올린다. AWS 쪽 역할은 "정리(삭제) 방법"의 5단계에서 지운다. 비상 때는 `infra-apply` Environment를 지우거나 역할 정책을 비워도 apply가 멈춘다.
+- CD를 끄려면 `.github/workflows/infra-cd.yml`을 지우는 PR을 올린다. AWS 쪽 역할은 "정리(삭제) 방법"의 6단계에서 지운다. 비상 때는 `infra-apply` Environment를 지우거나 역할 정책을 비워도 apply가 멈춘다.
 
 **알아 둘 것**
 
@@ -235,6 +236,53 @@ aws iam list-service-specific-credentials --user-name $u --query "ServiceSpecifi
 - Environment 비밀값은 저장소 관리자가 덮어쓸 수 있다. 비밀값을 바꾼 이력은 GitHub 감사 기록에 남는다.
 - OIDC 역할 전환이 거부되면 `infra/alerts.tf`의 STS 알림 규칙이 반응한다. 워크플로는 이 규칙이 보는 리전(`ap-northeast-1`)으로 역할을 요청한다.
 - IAM 역할의 `description`에는 한글을 쓰지 못한다(ASCII·Latin-1만). 한글이 있으면 `plan`·`validate`는 통과하고 `apply`의 `CreateRole`에서 `ValidationError`가 난다(2026-10-28 MEG-100 첫 `apply`에서 겪음). 중간에 실패한 `apply`는 이미 만든 리소스(OIDC 공급자)를 상태에 남기므로 코드를 고친 뒤 `plan`을 다시 만들어 적용한다.
+
+## Vercel OIDC 역할 (MEG-119)
+
+Vercel 배포의 FastAPI가 장기 키 없이 Bedrock을 부를 때 맡는 역할이다. 백엔드는 요청 헤더의 Vercel OIDC 토큰을 STS(`ap-northeast-1`)에 넘겨 임시 자격증명을 받는다(`backend/app/bedrock.py`, `docs/ai-credentials.md`). 운영 결정과 검증은 MEG-118에서 추적한다.
+
+**구성**
+
+- 공급자: Vercel 프로젝트가 team issuer 모드라서 URL은 `https://oidc.vercel.com/<team>`, audience는 기본값 `https://vercel.com/<team>`이다. 프로젝트 설정에서 issuer 모드를 바꾸면 공급자 URL도 바뀌어 역할 전환이 거부된다.
+- 역할 2개: 신뢰 정책이 `aud`와 `sub`(`owner:<team>:project:<project>:environment:<env>`)를 `StringEquals`로 고정한다. `prd`는 `production`, `preview`는 `preview` 토큰만 받는다. Preview 토큰으로 운영 역할을 맡을 수 없다.
+- 권한: 두 역할 모두 글로벌 추론 프로필 `global.<모델>`의 `bedrock:InvokeModel`만 있다. 추론 프로필·호출 리전 기반 모델·글로벌 기반 모델 3문장이며, 모델 문장은 이 추론 프로필을 거칠 때만 허용한다(AWS 문서 "Global cross-Region inference"의 IAM 예시와 같은 구조).
+- **한계:** Vercel 토큰 `sub`에는 브랜치가 없다. 그래서 Preview 역할은 `staging`뿐 아니라 PR 미리보기 배포도 맡을 수 있다. 빌드 단계에도 토큰이 나오므로 PR이 바꾼 빌드 스크립트·의존성 설치 스크립트도 포함된다.
+  - 지금 있는 장치: `AWS_ROLE_ARN`을 Preview의 Git Branch `staging` 범위에만 넣는다. Vercel 프로젝트의 Git Fork Protection이 켜져 있어 외부 fork PR은 사람 승인 전에 배포되지 않는다(2026-10-29 확인).
+  - 예정된 장치: 백엔드가 `staging` 밖의 Preview에서는 STS 호출 전에 거부한다(MEG-120, 아직 구현 전).
+  - 남는 위험: 팀원·AI가 올린 PR의 코드가 역할 ARN을 직접 넣어 STS를 부르는 경우는 막지 못한다. 2026-10-29에 수용했다(MEG-118). 비용 피해는 `budget.tf`의 월 예산 경보로 알 수 있다.
+- 팀 슬러그에는 개인 식별 정보가 들어 있을 수 있어 `terraform.tfvars`로만 넘긴다. `for_each` 키와 리소스 이름에도 넣지 않는다.
+- IAM 조건은 팀·프로젝트의 불변 ID가 아니라 슬러그와 이름을 본다. Vercel 팀이나 프로젝트 이름을 바꾸면 역할 전환이 거부되고, 풀린 옛 슬러그를 다른 팀이 가져갈 수도 있다. 이름을 바꿨으면 이 폴더를 `destroy`한 뒤 새 값으로 다시 적용한다.
+- 모델·리전은 백엔드와 짝이다. `bedrock_model_id`에 `global.`을 붙인 값이 백엔드 `BEDROCK_MODEL_ID`, `bedrock_region`이 `BEDROCK_REGION`·`infra/`의 `sts_event_region`과 같아야 한다. 한쪽만 바꾸면 `AccessDeniedException`이 난다. 스트리밍 호출을 쓰게 되면 `bedrock:InvokeModelWithResponseStream`을 더해야 한다.
+
+**적용 순서 (사람, 로컬)**
+
+`infra/*`만 보는 Infra CD는 이 폴더를 실행하지 않고, apply 역할에는 IAM 쓰기 권한도 없다.
+
+1. Vercel 공급자가 이미 있는지 확인한다. `oidc.vercel.com/<team>`이 있으면 `apply`가 `EntityAlreadyExists`로 실패한다(2026-10-29 이 계정에는 없었다).
+   ```powershell
+   aws iam list-open-id-connect-providers
+   ```
+2. 설정 파일을 복사해 값을 채우고 계획을 만든다. `owner`는 `infra/`와 같은 값, 상태 버킷은 `infra/backend.hcl`을 그대로 쓴다.
+   ```powershell
+   cd infra\vercel-oidc
+   Copy-Item terraform.tfvars.example terraform.tfvars   # 값을 채운다
+   terraform init "-backend-config=../backend.hcl"
+   terraform plan "-out=plan.tfplan"
+   ```
+   `Plan: 5 to add, 0 to change, 0 to destroy.`가 나와야 한다(공급자 1, 역할 2, 역할 정책 2).
+3. 적용하고 역할 ARN을 확인한다. ARN에는 계정 ID가 있으므로 이슈나 PR에 옮기지 않는다.
+   ```powershell
+   terraform apply plan.tfplan
+   Remove-Item plan.tfplan
+   terraform output role_arns
+   ```
+4. Vercel 환경변수 `AWS_ROLE_ARN`에 넣는다. `prd`는 Production, `preview`는 Preview의 Git Branch `staging`에만 넣는다. Preview 공통값으로 넣지 않는다. `AI_AUTH_MODE`는 `oidc`로 두고, 환경변수를 바꾼 뒤에는 각 환경을 다시 배포한다.
+
+**확인과 되돌리기**
+
+- 적용 뒤 `terraform plan`이 `No changes.`여야 한다.
+- 실제 호출 확인과 STS 실패 알림 시험은 MEG-118에서 한다. 알림 규칙(`alerts.tf`)은 역할을 구분하지 않으므로 메일은 CloudTrail 이벤트 ID·시각·대상 역할과 대조한다.
+- 되돌리려면 Vercel의 `AWS_ROLE_ARN`을 지운 뒤 이 폴더에서 `terraform destroy`한다("정리(삭제) 방법" 5단계). `AI_AUTH_MODE` 기본값이 `oidc`라서 그 뒤의 AI 호출은 설정 오류로 실패한다. AI 기능이 이미 배포돼 있으면 먼저 `docs/ai-credentials.md`의 대체 경로(`api_key`)로 바꾸거나 AI 기능을 끈다.
 
 ## 정리(삭제) 방법
 
@@ -257,14 +305,21 @@ aws iam list-service-specific-credentials --user-name $u --query "ServiceSpecifi
    terraform destroy
    ```
    마지막 줄이 `Destroy complete!`이고 오류가 없어야 한다.
-5. **CD 역할을 지운다.** GitHub Environment 비밀값과 워크플로는 저장소에서 따로 지운다. 이 폴더는 상태 버킷을 쓰므로 상태 버킷을 지우기 전에 실행한다.
+5. **Vercel AI 역할을 지운다.** 먼저 Vercel 프로젝트의 `AWS_ROLE_ARN`·`AI_AUTH_MODE`를 Production과 Preview(`staging`)에서 지운다. 임시 확인 API(MEG-120)가 남아 있으면 그것도 지운다. 그다음 이 폴더를 지운다. 상태 버킷을 쓰므로 상태 버킷을 지우기 전에 실행한다.
+   ```powershell
+   cd vercel-oidc
+   terraform destroy
+   cd ..
+   ```
+   마지막 줄이 `Destroy complete! Resources: 5 destroyed.`여야 한다.
+6. **CD 역할을 지운다.** GitHub Environment 비밀값과 워크플로는 저장소에서 따로 지운다. 이 폴더는 상태 버킷을 쓰므로 상태 버킷을 지우기 전에 실행한다.
    ```powershell
    cd github-oidc
    terraform destroy
    ```
    마지막 줄이 `Destroy complete! Resources: 5 destroyed.`여야 한다.
-6. **상태 버킷을 지운다.** 버전 관리가 켜져 있어 이전 버전까지 지워야 한다. S3 콘솔에서 상태 버킷을 고르고 **비우기(Empty)** 다음 **삭제(Delete)** 를 누른다.
-7. **삭제 확인:** 아래 명령이 모두 빈 결과나 NotFound(404) 오류를 내야 한다.
+7. **상태 버킷을 지운다.** 버전 관리가 켜져 있어 이전 버전까지 지워야 한다. S3 콘솔에서 상태 버킷을 고르고 **비우기(Empty)** 다음 **삭제(Delete)** 를 누른다.
+8. **삭제 확인:** 아래 명령이 모두 빈 결과나 NotFound(404) 오류를 내야 한다.
    ```powershell
    aws budgets describe-budgets --account-id (aws sts get-caller-identity --query Account --output text) --query "Budgets[?BudgetName=='cs-learning-monthly']"
    aws ce get-anomaly-monitors --query "AnomalyMonitors[?contains(MonitorName, '$o')]"
@@ -275,9 +330,11 @@ aws iam list-service-specific-credentials --user-name $u --query "ServiceSpecifi
    aws events list-rules --region us-east-1 --name-prefix "$o-"
    aws s3api head-bucket --bucket $log     # 404
    aws s3api head-bucket --bucket $state   # 404
-   aws iam list-open-id-connect-providers  # token.actions.githubusercontent.com이 없어야 한다
+   aws iam list-open-id-connect-providers  # token.actions.githubusercontent.com과 oidc.vercel.com이 없어야 한다
    aws iam get-role --role-name "$o-infra-plan"    # NoSuchEntity
    aws iam get-role --role-name "$o-infra-apply"   # NoSuchEntity
+   aws iam get-role --role-name "$o-vercel-bedrock-prd"       # NoSuchEntity
+   aws iam get-role --role-name "$o-vercel-bedrock-preview"   # NoSuchEntity
    ```
 
 ## 알아 둘 것
@@ -285,5 +342,5 @@ aws iam list-service-specific-credentials --user-name $u --query "ServiceSpecifi
 - 비용 이상 탐지 모니터 이름은 콘솔에서 `Daily summaries`로 잘못 저장돼 있었다. 가져오기가 끝난 뒤 `<owner>-cs-learning-cost-monitor`로 고쳤다(제자리 변경).
 - `alerts.tf` 리소스 이름을 바꾸면 토픽과 구독이 새로 만들어지므로 확인 메일 2통을 다시 눌러야 한다.
 - `sts_event_region`은 백엔드 `BEDROCK_REGION`과 같아야 한다. 백엔드 리전을 바꾸면 이 값도 바꾼다.
-- 로컬 검사: `terraform fmt -check -recursive`, `terraform init -backend=false`, `terraform validate`. `infra/`와 `infra/github-oidc/`에서 각각 실행한다. PR CI에서는 Terraform을 실행하지 않는다. `main` 병합 뒤의 CD만 실행한다.
+- 로컬 검사: `terraform fmt -check -recursive`, `terraform init -backend=false`, `terraform validate`. `infra/`, `infra/github-oidc/`, `infra/vercel-oidc/`에서 각각 실행한다. PR CI에서는 Terraform을 실행하지 않는다. `main` 병합 뒤의 CD만 실행한다.
 - provider를 올릴 때는 `terraform providers lock -platform=windows_amd64 -platform=linux_amd64 -platform=darwin_arm64 -platform=darwin_amd64`로 잠금 파일을 갱신해 커밋한다.

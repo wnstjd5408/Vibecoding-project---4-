@@ -1,0 +1,7 @@
+# terraform.tfvars로 복사해 실제 값을 넣는다. terraform.tfvars는 커밋하지 않는다.
+
+# 이메일 @ 앞부분. infra/terraform.tfvars의 owner와 같은 값.
+owner = "OWNER"
+
+# Vercel 팀 URL의 슬러그(vercel.com/<여기>/...). 프로젝트 Settings → Security → Secure backend access with OIDC federation의 Team 모드 URL과 같다.
+vercel_team_slug = "TEAM-SLUG"
