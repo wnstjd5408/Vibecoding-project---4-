@@ -1,4 +1,5 @@
 import type { RouteObject } from 'react-router'
+import LoginPage from '../pages/LoginPage.tsx'
 import Placeholder from '../pages/Placeholder.tsx'
 import { userPaths } from './paths.ts'
 
@@ -8,6 +9,6 @@ export const userRoutes: RouteObject[] = [
   { path: userPaths.noteRead, element: <Placeholder screenId="F1-2" title="노트 읽기" ticket="MEG-74" /> },
   // TODO(MEG-108): 퀴즈 첫 화면(F3-3a)은 MEG-108에서 만든다. 그때 이 임시 빈 페이지를 교체한다.
   { path: userPaths.quiz, element: <Placeholder screenId="F3-3a" title="오늘의 퀴즈" ticket="MEG-108" /> },
-  { path: userPaths.login, element: <Placeholder screenId="F4-1" title="로그인" ticket="MEG-64" /> },
+  { path: userPaths.login, element: <LoginPage /> },
   { path: userPaths.myInfo, element: <Placeholder screenId="F4-5" title="내 정보" ticket="MEG-65" /> },
 ]
