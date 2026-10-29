@@ -379,3 +379,93 @@ def test_logout_during_an_auth_outage_still_clears_cookies(client, fake):
 
     assert response.status_code == 204
     assert all(c["max-age"] == "0" for c in set_cookies(response).values())
+
+
+# --- 코드 리뷰에서 나온 경우들 (2026-10-29) ---
+
+
+def test_logout_still_clears_cookies_when_auth_reports_a_config_error(client, fake, monkeypatch):
+    from app.supabase import SupabaseConfigError
+
+    cookies = set_cookies(login(client))
+
+    def broken(token):
+        raise SupabaseConfigError("auth logout status 405")
+
+    monkeypatch.setattr(fake, "sign_out", broken)
+    response = client.post("/api/auth/logout", headers={**origin(), **cookie_header(cookies)})
+
+    assert response.status_code == 204
+    assert all(c["max-age"] == "0" for c in set_cookies(response).values())
+
+
+def test_deactivated_user_after_a_refresh_gets_cleared_cookies_not_new_ones(client, fake):
+    from app.supabase import Profile
+
+    cookies = set_cookies(login(client))
+    fake.expire_access(cookies[SESSION_COOKIE]["value"])
+    fake.profiles[MEMBER] = Profile(role="member", is_active=False)
+
+    response = me(client, cookies)
+
+    assert response.json() == {"authenticated": False}
+    assert all(c["max-age"] == "0" for c in set_cookies(response).values())
+    # 갱신으로 생긴 세션도 Auth에서 끊겨 다시 활성화돼도 살아나지 않는다.
+    assert fake.sessions == {}
+
+
+def test_deactivated_user_with_a_live_access_token_is_cleared_and_revoked(client, fake):
+    from app.supabase import Profile
+
+    cookies = set_cookies(login(client))
+    fake.profiles[MEMBER] = Profile(role="member", is_active=False)
+
+    response = me(client, cookies)
+
+    assert response.json() == {"authenticated": False}
+    assert all(c["max-age"] == "0" for c in set_cookies(response).values())
+    assert not fake.session_alive(cookies[SESSION_COOKIE]["value"])
+
+
+def test_ipv6_addresses_in_one_64_share_the_login_ip_limit(client):
+    for i in range(30):
+        login(client, email=f"user{i}@example.test", password="x", ip=f"2001:db8:0:1::{i + 1:x}")
+
+    assert login(client, ip="2001:db8:0:1::ffff").status_code == 429
+    assert login(client, ip="2001:db8:0:2::1").status_code == 200
+
+
+def test_client_ip_is_forwarded_to_auth_on_login_and_refresh(client, fake):
+    cookies = set_cookies(login(client, ip="203.0.113.5"))
+    fake.expire_access(cookies[SESSION_COOKIE]["value"])
+    client.get("/api/me", headers={**cookie_header(cookies), "x-vercel-forwarded-for": "203.0.113.6"})
+
+    assert fake.forwarded == ["203.0.113.5", "203.0.113.6"]
+
+
+def test_logging_in_again_revokes_the_previous_session(client, fake):
+    first = set_cookies(login(client))
+
+    second = client.post(
+        "/api/auth/login",
+        json={"email": "member@example.test", "password": "right-pw"},
+        headers={**origin(), **cookie_header(first)},
+    )
+
+    assert second.status_code == 200
+    assert not fake.session_alive(first[SESSION_COOKIE]["value"])
+    assert fake.session_alive(set_cookies(second)[SESSION_COOKIE]["value"])
+
+
+def test_auth_config_error_on_login_is_500_and_not_counted_as_a_failure(client, fake, monkeypatch):
+    from app.supabase import SupabaseConfigError
+
+    def broken(email, password, forwarded_for=None):
+        raise SupabaseConfigError("auth token password status 401 error_code -")
+
+    monkeypatch.setattr(fake, "sign_in_with_password", broken)
+    response = login(client)
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "internal_error"
+    assert fake.hits(f"login_failure:{fake.keyed_hash('email:member@example.test')}", 15 * 60) == 0

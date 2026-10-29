@@ -51,12 +51,12 @@ class AuthSession:
     expires_in: int
 
 
-# 로그인·갱신 거절(계정 없음·비밀번호 틀림·이메일 미확인·폐기된 리프레시 토큰). 서버 장애와 구분한다.
-# 404는 넣지 않는다. 주소 설정 오류가 "비밀번호 틀림"으로 묻히지 않게 한다.
+# 사용자 쪽 거절(비밀번호 틀림·무효 토큰·끊긴 세션)이 올 수 있는 상태. 404는 넣지 않는다(주소 설정 오류).
 _AUTH_REJECTED = frozenset({400, 401, 403, 422})
-# 거절 상태 코드로 오지만 사용자 잘못이 아니라 프로젝트 설정 문제인 Auth 오류 코드.
+# 거절 상태로 오지만 사용자 잘못이 아니라 프로젝트 설정 문제인 Auth 오류 코드.
 # 예: 이메일 로그인이 꺼져 있으면 422 email_provider_disabled가 온다(supabase/config.toml [auth.email]).
 _AUTH_CONFIG_ERRORS = frozenset({"email_provider_disabled", "provider_disabled"})
+
 
 def _auth_error_code(response: httpx.Response) -> str | None:
     """Auth 오류 본문의 error_code. 본문이 JSON이 아니면 None이다. 메시지 원문은 쓰지 않는다."""
@@ -65,6 +65,22 @@ def _auth_error_code(response: httpx.Response) -> str | None:
     except (ValueError, AttributeError):
         return None
     return code if isinstance(code, str) else None
+
+
+def _is_user_rejection(response: httpx.Response, operation: str, extra: frozenset[int] = frozenset()) -> bool:
+    """Auth가 이 사용자·토큰을 거절했으면 True, 거절이 아니면 False다. 설정 오류면 예외를 낸다.
+
+    Auth 서버의 거절에는 늘 error_code가 있다(invalid_credentials, bad_jwt, session_not_found,
+    refresh_token_not_found 등, 2026-10-29 로컬 Auth로 확인). 게이트웨이가 API 키를 거절하면
+    error_code 없이 401 {"message": "Invalid API key"}가 온다(staging으로 확인). 이것을 사용자 거절로
+    보면 키가 틀렸을 때 모든 로그인이 "비밀번호 틀림"이 되고 모든 세션 쿠키가 지워지므로 설정 오류로 낸다.
+    """
+    if response.status_code not in _AUTH_REJECTED and response.status_code not in extra:
+        return False
+    code = _auth_error_code(response)
+    if code is None or code in _AUTH_CONFIG_ERRORS:
+        raise SupabaseConfigError(f"auth {operation} status {response.status_code} error_code {code or '-'}")
+    return True
 
 
 class SupabaseClient:
@@ -101,7 +117,7 @@ class SupabaseClient:
         if len(access_token) > _MAX_TOKEN_LENGTH or not _TOKEN_SHAPE.fullmatch(access_token):
             return None
         response = self._request("GET", "/auth/v1/user", headers=self._headers(access_token))
-        if response.status_code in (400, 401, 403):
+        if _is_user_rejection(response, "user"):
             return None
         if response.status_code != 200:
             raise SupabaseUnavailable(f"status {response.status_code}")
@@ -110,13 +126,14 @@ class SupabaseClient:
         except (ValueError, AttributeError):
             return None
 
-    def _token_grant(self, grant_type: str, body: dict[str, str]) -> AuthSession | None:
-        response = self._request(
-            "POST", "/auth/v1/token", params={"grant_type": grant_type}, json=body, headers=self._headers()
-        )
-        if response.status_code in _AUTH_REJECTED:
-            if _auth_error_code(response) in _AUTH_CONFIG_ERRORS:
-                raise SupabaseConfigError(f"auth token {grant_type} {_auth_error_code(response)}")
+    def _token_grant(self, grant_type: str, body: dict[str, str], forwarded_for: str | None) -> AuthSession | None:
+        headers = self._headers()
+        if forwarded_for:
+            # Auth의 IP별 제한이 서버 IP 하나에 몰리지 않게 사용자 IP를 넘긴다. secret key로 부를 때만 쓰이고,
+            # 프로젝트 설정(Authentication > Rate Limits > IP Address Forwarding)을 켜야 반영된다.
+            headers["Sb-Forwarded-For"] = forwarded_for
+        response = self._request("POST", "/auth/v1/token", params={"grant_type": grant_type}, json=body, headers=headers)
+        if _is_user_rejection(response, f"token {grant_type}"):
             return None
         if response.status_code != 200:
             # 5xx·일시 상태는 _request가 이미 SupabaseUnavailable로 바꿨다. 남은 4xx는 키·주소 설정 오류다.
@@ -133,17 +150,19 @@ class SupabaseClient:
             # 200인데 세션 모양이 아니면 Auth 쪽 이상이다. 본문 원문은 남기지 않는다.
             raise SupabaseUnavailable("malformed auth response") from None
 
-    def sign_in_with_password(self, email: str, password: str) -> AuthSession | None:
+    def sign_in_with_password(
+        self, email: str, password: str, forwarded_for: str | None = None
+    ) -> AuthSession | None:
         """맞으면 새 세션, 계정 없음·비밀번호 틀림이면 None이다. 둘을 구분하지 않는다."""
-        return self._token_grant("password", {"email": email, "password": password})
+        return self._token_grant("password", {"email": email, "password": password}, forwarded_for)
 
-    def refresh_session(self, refresh_token: str) -> AuthSession | None:
+    def refresh_session(self, refresh_token: str, forwarded_for: str | None = None) -> AuthSession | None:
         """리프레시 토큰으로 새 세션을 받는다. 만료·폐기된 토큰이면 None이다.
 
         Auth는 리프레시 토큰을 한 번 쓰면 새 토큰으로 바꾼다. 새 토큰을 쿠키에 저장하지 못하고 옛 토큰을
         다시 쓰면 Auth가 재사용으로 보고 세션 전체를 끊을 수 있다.
         """
-        return self._token_grant("refresh_token", {"refresh_token": refresh_token})
+        return self._token_grant("refresh_token", {"refresh_token": refresh_token}, forwarded_for)
 
     def sign_out(self, access_token: str) -> bool:
         """이 세션 하나(scope=local)를 끊는다. 이미 끊겼거나 토큰이 무효면 False다."""
@@ -154,8 +173,8 @@ class SupabaseClient:
         )
         if response.status_code in (200, 204):
             return True
-        # 404: 세션이나 사용자가 이미 없다
-        if response.status_code in _AUTH_REJECTED or response.status_code == 404:
+        # 404: 사용자가 이미 없다(user_not_found)
+        if _is_user_rejection(response, "logout", extra=frozenset({404})):
             return False
         raise SupabaseConfigError(f"auth logout status {response.status_code}")
 

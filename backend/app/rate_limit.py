@@ -5,8 +5,6 @@
 엔드포인트는 한도 값(RateRule)과 대상만 넘긴다.
 """
 
-import ipaddress
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -15,6 +13,7 @@ from fastapi import Depends, Request
 
 from app.auth import SessionUser, get_session_user
 from app.errors import ApiError
+from app.net import client_ip
 from app.supabase import SupabaseClient, get_supabase
 
 
@@ -63,25 +62,6 @@ class SupabaseCounterStore:
 
     def release(self, key: str, window_seconds: int) -> None:
         self._supabase.rpc("rate_limit_release", {"p_key": key, "p_window_seconds": window_seconds})
-
-
-def client_ip(request: Request) -> str:
-    """클라이언트 IP. 소켓 주소를 쓰고, Vercel 위에서만 Vercel이 넣는 헤더를 믿는다.
-
-    X-Forwarded-For는 클라이언트가 보낸 값이 앞에 붙을 수 있어 쓰지 않는다. x-vercel-forwarded-for도
-    Vercel 밖에서는 클라이언트가 위조할 수 있으므로 Vercel 환경(VERCEL 환경변수)에서만 믿는다.
-    """
-    candidates = []
-    if os.environ.get("VERCEL"):
-        candidates.append(request.headers.get("x-vercel-forwarded-for", "").split(",")[0].strip())
-    if request.client:
-        candidates.append(request.client.host)
-    for value in candidates:
-        try:
-            return str(ipaddress.ip_address(value))
-        except ValueError:
-            continue
-    return "unknown"
 
 
 class RateLimiter:

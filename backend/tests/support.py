@@ -33,6 +33,8 @@ class FakeSupabase:
     accounts: dict[str, tuple[str, str]] = field(default_factory=dict)
     auth_down: bool = False
     auth_calls: list[str] = field(default_factory=list)
+    # Auth 호출마다 넘긴 Sb-Forwarded-For 값
+    forwarded: list[str | None] = field(default_factory=list)
     _access_sid: dict[str, int] = field(default_factory=dict)
     _refresh_sid: dict[str, int] = field(default_factory=dict)
     _used_refresh: set[str] = field(default_factory=set)
@@ -74,8 +76,9 @@ class FakeSupabase:
         self._refresh_sid[refresh] = sid
         return AuthSession(access_token=access, refresh_token=refresh, user_id=user_id, expires_in=3600)
 
-    def sign_in_with_password(self, email: str, password: str) -> AuthSession | None:
+    def sign_in_with_password(self, email: str, password: str, forwarded_for: str | None = None) -> AuthSession | None:
         self._auth("password")
+        self.forwarded.append(forwarded_for)
         account = self.accounts.get(email.lower())
         if account is None or account[0] != password:
             return None
@@ -83,8 +86,9 @@ class FakeSupabase:
         self._sid_user[sid] = account[1]
         return self._issue(sid)
 
-    def refresh_session(self, refresh_token: str) -> AuthSession | None:
+    def refresh_session(self, refresh_token: str, forwarded_for: str | None = None) -> AuthSession | None:
         self._auth("refresh")
+        self.forwarded.append(forwarded_for)
         sid = self._refresh_sid.get(refresh_token)
         if sid is None or sid in self._revoked:
             return None
