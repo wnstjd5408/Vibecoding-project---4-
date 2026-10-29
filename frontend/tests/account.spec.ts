@@ -90,11 +90,12 @@ test('AC-2 로그아웃하면 방문자 상태가 되고 과목·노트 목록�
   await trigger(page).click()
   await page.getByRole('menuitem', { name: '로그아웃' }).click()
   await expect(page).toHaveURL(/\/$/)
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('F1-1')
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('과목')
   // 헤더가 로그인 버튼으로 바뀌었다
   await expect(page.getByRole('banner').getByRole('link', { name: '로그인' })).toBeVisible()
   await expect(trigger(page)).toHaveCount(0)
   // useAuth 상태도 방문자다(앱 안 링크로만 옮겨 상태를 이어서 읽는다)
+  await page.getByRole('region', { name: '노트 목록' }).getByRole('link').first().click()
   await page.getByRole('link', { name: '공통 기반 샘플' }).click()
   await expect(page.getByText('현재 상태:')).toContainText('방문자')
 })

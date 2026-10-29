@@ -30,7 +30,7 @@ export type NoteListResponse = {
   notes: {
     id: number
     title: string
-    studied_on: string
+    studied_on: string | null
     subjects: { id: number; name: string }[]
     parent_note_id: number | null
     is_published?: boolean
