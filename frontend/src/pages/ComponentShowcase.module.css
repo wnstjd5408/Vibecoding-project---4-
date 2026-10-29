@@ -107,26 +107,8 @@
   padding: 0 var(--space-4) var(--space-4);
 }
 
-.cardBadges {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
-}
 
-.cardTitle {
-  margin: 0 0 var(--space-3);
-  font-size: 17px;
-  line-height: 26px;
-  font-weight: 600;
-}
 
-.cardActions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  margin-top: var(--space-3);
-}
 
 .body {
   margin: 0 0 var(--space-4);
@@ -180,14 +162,14 @@
   line-height: 22px;
 }
 
-/* 선택된 글자(SelectionAction이 이 요소 기준으로 아래에 뜬다) */
-.selected {
+
+/* 글자를 골라 SelectionAction이 뜨는 자리. 버튼은 이 상자 기준으로 놓인다 */
+.selectionBox {
   position: relative;
-  display: inline-block;
-  /* 선택은 형광(사전 용어 전용)이 아니라 surface-300 칠과 점선 밑줄로 보인다 */
-  background: var(--surface-300);
-  border-radius: var(--radius-sm);
-  text-decoration: underline dashed;
-  text-decoration-thickness: 2px;
-  text-underline-offset: 3px;
+  padding-bottom: 56px;
+}
+
+/* 줄바꿈이 잘 보이도록 폭을 좁힌 본문 */
+.narrow {
+  max-width: 190px;
 }

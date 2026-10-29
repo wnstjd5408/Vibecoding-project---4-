@@ -17,6 +17,7 @@
   background: var(--surface-100);
   color: var(--ink);
   font: inherit;
+  /* 디자인 시스템 body-sm은 14px이지만 입력 칸은 16px로 둔다. iOS Safari가 16px 미만 입력 칸을 누르면 화면을 확대하기 때문이다(2026-10-29 김준성 결정). */
   font-size: 16px;
   line-height: 26px;
 }

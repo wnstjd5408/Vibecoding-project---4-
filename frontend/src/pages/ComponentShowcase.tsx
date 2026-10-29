@@ -1,7 +1,7 @@
 // 공통 컴포넌트를 한 페이지에 모아 디자인(목업 v0.2)과 나란히 비교하는 개발용 화면(MEG-70). 제품 화면이 아니다.
 // 토큰 → 부품 → 시트 → 화면 조립 순서다. 라이트·다크 토큰을 위쪽 버튼으로 바꿔 볼 수 있다.
-import { useState } from 'react'
-import type { ReactNode } from 'react'
+import { useRef, useState } from 'react'
+import type { MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import {
   AiBadge,
   AppHeader,
@@ -25,6 +25,7 @@ import { Chip } from '../components/Chip.tsx'
 import { IconButton, IconLinkButton } from '../components/IconButton.tsx'
 import { AccountIcon, ExpandIcon } from '../components/icons.tsx'
 import { devPaths, noteReadPath } from '../routes/paths.ts'
+import { cx } from '../components/cx.ts'
 import styles from './ComponentShowcase.module.css'
 
 const COLORS = [
@@ -78,6 +79,22 @@ export default function ComponentShowcase() {
   const [sheet, setSheet] = useState<SheetKind>(null)
   const [sheetFavorite, setSheetFavorite] = useState(false)
   const [blockedClicks, setBlockedClicks] = useState(0)
+  const selectionBox = useRef<HTMLDivElement>(null)
+  const [selectionPos, setSelectionPos] = useState<{ top: number; left: number } | null>(null)
+
+  // 글자를 고르면 선택 영역 바로 아래 위치를 읽어 SelectionAction에 넘긴다(본문 DOM은 감싸지 않는다).
+  function handleSelect(event: ReactMouseEvent | ReactKeyboardEvent) {
+    if ((event.target as HTMLElement).closest('button')) return
+    const selection = window.getSelection()
+    const box = selectionBox.current
+    if (!selection || selection.isCollapsed || !box || !box.contains(selection.anchorNode)) {
+      setSelectionPos(null)
+      return
+    }
+    const range = selection.getRangeAt(0).getBoundingClientRect()
+    const base = box.getBoundingClientRect()
+    setSelectionPos({ top: range.bottom - base.top + 8, left: range.left - base.left })
+  }
 
   return (
     <div className={styles.page} data-theme={theme}>
@@ -201,22 +218,29 @@ export default function ComponentShowcase() {
               <DifficultyChip level="high" />
             </div>
           </Row>
-          <Row label="TermLink · 본문 속 사전 용어(누르면 시트가 열린다)">
+          <Row label="TermLink · 본문 속 사전 용어(<a href>, 누르면 주소는 그대로고 시트가 열린다)">
             <p className={styles.body}>
-              브라우저가 주소를 입력받으면 먼저 <TermLink onClick={() => setSheet('dictionary')}>DNS</TermLink>에 물어 서버의
-              위치를 찾아요.
+              브라우저가 주소를 입력받으면 먼저{' '}
+              <TermLink href="#dns" onClick={() => setSheet('dictionary')}>
+                DNS
+              </TermLink>
+              에 물어 서버의 위치를 찾아요.
             </p>
           </Row>
-          <Row label="SelectionAction · 글자를 고르면 선택 영역 아래에 뜨는 버튼">
-            <p className={styles.body}>
-              같은 요청이 반복되면{' '}
-              <span className={styles.selected}>
-                캐시
-                <SelectionAction onClick={() => setSheet('ai')} />
-              </span>
-              가 이전 응답을 다시 써서 시간을 줄여요.
+          <Row label="TermLink · 여러 줄로 나뉘는 용어(칠과 밑줄이 줄마다 이어진다)">
+            <p className={cx(styles.body, styles.narrow)}>
+              요청을 받으면 먼저{' '}
+              <TermLink href="#resolver" onClick={() => setSheet('dictionary')}>
+                도메인 이름을 숫자 주소로 바꾸는 이름 찾기 서비스
+              </TermLink>
+              를 거쳐요.
             </p>
-            <div style={{ height: 52 }} aria-hidden="true" />
+          </Row>
+          <Row label="SelectionAction · 아래 글자를 끌어서 골라 보세요(선택 영역 위치를 읽어 버튼 위치를 넘긴다)">
+            <div ref={selectionBox} className={styles.selectionBox} onMouseUp={handleSelect} onKeyUp={handleSelect}>
+              <p className={styles.body}>같은 요청이 반복되면 캐시가 이전 응답을 다시 써서 시간을 줄여요.</p>
+              {selectionPos ? <SelectionAction top={selectionPos.top} left={selectionPos.left} onClick={() => setSheet('ai')} /> : null}
+            </div>
           </Row>
           <Row label="(내부용) AiBox · AI가 만든 내용을 감싸는 점선 상자">
             <AiBox label="AI 생성 설명">
@@ -236,13 +260,22 @@ export default function ComponentShowcase() {
             </div>
           </Row>
           <Row label="QuizCard (퀴즈 문항 카드)">
-            <QuizCard>
-              <div className={styles.cardBadges}>
-                <AiBadge />
-                <DifficultyChip level="low" />
-              </div>
-              <h3 className={styles.cardTitle}>HTTP와 HTTPS의 차이를 한 문장으로 말해 보세요.</h3>
-              <p className={styles.bodySmall}>합성 문구 예시예요.</p>
+            <QuizCard
+              badges={
+                <>
+                  <AiBadge />
+                  <DifficultyChip level="low" />
+                </>
+              }
+              title="HTTP와 HTTPS의 차이를 한 문장으로 말해 보세요."
+              actions={
+                <>
+                  <Button variant="primary">답하기</Button>
+                  <Button variant="report">틀림 신고</Button>
+                </>
+              }
+            >
+              <TextField label="내 답" multiline placeholder="답을 입력해요" />
             </QuizCard>
           </Row>
           <Row label="StateMessage · 빈 상태(F3-3b 문구)">
@@ -339,17 +372,22 @@ export default function ComponentShowcase() {
           <Row label="F3-3a 퀴즈 문항 조립">
             <div className={styles.frame}>
               <div className={styles.frameBody}>
-                <QuizCard>
-                  <div className={styles.cardBadges}>
-                    <AiBadge />
-                    <DifficultyChip level="mid" />
-                  </div>
-                  <h3 className={styles.cardTitle}>DNS를 한 문장으로 설명해 보세요.</h3>
+                <QuizCard
+                  badges={
+                    <>
+                      <AiBadge />
+                      <DifficultyChip level="mid" />
+                    </>
+                  }
+                  title="DNS를 한 문장으로 설명해 보세요."
+                  actions={
+                    <>
+                      <Button variant="primary">답하기</Button>
+                      <Button variant="report">틀림 신고</Button>
+                    </>
+                  }
+                >
                   <TextField label="내 답" multiline placeholder="답을 입력해요" />
-                  <div className={styles.cardActions}>
-                    <Button variant="primary">답하기</Button>
-                    <Button variant="report">틀림 신고</Button>
-                  </div>
                 </QuizCard>
               </div>
             </div>
