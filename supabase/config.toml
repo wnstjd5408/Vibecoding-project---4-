@@ -218,8 +218,9 @@ web3 = 30
 # secret = ""
 
 [auth.email]
-# Allow/disallow new user signups via email to your project.
-enable_signup = false
+# 이메일 제공자 스위치다. false면 가입뿐 아니라 이메일 로그인 자체가 꺼진다(422 email_provider_disabled).
+# 자체 가입 차단은 위 [auth] enable_signup = false가 맡는다(D-016, 운영자가 계정 발급). MEG-63에서 확인.
+enable_signup = true
 # If enabled, a user will be required to confirm any email change on both the old, and new email
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true

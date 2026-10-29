@@ -30,9 +30,21 @@ def test_auth_user_check_uses_the_session_token_not_the_secret_key_as_bearer():
     }
 
 
-@pytest.mark.parametrize("status", [400, 401, 403])
-def test_rejected_token_is_no_user(status):
-    assert client_with(lambda r: httpx.Response(status, json={})).get_auth_user_id(JWT) is None
+# Auth 서버의 거절에는 error_code가 있다(2026-10-29 로컬 Auth로 확인한 값).
+@pytest.mark.parametrize("status, code", [(403, "bad_jwt"), (403, "session_not_found"), (401, "no_authorization")])
+def test_rejected_token_is_no_user(status, code):
+    body = {"code": status, "error_code": code, "msg": "rejected"}
+    assert client_with(lambda r: httpx.Response(status, json=body)).get_auth_user_id(JWT) is None
+
+
+# 게이트웨이가 API 키를 거절하면 error_code 없이 401이 온다(staging으로 확인한 모양).
+INVALID_KEY = {"message": "Invalid API key", "hint": "Double check your API key."}
+
+
+def test_invalid_api_key_on_user_check_is_a_config_error_not_a_logged_out_user():
+    # 사용자 거절로 보면 키가 틀렸을 때 모든 사용자의 세션 쿠키가 지워진다.
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(401, json=INVALID_KEY)).get_auth_user_id(JWT)
 
 
 def test_malformed_auth_body_is_no_user():
@@ -59,10 +71,15 @@ def test_profile_lookup_filters_by_user_id():
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen["params"] = dict(request.url.params)
-        return httpx.Response(200, json=[{"role": "operator", "is_active": True}])
+        return httpx.Response(200, json=[{"role": "operator", "is_active": True, "display_name": "Ops"}])
 
-    assert client_with(handler).get_profile(USER_ID) == Profile(role="operator", is_active=True)
-    assert seen["params"] == {"user_id": f"eq.{USER_ID}", "select": "role,is_active", "limit": "1"}
+    assert client_with(handler).get_profile(USER_ID) == Profile(role="operator", is_active=True, display_name="Ops")
+    assert seen["params"] == {"user_id": f"eq.{USER_ID}", "select": "role,is_active,display_name", "limit": "1"}
+
+
+def test_profile_without_display_name_is_none_name():
+    profile = client_with(lambda r: httpx.Response(200, json=[{"role": "member", "is_active": True, "display_name": None}]))
+    assert profile.get_profile(USER_ID).display_name is None
 
 
 def test_missing_profile_row_is_none():
@@ -179,3 +196,140 @@ def test_realistic_large_payload_segment_is_accepted():
     token = "a" * 40 + "." + "b" * 2800 + "." + "c" * 86
 
     assert client_with(lambda r: httpx.Response(200, json={"id": USER_ID})).get_auth_user_id(token) == USER_ID
+
+
+# --- MEG-63: 로그인·갱신·로그아웃 Auth 호출 ---
+
+SESSION_BODY = {
+    "access_token": JWT,
+    "refresh_token": "refresh-one",
+    "expires_in": 3600,
+    "token_type": "bearer",
+    "user": {"id": USER_ID, "email": "member@example.test"},
+}
+
+
+def test_password_sign_in_posts_to_the_token_endpoint_with_the_secret_key():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["body"] = request.read().decode()
+        seen["apikey"] = request.headers["apikey"]
+        return httpx.Response(200, json=SESSION_BODY)
+
+    session = client_with(handler).sign_in_with_password("member@example.test", "pw")
+
+    assert session.user_id == USER_ID
+    assert session.access_token == JWT
+    assert session.refresh_token == "refresh-one"
+    assert session.expires_in == 3600
+    assert seen["url"] == "https://project.supabase.co/auth/v1/token?grant_type=password"
+    assert '"email":"member@example.test"' in seen["body"].replace(" ", "")
+    assert seen["apikey"] == "sb_secret_test"
+
+
+@pytest.mark.parametrize("status, code", [(400, "invalid_credentials"), (400, "email_not_confirmed"), (422, "validation_failed")])
+def test_rejected_sign_in_is_none(status, code):
+    response = {"code": status, "error_code": code, "msg": "Invalid login credentials"}
+    assert client_with(lambda r: httpx.Response(status, json=response)).sign_in_with_password("a@b.c", "x") is None
+
+
+@pytest.mark.parametrize("call", ["sign_in", "refresh"])
+def test_invalid_api_key_on_token_grant_is_a_config_error_not_a_wrong_password(call):
+    # 키가 틀렸을 때 모든 로그인이 "비밀번호 틀림"이 되고 계정 실패 횟수를 쓰는 것을 막는다.
+    client = client_with(lambda r: httpx.Response(401, json=INVALID_KEY))
+    with pytest.raises(SupabaseConfigError):
+        client.sign_in_with_password("a@b.c", "x") if call == "sign_in" else client.refresh_session("r")
+
+
+def test_forwarded_ip_is_sent_only_when_given():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("sb-forwarded-for"))
+        return httpx.Response(200, json=SESSION_BODY)
+
+    client = client_with(handler)
+    client.sign_in_with_password("a@b.c", "x", "203.0.113.7")
+    client.refresh_session("r", "2001:db8::1")
+    client.sign_in_with_password("a@b.c", "x")
+
+    assert seen == ["203.0.113.7", "2001:db8::1", None]
+
+
+def test_sign_in_server_error_is_unavailable():
+    with pytest.raises(SupabaseUnavailable):
+        client_with(lambda r: httpx.Response(502)).sign_in_with_password("a@b.c", "x")
+
+
+def test_sign_in_unexpected_client_error_is_a_config_error_not_a_wrong_password():
+    # 주소 설정 오류(404)가 "비밀번호 틀림"으로 묻히지 않는다.
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(404, json={})).sign_in_with_password("a@b.c", "x")
+
+
+def test_malformed_session_body_is_unavailable():
+    body = {**SESSION_BODY, "user": {"id": "not-a-uuid"}}
+    with pytest.raises(SupabaseUnavailable):
+        client_with(lambda r: httpx.Response(200, json=body)).sign_in_with_password("a@b.c", "x")
+
+
+def test_refresh_posts_the_refresh_token_grant():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["body"] = request.read().decode()
+        return httpx.Response(200, json={**SESSION_BODY, "refresh_token": "refresh-two"})
+
+    session = client_with(handler).refresh_session("refresh-one")
+
+    assert session.refresh_token == "refresh-two"
+    assert seen["url"] == "https://project.supabase.co/auth/v1/token?grant_type=refresh_token"
+    assert '"refresh_token":"refresh-one"' in seen["body"].replace(" ", "")
+
+
+def test_revoked_refresh_token_is_none():
+    body = {"code": 400, "error_code": "refresh_token_not_found", "msg": "Invalid Refresh Token"}
+    assert client_with(lambda r: httpx.Response(400, json=body)).refresh_session("old") is None
+
+
+def test_sign_out_uses_the_user_token_and_local_scope():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["authorization"] = request.headers["authorization"]
+        return httpx.Response(204)
+
+    assert client_with(handler).sign_out(JWT) is True
+    assert seen == {
+        "url": "https://project.supabase.co/auth/v1/logout?scope=local",
+        "authorization": f"Bearer {JWT}",
+    }
+
+
+@pytest.mark.parametrize("status, code", [(403, "session_not_found"), (403, "bad_jwt"), (404, "user_not_found")])
+def test_sign_out_of_a_dead_session_is_false(status, code):
+    body = {"code": status, "error_code": code, "msg": "gone"}
+    assert client_with(lambda r: httpx.Response(status, json=body)).sign_out(JWT) is False
+
+
+def test_sign_out_with_an_invalid_api_key_is_a_config_error():
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(401, json=INVALID_KEY)).sign_out(JWT)
+
+
+def test_sign_out_with_a_malformed_token_sends_nothing():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must not call Auth")
+
+    assert client_with(handler).sign_out("not a token") is False
+
+
+def test_disabled_email_provider_is_a_config_error_not_a_wrong_password():
+    # 422로 오지만 사용자 잘못이 아니다. invalid_credentials로 묻히면 설정 오류를 찾지 못한다.
+    body = {"code": 422, "error_code": "email_provider_disabled", "msg": "Email logins are disabled"}
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(422, json=body)).sign_in_with_password("a@b.c", "x")

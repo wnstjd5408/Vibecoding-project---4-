@@ -3,8 +3,11 @@
 import os
 import re
 
-# 세션 쿠키 이름. 값은 Supabase 액세스 토큰이다(Q-N10, MEG-62 구현 결정).
+# 세션 쿠키 두 개(Q-N10, 2026-10-29 사람 결정). 액세스 토큰과, 서명한 만료 시각을 붙인 리프레시 토큰이다.
 SESSION_COOKIE = "cs_session"
+REFRESH_COOKIE = "cs_refresh"
+# 세션 최대 수명. 로그인 시점부터 고정이고 갱신해도 늘지 않는다(2026-10-29 사람 결정).
+SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
 DEFAULT_ALLOWED_ORIGINS = "http://localhost:5173"
 

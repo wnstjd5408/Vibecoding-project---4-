@@ -1,6 +1,6 @@
 """Supabase 호출 최소 래퍼. FastAPI만 secret key로 부른다(D-007).
 
-이 파일이 하는 일은 세 가지다: 세션 토큰 확인(Auth), profiles 조회(REST), SQL 함수 호출(RPC).
+이 파일이 하는 일: 로그인·세션 갱신·로그아웃·세션 토큰 확인(Auth), profiles 조회(REST), SQL 함수 호출(RPC).
 """
 
 import hashlib
@@ -37,6 +37,50 @@ class SupabaseConfigError(Exception):
 class Profile:
     role: str
     is_active: bool
+    display_name: str | None = None
+
+
+@dataclass(frozen=True)
+class AuthSession:
+    """Auth가 발급한 세션. 토큰은 쿠키에만 담고 응답 본문·로그에는 남기지 않는다."""
+
+    access_token: str
+    refresh_token: str
+    user_id: str
+    # 액세스 토큰이 유효한 초
+    expires_in: int
+
+
+# 사용자 쪽 거절(비밀번호 틀림·무효 토큰·끊긴 세션)이 올 수 있는 상태. 404는 넣지 않는다(주소 설정 오류).
+_AUTH_REJECTED = frozenset({400, 401, 403, 422})
+# 거절 상태로 오지만 사용자 잘못이 아니라 프로젝트 설정 문제인 Auth 오류 코드.
+# 예: 이메일 로그인이 꺼져 있으면 422 email_provider_disabled가 온다(supabase/config.toml [auth.email]).
+_AUTH_CONFIG_ERRORS = frozenset({"email_provider_disabled", "provider_disabled"})
+
+
+def _auth_error_code(response: httpx.Response) -> str | None:
+    """Auth 오류 본문의 error_code. 본문이 JSON이 아니면 None이다. 메시지 원문은 쓰지 않는다."""
+    try:
+        code = response.json().get("error_code")
+    except (ValueError, AttributeError):
+        return None
+    return code if isinstance(code, str) else None
+
+
+def _is_user_rejection(response: httpx.Response, operation: str, extra: frozenset[int] = frozenset()) -> bool:
+    """Auth가 이 사용자·토큰을 거절했으면 True, 거절이 아니면 False다. 설정 오류면 예외를 낸다.
+
+    Auth 서버의 거절에는 늘 error_code가 있다(invalid_credentials, bad_jwt, session_not_found,
+    refresh_token_not_found 등, 2026-10-29 로컬 Auth로 확인). 게이트웨이가 API 키를 거절하면
+    error_code 없이 401 {"message": "Invalid API key"}가 온다(staging으로 확인). 이것을 사용자 거절로
+    보면 키가 틀렸을 때 모든 로그인이 "비밀번호 틀림"이 되고 모든 세션 쿠키가 지워지므로 설정 오류로 낸다.
+    """
+    if response.status_code not in _AUTH_REJECTED and response.status_code not in extra:
+        return False
+    code = _auth_error_code(response)
+    if code is None or code in _AUTH_CONFIG_ERRORS:
+        raise SupabaseConfigError(f"auth {operation} status {response.status_code} error_code {code or '-'}")
+    return True
 
 
 class SupabaseClient:
@@ -73,7 +117,7 @@ class SupabaseClient:
         if len(access_token) > _MAX_TOKEN_LENGTH or not _TOKEN_SHAPE.fullmatch(access_token):
             return None
         response = self._request("GET", "/auth/v1/user", headers=self._headers(access_token))
-        if response.status_code in (400, 401, 403):
+        if _is_user_rejection(response, "user"):
             return None
         if response.status_code != 200:
             raise SupabaseUnavailable(f"status {response.status_code}")
@@ -82,13 +126,65 @@ class SupabaseClient:
         except (ValueError, AttributeError):
             return None
 
+    def _token_grant(self, grant_type: str, body: dict[str, str], forwarded_for: str | None) -> AuthSession | None:
+        headers = self._headers()
+        if forwarded_for:
+            # Auth의 IP별 제한이 서버 IP 하나에 몰리지 않게 사용자 IP를 넘긴다. secret key로 부를 때만 쓰이고,
+            # 프로젝트 설정(Authentication > Rate Limits > IP Address Forwarding)을 켜야 반영된다.
+            headers["Sb-Forwarded-For"] = forwarded_for
+        response = self._request("POST", "/auth/v1/token", params={"grant_type": grant_type}, json=body, headers=headers)
+        if _is_user_rejection(response, f"token {grant_type}"):
+            return None
+        if response.status_code != 200:
+            # 5xx·일시 상태는 _request가 이미 SupabaseUnavailable로 바꿨다. 남은 4xx는 키·주소 설정 오류다.
+            raise SupabaseConfigError(f"auth token {grant_type} status {response.status_code}")
+        try:
+            data = response.json()
+            return AuthSession(
+                access_token=str(data["access_token"]),
+                refresh_token=str(data["refresh_token"]),
+                user_id=str(uuid.UUID(str(data["user"]["id"]))),
+                expires_in=int(data["expires_in"]),
+            )
+        except (ValueError, KeyError, TypeError):
+            # 200인데 세션 모양이 아니면 Auth 쪽 이상이다. 본문 원문은 남기지 않는다.
+            raise SupabaseUnavailable("malformed auth response") from None
+
+    def sign_in_with_password(
+        self, email: str, password: str, forwarded_for: str | None = None
+    ) -> AuthSession | None:
+        """맞으면 새 세션, 계정 없음·비밀번호 틀림이면 None이다. 둘을 구분하지 않는다."""
+        return self._token_grant("password", {"email": email, "password": password}, forwarded_for)
+
+    def refresh_session(self, refresh_token: str, forwarded_for: str | None = None) -> AuthSession | None:
+        """리프레시 토큰으로 새 세션을 받는다. 만료·폐기된 토큰이면 None이다.
+
+        Auth는 리프레시 토큰을 한 번 쓰면 새 토큰으로 바꾼다. 새 토큰을 쿠키에 저장하지 못하고 옛 토큰을
+        다시 쓰면 Auth가 재사용으로 보고 세션 전체를 끊을 수 있다.
+        """
+        return self._token_grant("refresh_token", {"refresh_token": refresh_token}, forwarded_for)
+
+    def sign_out(self, access_token: str) -> bool:
+        """이 세션 하나(scope=local)를 끊는다. 이미 끊겼거나 토큰이 무효면 False다."""
+        if len(access_token) > _MAX_TOKEN_LENGTH or not _TOKEN_SHAPE.fullmatch(access_token):
+            return False
+        response = self._request(
+            "POST", "/auth/v1/logout", params={"scope": "local"}, headers=self._headers(access_token)
+        )
+        if response.status_code in (200, 204):
+            return True
+        # 404: 사용자가 이미 없다(user_not_found)
+        if _is_user_rejection(response, "logout", extra=frozenset({404})):
+            return False
+        raise SupabaseConfigError(f"auth logout status {response.status_code}")
+
     def get_profile(self, user_id: str) -> Profile | None:
         """profiles 행이 없으면 None이다. user_id는 UUID 형식으로 검증한 값만 받는다."""
         user_id = str(uuid.UUID(user_id))
         response = self._request(
             "GET",
             "/rest/v1/profiles",
-            params={"user_id": f"eq.{user_id}", "select": "role,is_active", "limit": "1"},
+            params={"user_id": f"eq.{user_id}", "select": "role,is_active,display_name", "limit": "1"},
             headers=self._headers(),
         )
         if response.status_code != 200:
@@ -97,7 +193,8 @@ class SupabaseClient:
         rows = response.json()
         if not rows:
             return None
-        return Profile(role=rows[0]["role"], is_active=bool(rows[0]["is_active"]))
+        row = rows[0]
+        return Profile(role=row["role"], is_active=bool(row["is_active"]), display_name=row.get("display_name"))
 
     def keyed_hash(self, value: str) -> str:
         """이메일·IP 같은 원문 대신 저장할 키. secret key로 서명한 해시라 값을 되돌려 추측하기 어렵다."""
