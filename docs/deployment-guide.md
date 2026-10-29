@@ -24,7 +24,9 @@ Vercel 프로젝트의 **Settings → Environment Variables**에서 환경을 �
 |---|---|---|---|
 | `ALLOWED_ORIGINS` | `<production-origin>` | `<staging-origin>` | 필요한 경우 해당 테스트 출처만 명시 |
 | `VITE_API_MOCK` | 미설정 또는 `false` | 미설정 또는 `false` | 실제 연동 검증은 미설정 또는 `false` |
-| DB·Auth·AI 자격증명 | 운영 전용 | 필요 시 별도 테스트 자격증명 | 승인된 테스트 자격증명만 사용 |
+| `SUPABASE_URL` | 운영 프로젝트 URL | 스테이징 프로젝트 URL | 필요한 경우 승인된 테스트 프로젝트만 사용 |
+| `SUPABASE_SECRET_KEY` | 운영 프로젝트 Secret Key | 스테이징 프로젝트 Secret Key | 운영 키 사용 금지 |
+| AI 자격증명 | 운영 전용 | 필요 시 별도 테스트 자격증명 | 승인된 테스트 자격증명만 사용 |
 
 1. Production의 `ALLOWED_ORIGINS`를 설정한다.
 2. Preview를 선택하고 Git Branch를 `staging`으로 지정해 같은 이름의 변수를 등록한다. 같은 이름의 Preview 공통값보다 브랜치별 값이 우선한다.
@@ -32,6 +34,27 @@ Vercel 프로젝트의 **Settings → Environment Variables**에서 환경을 �
 4. 변경한 환경과 브랜치를 대상으로 새 배포를 만든다. 환경변수 변경은 기존 배포에 소급 적용되지 않는다. [Vercel 환경변수](https://vercel.com/docs/environment-variables)
 
 `ALLOWED_ORIGINS`는 `scheme://host[:port]` 목록을 쉼표로 구분한다. 경로·질의 문자열·와일드카드는 허용하지 않는다. 상태 변경 요청의 Origin 검사와 CORS에 사용된다. Production에서 누락하면 서버 시작 자체가 실패한다. Preview에서 누락하면 로컬 개발 출처가 기본값이므로, GET 헬스체크 성공만으로 Preview의 상태 변경 API가 정상이라고 판단하지 않는다. 기준 구현은 [`backend/app/config.py`](../backend/app/config.py)다.
+
+### Supabase 운영·스테이징 연결
+
+Supabase는 서울(`ap-northeast-2`)의 별도 프로젝트 두 개로 운영과 스테이징을 구분한다. Vercel 함수 지역은 기존 도쿄(`hnd1`) 설정을 유지한다. Supabase 프로젝트를 분리하면 DB·Auth·Storage도 각각 별도로 관리되며, 환경변수 등록만으로 스키마나 데이터가 복제되지는 않는다.
+
+1. 각 Supabase 프로젝트의 **Settings → API Keys**에서 백엔드용 Secret Key를 확인하거나 생성한다. Supabase 키의 표시 이름은 용도를 구분하는 이름으로 정한다(예: `vercel-production-backend`, `vercel-staging-backend`).
+2. Vercel에는 두 항목 모두 **동일한 변수 이름 `SUPABASE_SECRET_KEY`**로 등록한다. 운영 키는 **Production만**, 스테이징 키는 **Preview Branches → staging만** 선택한다. 스테이징 항목에 Production이 함께 선택되어 있지 않은지 확인한다. 표시 이름과 애플리케이션이 읽는 환경변수 이름은 서로 다르다.
+3. 키는 사람이 Vercel에 직접 입력하고 타입은 **Secret**으로 저장한다. `SUPABASE_URL`은 각 키와 같은 프로젝트의 URL을 **Config**로 등록한다. 키 값은 채팅·이슈·PR·로그에 기록하지 않고, 프론트엔드 변수로 전달하지 않는다.
+4. 변수 이름·타입·환경·브랜치 범위를 확인한 뒤 각 환경을 재배포한다. Secret Key를 읽어 확인하는 대신 실제 백엔드 요청의 성공 여부로 인증과 연결을 검증한다. [Supabase API Keys](https://supabase.com/docs/guides/getting-started/api-keys)
+
+이전할 때는 원본의 테이블별 행 수, Auth 사용자, Storage 버킷·파일과 마이그레이션 이력을 먼저 확인한다. 사용자 데이터가 없더라도 스키마 적용 후 테이블·RLS·함수·제약을 대조한다. 데이터가 있으면 승인된 백업·복원 절차와 별도 Storage 파일 이전이 필요하다. 운영 사용자 데이터를 스테이징에 자동 복제하지 않는다. 원본은 이전 검증과 사람의 전환 수락 전까지 보존한다.
+
+검증은 다음 세 단계로 나누어 기록한다.
+
+| 단계 | 확인하는 것 | 성공만으로 보장하지 않는 것 |
+|---|---|---|
+| 설정 | 변수 이름·타입·환경 범위, 스키마 대조 | 입력한 키의 유효성, 실제 DB 연결 |
+| 서버 기동 | 배포 Ready 및 `/api/health`의 200 JSON 응답 | DB·Auth·AI 연결 |
+| 실제 연동 | 해당 환경 백엔드에서 승인된 DB 조회와 Auth 흐름 수행 | 다른 환경의 정상 동작 |
+
+DB 조회 엔드포인트가 아직 없으면 실제 연결 검증은 미완료로 남긴다. 헬스체크 계약을 외부 의존성 검사로 바꾸거나, 키 등록만으로 연결 성공을 선언하지 않는다.
 
 ## 배포와 운영 반영
 
@@ -92,6 +115,8 @@ Ready 상태는 빌드 완료를 나타내며 함수 호출 성공을 보장하�
 
 ## 검증 상태와 남은 작업
 
-2026-10-28 내부 작업 기록 기준으로 Preview·Staging 헬스체크 성공이 확인됐다. Production은 `ALLOWED_ORIGINS` 누락에 따른 서버 시작 실패가 확인됐으며, 환경별 변수 설정·재배포와 운영 재검증은 완료로 기록되지 않았다. DB·Auth·AI 전체 연결도 이 헬스체크로 검증하지 않았다.
+2026-10-29 내부 작업 기록 기준으로 운영·스테이징의 Supabase 스키마 구성과 `ALLOWED_ORIGINS`·`SUPABASE_URL`·`SUPABASE_SECRET_KEY`의 환경별 등록이 확인됐다. 재배포 후 두 환경 모두 Ready 및 `/api/health`의 200 JSON 응답을 확인했다. 이전에 기록된 Production의 `ALLOWED_ORIGINS` 누락 장애는 해소됐다.
+
+실제 Vercel 백엔드의 DB 조회, Secret Key 유효성, Auth 설정·로그인 흐름 및 AI 필수 환경변수·연결은 아직 검증 완료로 기록하지 않았다. 전체 완료 여부는 이 항목들과 사람의 수락을 포함해 판단한다.
 
 이 문서의 작성 또는 병합은 위 작업의 완료 선언이 아니다. 최신 상태는 내부 배포 기록에서 확인하고, 운영 설정과 재배포 후 검증 증거가 모인 뒤 사람이 해당 이슈의 완료를 수락한다. 플랫폼 정책의 공식 문서는 Context7과 원문으로 2026-10-28 확인했다.
