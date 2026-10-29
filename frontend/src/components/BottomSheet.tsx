@@ -64,9 +64,9 @@ export function BottomSheet({ open, onClose, title, badge, closeLabel = '닫기'
         event.preventDefault()
         onClose()
       }}
-      // 브라우저가 스스로 닫은 경우(open은 아직 true)에도 부모 상태를 맞춘다.
+      // 브라우저가 스스로 닫은 경우에만 부모 상태를 맞춘다. 코드가 닫았거나(정리 함수·StrictMode) 이미 다시 열렸으면 알리지 않는다.
       onClose={() => {
-        if (open) onClose()
+        if (open && !dialogRef.current?.open) onClose()
       }}
     >
       <Scrim onClick={onClose} />

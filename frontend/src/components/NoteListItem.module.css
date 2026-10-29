@@ -24,3 +24,7 @@
   line-height: 18px;
   font-weight: 500;
 }
+
+.item:focus-visible {
+  outline-offset: -2px;
+}

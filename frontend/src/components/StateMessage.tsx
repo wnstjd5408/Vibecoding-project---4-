@@ -23,7 +23,6 @@ export function StateMessage({ kind, title, description, action, headingLevel = 
     <section
       className={styles.box}
       role={role}
-      aria-busy={kind === 'loading' ? true : undefined}
       aria-live={kind === 'loading' ? 'polite' : undefined}
     >
       <Heading className={styles.title}>

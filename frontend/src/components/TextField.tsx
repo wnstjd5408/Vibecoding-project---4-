@@ -1,5 +1,6 @@
 import { useId } from 'react'
-import type { InputHTMLAttributes, TextareaHTMLAttributes } from 'react'
+import type { ComponentPropsWithRef, InputHTMLAttributes, TextareaHTMLAttributes } from 'react'
+import { cx } from './cx.ts'
 import styles from './TextField.module.css'
 
 type BaseProps = {
@@ -9,8 +10,8 @@ type BaseProps = {
   // 오류 문구. 있으면 "오류:"를 붙여 입력 칸 아래에 알리고 aria-invalid로 표시한다.
   error?: string
 }
-type InputTextFieldProps = BaseProps & { multiline?: false } & Omit<InputHTMLAttributes<HTMLInputElement>, 'id'>
-type TextAreaTextFieldProps = BaseProps & { multiline: true } & Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'id'>
+type InputTextFieldProps = BaseProps & { multiline?: false } & Omit<ComponentPropsWithRef<'input'>, 'id'>
+type TextAreaTextFieldProps = BaseProps & { multiline: true } & Omit<ComponentPropsWithRef<'textarea'>, 'id'>
 
 // 라벨이 붙은 입력 칸. multiline이 true면 여러 줄 입력(textarea)이다. 라벨·안내·오류는 id로 입력과 이어진다.
 export function TextField(props: InputTextFieldProps | TextAreaTextFieldProps) {
@@ -23,8 +24,8 @@ export function TextField(props: InputTextFieldProps | TextAreaTextFieldProps) {
   const ariaDisabled = rest['aria-disabled'] === true || rest['aria-disabled'] === 'true'
   const common = {
     id,
-    className: styles.control,
-    'aria-invalid': error ? true : undefined,
+    className: cx(styles.control, rest.className),
+    'aria-invalid': error ? true : rest['aria-invalid'],
     'aria-describedby': describedBy,
     ...(ariaDisabled ? { readOnly: true } : null),
   }

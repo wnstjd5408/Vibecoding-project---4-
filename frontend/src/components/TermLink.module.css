@@ -21,13 +21,16 @@
   cursor: pointer;
 }
 
-/* 누르는 영역을 위아래로 8px 넓힌다(글자 줄이 촘촘해도 누르기 쉽게) */
+/* 누르는 영역: 줄 높이 26px에 위아래 8px를 더해 42px로 한다. 글자 상자는 19px라 위아래 11.5px씩 늘린다 */
 .interactive::after {
   content: '';
   position: absolute;
-  inset: -8px 0;
+  inset: -11.5px 0;
 }
 
+/* 눌린 상태와 포커스는 같은 2px ink 링(offset 3px) */
+.interactive:active,
 .interactive:focus-visible {
+  outline: 2px solid var(--ink);
   outline-offset: 3px;
 }

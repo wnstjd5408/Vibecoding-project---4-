@@ -44,6 +44,7 @@
 
 .primary:active {
   background: var(--ink-muted);
+  border-color: var(--ink-muted);
 }
 
 /* 비활성: 테두리는 line-strong, 글자는 ink-muted */

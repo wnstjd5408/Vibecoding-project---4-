@@ -76,7 +76,11 @@ export default function ComponentShowcase() {
   const [subject, setSubject] = useState<(typeof SUBJECTS)[number]>('전체')
   const [favoriteOn, setFavoriteOn] = useState(true)
   const [favoriteOff, setFavoriteOff] = useState(false)
-  const [sheet, setSheet] = useState<SheetKind>(null)
+  // 주소에 ?sheet=dictionary 또는 ?sheet=ai를 주면 시트가 열린 채 시작한다(F1-3처럼 열린 채 그려지는 화면 시험용)
+  const [sheet, setSheet] = useState<SheetKind>(() => {
+    const value = new URLSearchParams(window.location.search).get('sheet')
+    return value === 'dictionary' || value === 'ai' ? value : null
+  })
   const [sheetFavorite, setSheetFavorite] = useState(false)
   const [blockedClicks, setBlockedClicks] = useState(0)
   const selectionBox = useRef<HTMLDivElement>(null)

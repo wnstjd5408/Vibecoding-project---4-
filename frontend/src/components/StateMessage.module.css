@@ -34,8 +34,9 @@
 
 .bar {
   display: block;
-  height: 12px;
-  border-radius: var(--radius-sm);
+  height: 10px;
+  margin-bottom: var(--space-2);
+  border-radius: var(--radius-pill);
   background: var(--surface-300);
 }
 
@@ -44,9 +45,9 @@
 }
 
 .bar:nth-child(2) {
-  width: 75%;
+  width: 70%;
 }
 
 .bar:nth-child(3) {
-  width: 55%;
+  width: 40%;
 }
