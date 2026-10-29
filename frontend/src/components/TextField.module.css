@@ -25,13 +25,37 @@
   color: var(--ink-muted);
 }
 
-.control:disabled {
+textarea.control {
+  min-height: 120px;
+  resize: vertical;
+}
+
+/* 비활성: aria-disabled(+readonly)도 같은 모양. 배경과 테두리는 surface-300 */
+.control:disabled,
+.control[aria-disabled='true'] {
   background: var(--surface-300);
+  border-color: var(--surface-300);
   color: var(--ink-muted);
   cursor: not-allowed;
 }
 
-textarea.control {
-  min-height: 120px;
-  resize: vertical;
+/* 오류: 빨간 칠 없이 2px ink 테두리와 "오류:" 글자로 알린다(색만으로 구분하지 않는다) */
+.control[aria-invalid='true'] {
+  border: 2px solid var(--ink);
+}
+
+.hint,
+.error {
+  margin: var(--space-1) 0 0;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.hint {
+  color: var(--ink-muted);
+}
+
+.error {
+  color: var(--ink);
+  font-weight: 600;
 }

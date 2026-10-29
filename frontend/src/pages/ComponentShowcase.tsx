@@ -77,6 +77,7 @@ export default function ComponentShowcase() {
   const [favoriteOff, setFavoriteOff] = useState(false)
   const [sheet, setSheet] = useState<SheetKind>(null)
   const [sheetFavorite, setSheetFavorite] = useState(false)
+  const [blockedClicks, setBlockedClicks] = useState(0)
 
   return (
     <div className={styles.page} data-theme={theme}>
@@ -128,7 +129,7 @@ export default function ComponentShowcase() {
             <div className={styles.inline}>
               <Button variant="primary">답하기</Button>
               <Button variant="outline">로그인</Button>
-              <Button variant="report">오류 신고</Button>
+              <Button variant="report">틀림 신고</Button>
             </div>
           </Row>
           <Row label="Button · 비활성">
@@ -140,8 +141,16 @@ export default function ComponentShowcase() {
                 로그인
               </Button>
               <Button variant="report" disabled>
-                오류 신고
+                틀림 신고
               </Button>
+            </div>
+          </Row>
+          <Row label="Button · aria-disabled (모양과 함께 클릭도 막는다, 누르면 아래 숫자가 늘지 않아요)">
+            <div className={styles.inline}>
+              <Button variant="primary" aria-disabled="true" onClick={() => setBlockedClicks((n) => n + 1)}>
+                답하기
+              </Button>
+              <span className={styles.bodySmall}>막힌 클릭이 불린 횟수: {blockedClicks}</span>
             </div>
           </Row>
           <Row label="LinkButton (다른 화면으로 가는 링크)">
@@ -217,10 +226,12 @@ export default function ComponentShowcase() {
         </Section>
 
         <Section title="4. 입력 칸·퀴즈 카드·상태 안내">
-          <Row label="TextField · 한 줄 / 여러 줄 / 비활성">
+          <Row label="TextField · 한 줄 / 여러 줄 / 안내 / 오류 / 비활성">
             <div style={{ display: 'grid', gap: 12 }}>
               <TextField label="이메일" type="email" placeholder="name@example.com" autoComplete="off" />
               <TextField label="내 답" multiline placeholder="답을 입력해요" />
+              <TextField label="안내가 있는 칸" hint="영문 소문자와 숫자만 쓸 수 있어요." defaultValue="abc" />
+              <TextField label="오류가 있는 칸" error="답을 입력해 주세요." defaultValue="" />
               <TextField label="비활성" disabled defaultValue="입력할 수 없어요" />
             </div>
           </Row>
@@ -337,7 +348,7 @@ export default function ComponentShowcase() {
                   <TextField label="내 답" multiline placeholder="답을 입력해요" />
                   <div className={styles.cardActions}>
                     <Button variant="primary">답하기</Button>
-                    <Button variant="report">오류 신고</Button>
+                    <Button variant="report">틀림 신고</Button>
                   </div>
                 </QuizCard>
               </div>

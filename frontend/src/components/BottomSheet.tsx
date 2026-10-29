@@ -35,6 +35,14 @@ export function BottomSheet({ open, onClose, title, badge, closeLabel = '닫기'
     if (!open && dialog.open) dialog.close()
   }, [open])
 
+  // 시트가 열린 채 화면에서 사라져도 브라우저 모달을 닫아, 배경 비활성이 남지 않고 포커스가 연 요소로 돌아가게 한다.
+  useEffect(() => {
+    const dialog = dialogRef.current
+    return () => {
+      if (dialog?.open) dialog.close()
+    }
+  }, [])
+
   // 시트가 열려 있는 동안 뒤 화면이 스크롤되지 않게 한다.
   useEffect(() => {
     if (!open) return
@@ -54,6 +62,10 @@ export function BottomSheet({ open, onClose, title, badge, closeLabel = '닫기'
         // Esc는 브라우저가 바로 닫지 않게 막고, 부모가 open을 바꾸게 한다.
         event.preventDefault()
         onClose()
+      }}
+      // 브라우저가 스스로 닫은 경우(open은 아직 true)에도 부모 상태를 맞춘다.
+      onClose={() => {
+        if (open) onClose()
       }}
     >
       <Scrim onClick={onClose} />

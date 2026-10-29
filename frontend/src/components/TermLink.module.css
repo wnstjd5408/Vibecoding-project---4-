@@ -11,8 +11,23 @@
   text-decoration-thickness: 2px;
   text-decoration-color: var(--ink);
   text-underline-offset: 3px;
+  /* 여러 줄로 나뉘어도 줄마다 칠과 둥근 모서리가 따로 적용된다 */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 .interactive {
+  position: relative;
   cursor: pointer;
+}
+
+/* 누르는 영역을 위아래로 8px 넓힌다(글자 줄이 촘촘해도 누르기 쉽게) */
+.interactive::after {
+  content: '';
+  position: absolute;
+  inset: -8px 0;
+}
+
+.interactive:focus-visible {
+  outline-offset: 3px;
 }

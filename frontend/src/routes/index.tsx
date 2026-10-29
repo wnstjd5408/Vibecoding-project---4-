@@ -1,6 +1,6 @@
 import type { RouteObject } from 'react-router'
 import { Suspense } from 'react'
-import ComponentShowcase from '../pages/ComponentShowcase.tsx'
+import { ComponentShowcase } from '../pages/LazyComponentShowcase.tsx'
 import FoundationDemo from '../pages/FoundationDemo.tsx'
 import Placeholder from '../pages/Placeholder.tsx'
 import { operatorRoutes } from './operatorRoutes.tsx'
@@ -17,6 +17,6 @@ export const appRoutes: RouteObject[] = [
     { index: true, element: <MockupCatalog /> },
     { path: ':screenId', element: <MockupScreen /> },
   ] },
-  { path: devPaths.componentShowcase, element: <ComponentShowcase /> },
+  { path: devPaths.componentShowcase, element: <Suspense fallback={<p role="status">화면을 불러오는 중…</p>}><ComponentShowcase /></Suspense> },
   { path: '*', element: <Placeholder screenId="404" title="없는 경로" ticket="해당 없음" /> },
 ]

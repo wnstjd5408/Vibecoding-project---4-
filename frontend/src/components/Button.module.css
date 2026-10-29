@@ -2,6 +2,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: var(--space-2);
   min-height: 44px;
   padding: 0 var(--space-4);
   border: 1px solid var(--ink);
@@ -35,14 +36,14 @@
   color: var(--red-pen);
 }
 
-/* 눌린 상태: surface-300 배경(디자인 토큰 설명). 채움 버튼은 배경이 같아 살짝 옅게 한다(추정). */
+/* 눌린 상태: 보조·신고는 surface-300 배경, 주요(채움)는 ink-muted 배경 */
 .outline:active,
 .report:active {
   background: var(--surface-300);
 }
 
 .primary:active {
-  opacity: 0.85;
+  background: var(--ink-muted);
 }
 
 /* 비활성: 테두리는 line-strong, 글자는 ink-muted */
