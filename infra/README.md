@@ -251,8 +251,8 @@ Vercel 배포의 FastAPI가 장기 키 없이 Bedrock을 부를 때 맡는 역�
 - 역할 2개: 신뢰 정책이 `aud`와 `sub`(`owner:<team>:project:<project>:environment:<env>`)를 `StringEquals`로 고정한다. `prd`는 `production`, `preview`는 `preview` 토큰만 받는다. Preview 토큰으로 운영 역할을 맡을 수 없다.
 - 권한: 두 역할 모두 글로벌 추론 프로필 `global.<모델>`의 `bedrock:InvokeModel`만 있다. 추론 프로필·호출 리전 기반 모델·글로벌 기반 모델 3문장이며, 모델 문장은 이 추론 프로필을 거칠 때만 허용한다(AWS 문서 "Global cross-Region inference"의 IAM 예시와 같은 구조).
 - **한계:** Vercel 토큰 `sub`에는 브랜치가 없다. 그래서 Preview 역할은 `staging`뿐 아니라 PR 미리보기 배포도 맡을 수 있다. 빌드 단계에도 토큰이 나오므로 PR이 바꾼 빌드 스크립트·의존성 설치 스크립트도 포함된다.
-  - 지금 있는 장치: `AWS_ROLE_ARN`을 Preview의 Git Branch `staging` 범위에만 넣는다. Vercel 프로젝트의 Git Fork Protection이 켜져 있어 외부 fork PR은 사람 승인 전에 배포되지 않는다(2026-10-29 확인).
-  - 예정된 장치: 백엔드가 `staging` 밖의 Preview에서는 STS 호출 전에 거부한다(MEG-120, 아직 구현 전).
+  - 장치 1: `AWS_ROLE_ARN`을 Preview의 Git Branch `staging` 범위에만 넣는다. Vercel 프로젝트의 Git Fork Protection이 켜져 있어 외부 fork PR은 사람 승인 전에 배포되지 않는다(2026-10-29 확인).
+  - 장치 2: 백엔드가 `staging` 밖의 Preview에서는 STS 호출 전에 거부한다(MEG-120, `backend/app/bedrock.py`의 `ai_allowed_in_environment`, `docs/ai-credentials.md` "배포 환경 제한" 절).
   - 남는 위험: 팀원·AI가 올린 PR의 코드가 역할 ARN을 직접 넣어 STS를 부르는 경우는 막지 못한다. 2026-10-29에 수용했다(MEG-118). 비용 피해는 `budget.tf`의 월 예산 경보로 알 수 있다.
 - 팀 슬러그에는 개인 식별 정보가 들어 있을 수 있어 `terraform.tfvars`로만 넘긴다. `for_each` 키와 리소스 이름에도 넣지 않는다.
 - IAM 조건은 팀·프로젝트의 불변 ID가 아니라 슬러그와 이름을 본다. Vercel 팀이나 프로젝트 이름을 바꾸면 역할 전환이 거부되고, 풀린 옛 슬러그를 다른 팀이 가져갈 수도 있다. 이름을 바꿨으면 이 폴더를 `destroy`한 뒤 새 값으로 다시 적용한다.

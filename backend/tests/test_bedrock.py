@@ -69,6 +69,10 @@ def clean_env(monkeypatch):
         "AWS_PROFILE",
         "BEDROCK_REGION",
         "BEDROCK_MODEL_ID",
+        "VERCEL",
+        "VERCEL_ENV",
+        "VERCEL_TARGET_ENV",
+        "VERCEL_GIT_COMMIT_REF",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -191,6 +195,70 @@ def test_oidc_exchange_failure_reports_step_and_code_only(monkeypatch):
     assert (error.value.step, error.value.code) == ("sts", "AccessDenied")
     assert "arn:" not in str(error.value)
     assert FAKE_TOKEN not in str(error.value)
+
+
+# --- 배포 환경 차단 (MEG-120) ---
+
+
+BLOCKED_ENVIRONMENTS = [
+    # PR 미리보기
+    {"VERCEL": "1", "VERCEL_ENV": "preview", "VERCEL_GIT_COMMIT_REF": "meg-1-feature"},
+    {"VERCEL": "1", "VERCEL_ENV": "preview"},
+    {"VERCEL": "1", "VERCEL_ENV": "preview", "VERCEL_GIT_COMMIT_REF": ""},
+    {"VERCEL": "1", "VERCEL_ENV": "preview", "VERCEL_GIT_COMMIT_REF": "Staging"},
+    # staging 브랜치를 따라가는 사용자 지정 환경(VERCEL_ENV는 preview, 이름은 VERCEL_TARGET_ENV)
+    {"VERCEL": "1", "VERCEL_ENV": "preview", "VERCEL_TARGET_ENV": "qa", "VERCEL_GIT_COMMIT_REF": "staging"},
+    # Vercel 위인데 VERCEL_ENV가 빠졌거나 모르는 값
+    {"VERCEL": "1"},
+    {"VERCEL": "1", "VERCEL_ENV": "qa", "VERCEL_GIT_COMMIT_REF": "staging"},
+]
+
+
+@pytest.mark.parametrize("env", BLOCKED_ENVIRONMENTS)
+@pytest.mark.parametrize("settings", [BedrockSettings(role_arn="role"), BedrockSettings(auth_mode="api_key")])
+def test_pr_preview_is_blocked_before_sts(monkeypatch, env, settings):
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    def no_aws(*args, **kwargs):
+        raise AssertionError("blocked environments must not reach AWS")
+
+    monkeypatch.setattr(bedrock.boto3, "client", no_aws)
+
+    with pytest.raises(AiCallError) as error:
+        make_client(settings, FAKE_TOKEN)
+
+    assert (error.value.step, error.value.code) == ("environment", "BlockedEnvironment")
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {},  # 로컬(Vercel 밖)
+        {"VERCEL_ENV": "development"},
+        {"VERCEL": "1", "VERCEL_ENV": "production", "VERCEL_GIT_COMMIT_REF": "main"},
+        {"VERCEL": "1", "VERCEL_ENV": "production"},
+        {"VERCEL": "1", "VERCEL_ENV": "preview", "VERCEL_GIT_COMMIT_REF": "staging"},
+        {"VERCEL": "1", "VERCEL_ENV": "preview", "VERCEL_TARGET_ENV": "preview", "VERCEL_GIT_COMMIT_REF": "staging"},
+    ],
+)
+def test_production_staging_and_local_still_reach_sts(monkeypatch, env):
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    calls = []
+    monkeypatch.setattr(bedrock, "_assume_role", lambda *a: calls.append(a) or FAKE_CREDENTIALS)
+    monkeypatch.setattr(bedrock.boto3, "client", lambda name, **kwargs: "bedrock-client")
+
+    assert make_client(BedrockSettings(role_arn="role"), FAKE_TOKEN) == "bedrock-client"
+    assert len(calls) == 1
+
+
+def test_environment_check_reads_given_mapping():
+    assert bedrock.ai_allowed_in_environment({}) is True
+    assert bedrock.ai_allowed_in_environment({"VERCEL": "1"}) is False
+    assert bedrock.ai_allowed_in_environment({"VERCEL_ENV": "preview", "VERCEL_GIT_COMMIT_REF": "staging"}) is True
+    assert bedrock.ai_allowed_in_environment({"VERCEL_ENV": "preview", "VERCEL_GIT_COMMIT_REF": "Staging"}) is False
+    assert bedrock.is_staging_preview({"VERCEL_ENV": "production", "VERCEL_GIT_COMMIT_REF": "staging"}) is False
 
 
 # --- 인증 헤더 (실제 boto3, 네트워크 없음) ---

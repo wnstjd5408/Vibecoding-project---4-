@@ -220,6 +220,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 | `BEDROCK_MODEL_ID` | 호출할 모델 ID. 응답에 내보내지 않는다(5절) | 비우면 `global.openai.gpt-6-luna` | 백엔드(선택) |
 | `ALLOWED_ORIGINS` | 상태를 바꾸는 요청(POST·PUT·PATCH·DELETE)의 `Origin`으로 받을 출처 목록(쉼표로 구분, `scheme://host[:port]`만). CORS 허용 출처도 같은 값이다 | 비우면 `http://localhost:5173`. `*`·경로가 든 값은 시작할 때 거부한다. 운영(`VERCEL_ENV=production`)에서 비우면 앱이 시작하지 않는다 | 백엔드(로컬·Vercel) |
 | `VITE_API_MOCK` | 가짜 응답과 실제 API 전환 | `true`일 때만 가짜 응답. 나머지는 같은 출처의 `/api`로 요청한다. `VITE_` 값에는 비밀값을 넣지 않는다 | 프런트엔드(빌드 시) |
+| `VERCEL`·`VERCEL_ENV`·`VERCEL_TARGET_ENV`·`VERCEL_GIT_COMMIT_REF` | Vercel 시스템 환경변수. 직접 넣지 않는다. AI 호출 허용 판정(운영·staging Preview·로컬만)과 운영 판정(`ALLOWED_ORIGINS` 필수)에 쓴다 | Vercel이 런타임에 넣는다. 프로젝트 설정의 시스템 환경변수 노출이 켜져 있어야 한다. Vercel 위인데 `VERCEL_ENV`가 없으면 AI를 막는다(MEG-120, [ai-credentials.md](ai-credentials.md)) | 백엔드(Vercel) |
 
 - 가져오기 스크립트가 DB·버킷에 쓸 때 쓰는 가져오기 전용 secret key의 변수 이름은 아직 없다. 가져오기 구현(MEG-85)에서 정한다. (미정, D-070)
 - 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정), `backend/app/config.py`(허용 출처), `backend/app/supabase.py`(Supabase 주소·secret key), `frontend/src/api/source.ts`(가짜/실제 전환)다. `VITE_API_BASE_URL`은 사용하지 않는다. Notion 변수는 가져오기 구현 때 읽는다.

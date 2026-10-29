@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app import accounts, notes
+from app import accounts, ai_probe, notes
 from app.common import install_common_layer
 
 app = FastAPI(title="Vibecoding project 4 API")
@@ -8,6 +8,8 @@ app = FastAPI(title="Vibecoding project 4 API")
 install_common_layer(app)
 app.include_router(accounts.router)
 app.include_router(notes.router)
+# 임시 확인 API(MEG-120). MEG-118 staging 검증 뒤 이 줄과 app/ai_probe.py를 지운다.
+app.include_router(ai_probe.router)
 
 
 @app.get("/health", include_in_schema=False)

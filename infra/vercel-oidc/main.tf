@@ -9,8 +9,8 @@
 #
 # sub에 브랜치가 없어서 Preview 역할은 staging뿐 아니라 모든 Preview 배포(PR 포함)가 맡을 수 있다.
 # 빌드 단계에도 토큰이 나오므로 PR이 바꾼 빌드 스크립트도 포함된다. 이 신뢰 정책만으로는 막지 못한다.
-# staging 밖의 Preview는 백엔드가 STS 호출 전에 막을 예정이다(MEG-120). 그 전까지는 AWS_ROLE_ARN을
-# Preview의 staging 브랜치 범위에만 넣는 것이 유일한 장치다.
+# 그래서 AWS_ROLE_ARN을 Preview의 staging 브랜치 범위에만 넣고, 백엔드도 staging 밖의 Preview에서는
+# STS 호출 전에 막는다(MEG-120, backend/app/bedrock.py). 둘 다 앱 쪽 장치라 PR 코드의 직접 호출은 막지 못한다.
 
 locals {
   account_id = data.aws_caller_identity.current.account_id
