@@ -15,6 +15,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const id = requests.current.begin()
     const next = await loadAuthState()
     if (requests.current.isLatest(id)) setState(next)
+    // 호출한 쪽이 방금 읽은 상태를 확인할 수 있게 돌려준다(예: 로그인 뒤 상태를 확인하고 이동).
+    return next
   }, [])
 
   useEffect(() => {
