@@ -7,7 +7,7 @@ Claude Code로 바이브코딩하는 팀원을 위한 안내다. 사람과 Claud
 1. [README.md](README.md)의 "필요한 도구"와 "설정" 1~3단계를 끝낸다. 커밋 이메일은 GitHub noreply 주소를 쓴다(공개 저장소).
 2. 저장소 초대를 받는다. 권한은 Write다. 관리자(Admin) 권한이 보이면 리뷰어(저장소 관리자)에게 Write로 낮춰 달라고 한다. Claude가 이 계정으로 커밋하므로 관리자 권한은 두지 않는다.
 3. Linear 팀 Megazoneproject에 들어가 내 이름으로 배정된 티켓을 확인한다.
-4. [README.md](README.md)의 "실행" 절대로 백엔드와 프런트엔드를 켜서 `ok`가 보이는지 확인한다.
+4. [README.md](README.md)의 "실행" 절대로 백엔드와 프런트엔드를 켜고 `/dev/foundation`의 "1. /api 요청" 줄에 `ok`가 보이는지 확인한다.
 5. 이 저장소 폴더에서 Claude Code를 열고 "ONBOARDING.md와 AGENTS.md를 읽고 요약해 줘"라고 시켜 본다.
 
 ## 계정 (2026-10-26 결정, 예외)
@@ -47,6 +47,7 @@ Linear 티켓 MEG-<번호>를 읽고 작업해 줘.
 
 - "지금까지 바꾼 파일과 이유를 짧게 알려 줘" — 중간 점검.
 - "이 화면을 띄워서 목업 <화면 ID>와 다른 곳을 찾아 줘" — 디자인 확인.
+- "README의 '프런트에서 API 부르기'를 읽고 `apiFetch`로 호출해 줘" — 화면에서 `/api`를 부를 때. 호출 함수·오류 구분·로그인 상태를 새로 만들지 않고 이미 있는 것을 쓰게 한다.
 - "PR 올리기 전에 test-verifier 에이전트로 검사해 줘" — 테스트 결과만 보고하는 검증 에이전트가 저장소에 있다.
 - "이 변경을 되돌리고 다른 방법으로 해 줘" — 결과가 마음에 안 들 때.
 
@@ -60,9 +61,10 @@ Linear 티켓 MEG-<번호>를 읽고 작업해 줘.
 
 ## 프런트엔드 팀원이 알아 둘 것
 
-- 백엔드 API가 없어도 화면부터 만들 수 있다. API spec v0.2(MEG-27에 첨부된 Linear 문서) 3절의 요청·응답 예시로 가짜 응답을 만들어 쓰고 실제 API가 생기면 그 부분만 바꾼다. 가짜 응답은 한곳에 모아 둔다.
+- 백엔드 API가 없어도 화면부터 만들 수 있다. API spec v0.2(MEG-27에 첨부된 Linear 문서) 3절의 요청·응답 예시로 가짜 응답을 만들어 쓰고 실제 API가 생기면 그 부분만 바꾼다. 가짜 응답은 `frontend/src/api/mocks/`에 모아 두었고 `VITE_API_MOCK=true`일 때 쓴다. 부르는 방법은 [README.md](README.md)의 "프런트에서 API 부르기"를 따른다.
 - 티켓 제목의 `F1-2` 같은 화면 ID는 목업 v0.2의 아트보드 이름이다. 디자인은 B안 디자인 시스템(형광펜 = 사전 용어, 연필 = AI 내용, 빨간펜 = 틀림 신고, 글꼴 Pretendard)을 따른다.
 - 서버 오류의 `message`는 영어 고정 문구라 화면에 그대로 띄우지 않는다. 화면 문구는 `code`·`detail`·`fields[].reason` 값을 보고 고른다. 예를 들어 `login_required`가 오면 로그인 안내 시트를 띄운다.
+- 로그인 상태는 `useAuth()`로 읽는다. 일반 사용자의 `role`은 `'user'`가 아니라 `'member'`다. `'user'`는 타입에 없는 값이라 비교가 항상 실패한다.
 - 화면 코드는 FastAPI만 부른다. Supabase나 AI를 화면에서 직접 부르지 않고 키도 화면 코드에 넣지 않는다.
 - 사용자 모바일 화면·디자인 시스템 컴포넌트와 운영자 PC 화면·운영자 셸은 담당이 다르다. 내 담당은 티켓의 담당자 칸에서 확인한다. 같은 컴포넌트가 필요하면 먼저 만든 쪽 것을 가져다 쓴다.
 
@@ -85,7 +87,7 @@ Linear 티켓 MEG-<번호>를 읽고 작업해 줘.
 
 | 문서 | 내용 |
 |---|---|
-| [README.md](README.md) | 설치·실행·기여 규칙 |
+| [README.md](README.md) | 설치·실행·프런트 API 호출 사용법·기여 규칙 |
 | [AGENTS.md](AGENTS.md) | Claude가 지킬 공통 규칙 |
 | [docs/decisions.md](docs/decisions.md) | 지금까지의 제품·기술 결정 |
 | [docs/architecture.md](docs/architecture.md) | 기술 구조 공개 요약 |
