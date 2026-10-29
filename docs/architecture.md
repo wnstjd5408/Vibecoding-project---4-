@@ -82,6 +82,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 - 역할과 활성 여부는 DB `profiles` 표가 원본이다. 사용자가 고칠 수 있는 값(`user_metadata` 등)으로 권한을 판단하지 않는다. 로그인이 필요한 모든 요청에서 `is_active`를 DB로 확인한다.
 - 공개 읽기에 비활성 계정의 세션이 붙어 오면 비로그인으로 취급한다.
 - 세션 쿠키는 `HttpOnly`·`Secure`·`SameSite=Lax`다. 상태를 바꾸는 요청(POST·PUT·PATCH·DELETE)은 `Origin` 헤더가 앱 주소일 때만 받고, 헤더가 없으면 거부한다(CSRF 방어). (제안)
+- 세션 쿠키는 Supabase 액세스 토큰과 리프레시 토큰 두 개다. 액세스 토큰이 만료되면 FastAPI가 갱신하고, 세션은 로그인부터 7일 고정이다(만료 시각은 서명해 브라우저가 늘릴 수 없다). 로그인·갱신 때 사용자 IP를 `Sb-Forwarded-For`로 넘기므로 Supabase 프로젝트의 Auth IP Address Forwarding을 켜야 Auth의 IP별 제한이 서버 IP 하나에 몰리지 않는다. (결정, MEG-63)
 - GET은 상태를 바꾸거나 AI를 부르지 않는다. 열람 기록과 퀴즈 생성은 POST로만 받는다.
 - 로그인 실패는 계정·IP별로 제한한다. 공개 읽기와 서명 URL 발급에도 사용자(비로그인은 IP)별 분당 상한을 두고, 넘으면 429를 돌려준다. 카운터는 DB 표(`rate_limit_counters`)와 SQL 함수(`rate_limit_hit`)로 센다. 키는 secret key로 서명한 해시라 이메일·IP 원문을 남기지 않고, 클라이언트 IP는 소켓 주소를 쓰되 Vercel 위에서만 Vercel이 넣는 헤더를 믿는다. 로그인 실패 제한은 비밀번호를 확인하기 전에 먼저 세고 성공하면 되돌려(`rate_limit_release`) 동시 시도가 한도를 넘어 검증까지 가지 못하게 한다. Vercel Hobby 방화벽은 규칙이 프로젝트당 1개이고 세는 키가 IP·JA4뿐이라 사용자·계정별 제한을 맡지 못한다. (결정, MEG-62; 숫자는 제안, 시험 뒤)
 - 모든 `/api` 응답에 `Cache-Control: private, no-store`를 붙인다. 같은 주소가 역할에 따라 다른 내용을 주기 때문이다. (결정, 2026-10-23)
