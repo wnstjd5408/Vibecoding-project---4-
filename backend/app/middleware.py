@@ -11,6 +11,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from app.errors import ApiError, build_error_response, internal_error_response, new_request_id
+from app.session import apply_session_cookies
 
 logger = logging.getLogger("app.access")
 
@@ -56,6 +57,8 @@ class CommonMiddleware(BaseHTTPMiddleware):
 
         response.headers["X-Request-Id"] = request.state.request_id
         if api:
+            # 갱신·로그인·로그아웃으로 바뀐 세션 쿠키를 오류 응답에도 싣는다.
+            apply_session_cookies(request, response)
             response.headers["Cache-Control"] = "private, no-store"
             self._log(request, response, started)
         return response

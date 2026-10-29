@@ -31,8 +31,10 @@ class RateRule:
 # API spec 1.8의 제안 숫자다. 시험 뒤 조정하며, 확정은 각 엔드포인트 티켓이 한다.
 PUBLIC_READ = RateRule("public_read", 120, 60)
 SIGNED_URL = RateRule("signed_url", 60, 60)
-# 계정(이메일) 키용이다. IP 키용 로그인 제한은 성공도 세는 별도 규칙(releasable=False)을 MEG-63이 정한다.
+# 로그인 제한 두 개(MEG-63, 2026-10-29 사람 결정). 계정(이메일) 키는 성공하면 되돌린다.
+# IP 키는 성공도 세고 되돌리지 않는다. 여러 계정을 돌아가며 시도하는 공격을 막는다.
 LOGIN_FAILURE = RateRule("login_failure", 5, 15 * 60, releasable=True)
+LOGIN_IP = RateRule("login_ip", 30, 15 * 60)
 WRITE = RateRule("write", 30, 60)
 
 

@@ -7,12 +7,13 @@ from fastapi import Depends, FastAPI, Header
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app import accounts
 from app.auth import SessionUser, get_session_user, require_login, require_operator
 from app.common import install_common_layer
 from app.config import SESSION_COOKIE
 from app.errors import ApiError
 from app.rate_limit import RateRule, rate_limited
-from app.supabase import Profile, SupabaseUnavailable, get_supabase
+from app.supabase import AuthSession, Profile, SupabaseUnavailable, get_supabase
 
 ALLOWED_ORIGIN = "http://localhost:5173"
 LIMITED_RULE = RateRule("test_limit", 2, 60)
@@ -28,14 +29,98 @@ class FakeSupabase:
     now: float = 1_700_000_010.0
     rpc_calls: list[tuple[str, dict]] = field(default_factory=list)
     _counters: dict[tuple[str, int], int] = field(default_factory=dict)
+    # Auth 흉내: 이메일 -> (비밀번호, 사용자 id). 세션(sid)마다 액세스·리프레시 토큰을 낸다.
+    accounts: dict[str, tuple[str, str]] = field(default_factory=dict)
+    auth_down: bool = False
+    auth_calls: list[str] = field(default_factory=list)
+    _access_sid: dict[str, int] = field(default_factory=dict)
+    _refresh_sid: dict[str, int] = field(default_factory=dict)
+    _used_refresh: set[str] = field(default_factory=set)
+    _revoked: set[int] = field(default_factory=set)
+    _sid_user: dict[int, str] = field(default_factory=dict)
+    _serial: int = 0
 
-    def add_user(self, token: str, user_id: str, role: str = "member", is_active: bool = True) -> None:
+    def add_user(
+        self, token: str, user_id: str, role: str = "member", is_active: bool = True, display_name: str | None = None
+    ) -> None:
         self.sessions[token] = user_id
-        self.profiles[user_id] = Profile(role=role, is_active=is_active)
+        self.profiles[user_id] = Profile(role=role, is_active=is_active, display_name=display_name)
+
+    def add_account(
+        self,
+        email: str,
+        password: str,
+        user_id: str,
+        role: str = "member",
+        is_active: bool = True,
+        display_name: str | None = "Member",
+        profile: bool = True,
+    ) -> None:
+        self.accounts[email] = (password, user_id)
+        if profile:
+            self.profiles[user_id] = Profile(role=role, is_active=is_active, display_name=display_name)
+
+    def _auth(self, name: str) -> None:
+        self.auth_calls.append(name)
+        if self.down or self.auth_down:
+            raise SupabaseUnavailable("down")
+
+    def _issue(self, sid: int) -> AuthSession:
+        self._serial += 1
+        access, refresh = f"access.{self._serial}.sig", f"refresh{self._serial}"
+        user_id = self._sid_user[sid]
+        self.sessions[access] = user_id
+        self._access_sid[access] = sid
+        self._refresh_sid[refresh] = sid
+        return AuthSession(access_token=access, refresh_token=refresh, user_id=user_id, expires_in=3600)
+
+    def sign_in_with_password(self, email: str, password: str) -> AuthSession | None:
+        self._auth("password")
+        account = self.accounts.get(email.lower())
+        if account is None or account[0] != password:
+            return None
+        sid = len(self._sid_user) + 1
+        self._sid_user[sid] = account[1]
+        return self._issue(sid)
+
+    def refresh_session(self, refresh_token: str) -> AuthSession | None:
+        self._auth("refresh")
+        sid = self._refresh_sid.get(refresh_token)
+        if sid is None or sid in self._revoked:
+            return None
+        if refresh_token in self._used_refresh:
+            # 실제 Auth처럼 이미 쓴 리프레시 토큰을 다시 쓰면 세션 전체를 끊는다.
+            self.revoke(sid)
+            return None
+        self._used_refresh.add(refresh_token)
+        return self._issue(sid)
+
+    def sign_out(self, access_token: str) -> bool:
+        self._auth("logout")
+        sid = self._access_sid.get(access_token)
+        if sid is None or sid in self._revoked or access_token not in self.sessions:
+            return False
+        self.revoke(sid)
+        return True
+
+    def revoke(self, sid: int) -> None:
+        self._revoked.add(sid)
+        for token, token_sid in self._access_sid.items():
+            if token_sid == sid:
+                self.sessions.pop(token, None)
+
+    def expire_access(self, access_token: str) -> None:
+        """액세스 토큰 수명이 끝난 것처럼 Auth가 거절하게 한다. 리프레시 토큰은 그대로다."""
+        self.sessions.pop(access_token, None)
+
+    def session_alive(self, access_or_refresh: str) -> bool:
+        sid = self._access_sid.get(access_or_refresh) or self._refresh_sid.get(access_or_refresh)
+        return sid is not None and sid not in self._revoked
 
     def get_auth_user_id(self, access_token: str) -> str | None:
         if self.down:
             raise SupabaseUnavailable("down")
+        self.auth_calls.append("user")
         return self.sessions.get(access_token)
 
     def get_profile(self, user_id: str) -> Profile | None:
@@ -172,6 +257,20 @@ def build_app(fake: FakeSupabase) -> FastAPI:
     @app.get("/outside")
     def outside():
         return {"ok": True}
+
+    return app
+
+
+def build_accounts_app(fake: FakeSupabase) -> FastAPI:
+    """E01~E03 라우터를 붙인 시험 앱. 세션 의존성을 쓰고 오류를 내는 경로를 하나 더 둔다."""
+    app = FastAPI()
+    install_common_layer(app)
+    app.dependency_overrides[get_supabase] = lambda: fake
+    app.include_router(accounts.router)
+
+    @app.get("/api/session-then-404")
+    def session_then_404(user: SessionUser | None = Depends(get_session_user)):
+        raise ApiError("not_found")
 
     return app
 
