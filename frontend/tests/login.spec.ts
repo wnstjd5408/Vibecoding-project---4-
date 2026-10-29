@@ -15,7 +15,12 @@ async function submit(page: Page, email: string, password: string) {
 // 이동 링크(DevNav)가 있는 임시 화면에서 공통 기반 샘플(/dev/foundation)로 가서 useAuth의 현재 상태 문장을 돌려준다.
 async function readAuthState(page: Page) {
   const guestLink = page.getByRole('link', { name: '로그인 없이 노트 보기' })
-  if (await guestLink.count()) await guestLink.click()
+  if (await guestLink.count()) {
+    await guestLink.click()
+    await expect(page.getByRole('heading', { level: 1, name: '과목' })).toBeVisible()
+  }
+  const list = page.getByRole('region', { name: '노트 목록' })
+  if (await list.count()) await list.getByRole('link').first().click()
   await page.getByRole('link', { name: '공통 기반 샘플' }).click()
   return page.getByText('현재 상태:')
 }
@@ -51,7 +56,8 @@ test('AC-1·AC-3 운영자 계정으로 로그인하면 과목·노트 목록으
   await page.goto('/login')
   await submit(page, 'operator@example.test', PASSWORD)
   await expect(page).toHaveURL(/\/$/)
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('F1-1')
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('과목')
+  await expect(page.getByRole('link', { name: '운영자 메뉴' })).toBeVisible()
   await expect(await readAuthState(page)).toContainText('운영자')
 })
 
