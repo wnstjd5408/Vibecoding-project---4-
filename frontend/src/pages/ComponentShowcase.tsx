@@ -4,6 +4,7 @@ import { useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import {
   AiBadge,
+  AiBox,
   AppHeader,
   BottomSheet,
   Button,
@@ -19,7 +20,6 @@ import {
   TextField,
 } from '../components/index.ts'
 // 디자인 시스템 공식 목록에는 없어 index.ts에서 내보내지 않는 내부 부품
-import { AiBox } from '../components/AiBox.tsx'
 import { Badge } from '../components/Badge.tsx'
 import { Chip } from '../components/Chip.tsx'
 import { IconButton, IconLinkButton } from '../components/IconButton.tsx'
@@ -246,7 +246,7 @@ export default function ComponentShowcase() {
               {selectionPos ? <SelectionAction top={selectionPos.top} left={selectionPos.left} onClick={() => setSheet('ai')} /> : null}
             </div>
           </Row>
-          <Row label="(내부용) AiBox · AI가 만든 내용을 감싸는 점선 상자">
+          <Row label="AiBox · AI가 만든 내용을 감싸는 점선 상자(여백 위아래 8px, 좌우 12px)">
             <AiBox label="AI 생성 설명">
               하나의 연결을 여러 요청이 나눠 쓰는 방식이에요. 합성 문구 예시예요.
             </AiBox>
