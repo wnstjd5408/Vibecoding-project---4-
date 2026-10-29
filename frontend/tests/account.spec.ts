@@ -105,19 +105,27 @@ test('방문자가 내 정보를 직접 열면 로그인 화면으로 간다', a
   await expect(page.getByRole('heading', { level: 1, name: '로그인' })).toBeVisible()
 })
 
-test('로그아웃 확인 로직은 방문자로 확인된 경우에만 성공으로 본다', async ({ page }) => {
+test('로그아웃 확인은 E03 결과를 세 가지로 가른다(받지 못하면 로그인 상태가 유지된다고 단정하지 않는다)', async ({ page }) => {
   await page.goto('/login')
   const result = await page.evaluate(async () => {
-    const { confirmLogout } = await import('/src/account/logout.ts')
+    const { checkLoggedOut } = await import('/src/account/logout.ts')
     const state = (status: string, role: string) => ({ status, role, displayName: null })
     return {
-      visitor: await confirmLogout(async () => state('ready', 'visitor') as never),
-      // E03을 받지 못하면 refresh는 예외 없이 status 'error', role 'visitor'를 돌려준다. 로그아웃이 끝났다고 보지 않는다.
-      stateError: await confirmLogout(async () => state('error', 'visitor') as never),
-      stillMember: await confirmLogout(async () => state('ready', 'member') as never),
-      stillOperator: await confirmLogout(async () => state('ready', 'operator') as never),
-      loading: await confirmLogout(async () => state('loading', 'visitor') as never),
+      // 방문자로 확인됐다
+      loggedOut: await checkLoggedOut(async () => state('ready', 'visitor') as never),
+      // 아직 로그인 상태로 읽혔다
+      stillMember: await checkLoggedOut(async () => state('ready', 'member') as never),
+      stillOperator: await checkLoggedOut(async () => state('ready', 'operator') as never),
+      // E03을 받지 못하면 loadAuthState는 예외 없이 status 'error', role 'visitor'를 돌려준다. 이때 로그아웃됐다고도, 안 됐다고도 단정하지 않는다.
+      stateError: await checkLoggedOut(async () => state('error', 'visitor') as never),
+      loading: await checkLoggedOut(async () => state('loading', 'visitor') as never),
     }
   })
-  expect(result).toEqual({ visitor: true, stateError: false, stillMember: false, stillOperator: false, loading: false })
+  expect(result).toEqual({
+    loggedOut: 'logged_out',
+    stillMember: 'still_logged_in',
+    stillOperator: 'still_logged_in',
+    stateError: 'unknown',
+    loading: 'unknown',
+  })
 })
