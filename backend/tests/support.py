@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI, Header
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import accounts
+from app import accounts, notes
 from app.auth import SessionUser, get_session_user, require_login, require_operator
 from app.common import install_common_layer
 from app.config import SESSION_COOKIE
@@ -41,6 +41,11 @@ class FakeSupabase:
     _revoked: set[int] = field(default_factory=set)
     _sid_user: dict[int, str] = field(default_factory=dict)
     _serial: int = 0
+    # 과목·노트 표 흉내. 노트 행은 표의 열 + subject_ids(note_subjects 연결)다.
+    subjects: list[dict] = field(default_factory=list)
+    notes: list[dict] = field(default_factory=list)
+    # list_notes를 부를 때마다 넘긴 include_unpublished 값
+    note_queries: list[bool] = field(default_factory=list)
 
     def add_user(
         self, token: str, user_id: str, role: str = "member", is_active: bool = True, display_name: str | None = None
@@ -131,6 +136,51 @@ class FakeSupabase:
         if self.down:
             raise SupabaseUnavailable("down")
         return self.profiles.get(user_id)
+
+    def add_note(
+        self,
+        note_id: int,
+        title: str,
+        studied_on: str | None,
+        subject_ids: list[int],
+        is_published: bool = True,
+        parent_note_id: int | None = None,
+        revision: int = 1,
+        needs_review: bool = False,
+    ) -> None:
+        self.notes.append(
+            {
+                "id": note_id,
+                "title": title,
+                "studied_on": studied_on,
+                "parent_note_id": parent_note_id,
+                "is_published": is_published,
+                "revision": revision,
+                "needs_review": needs_review,
+                "subject_ids": subject_ids,
+            }
+        )
+
+    def list_subjects(self) -> list[dict]:
+        if self.down:
+            raise SupabaseUnavailable("down")
+        return sorted(({"id": s["id"], "name": s["name"]} for s in self.subjects), key=lambda s: s["id"])
+
+    def list_notes(self, include_unpublished: bool) -> list[dict]:
+        """SupabaseClient.list_notes와 같은 거르기·열·정렬(studied_on 내림차순, 없으면 뒤, 같으면 id 내림차순)."""
+        if self.down:
+            raise SupabaseUnavailable("down")
+        self.note_queries.append(include_unpublished)
+        rows = [n for n in self.notes if include_unpublished or n["is_published"]]
+        rows.sort(key=lambda n: n["id"], reverse=True)
+        rows.sort(key=lambda n: n["studied_on"] or "", reverse=True)
+        columns = ["id", "title", "studied_on", "parent_note_id"]
+        if include_unpublished:
+            columns += ["is_published", "revision", "needs_review"]
+        return [
+            {**{c: n[c] for c in columns}, "note_subjects": [{"subject_id": sid} for sid in n["subject_ids"]]}
+            for n in rows
+        ]
 
     def keyed_hash(self, value: str) -> str:
         return hashlib.sha256(f"fake-secret:{value}".encode()).hexdigest()[:32]
@@ -276,6 +326,15 @@ def build_accounts_app(fake: FakeSupabase) -> FastAPI:
     def session_then_404(user: SessionUser | None = Depends(get_session_user)):
         raise ApiError("not_found")
 
+    return app
+
+
+def build_notes_app(fake: FakeSupabase) -> FastAPI:
+    """E04 라우터를 붙인 시험 앱."""
+    app = FastAPI()
+    install_common_layer(app)
+    app.dependency_overrides[get_supabase] = lambda: fake
+    app.include_router(notes.router)
     return app
 
 

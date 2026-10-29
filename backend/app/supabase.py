@@ -1,6 +1,6 @@
 """Supabase 호출 최소 래퍼. FastAPI만 secret key로 부른다(D-007).
 
-이 파일이 하는 일: 로그인·세션 갱신·로그아웃·세션 토큰 확인(Auth), profiles 조회(REST), SQL 함수 호출(RPC).
+이 파일이 하는 일: 로그인·세션 갱신·로그아웃·세션 토큰 확인(Auth), profiles·과목·노트 조회(REST), SQL 함수 호출(RPC).
 """
 
 import hashlib
@@ -178,23 +178,41 @@ class SupabaseClient:
             return False
         raise SupabaseConfigError(f"auth logout status {response.status_code}")
 
+    def _select(self, table: str, params: dict[str, str]) -> list[dict[str, Any]]:
+        response = self._request("GET", f"/rest/v1/{table}", params=params, headers=self._headers())
+        if response.status_code != 200:
+            # 키·권한 설정 오류(RLS·GRANT)는 응답에 원인을 담지 않고 500으로 낸다.
+            raise SupabaseConfigError(f"{table} select status {response.status_code}")
+        return response.json()
+
     def get_profile(self, user_id: str) -> Profile | None:
         """profiles 행이 없으면 None이다. user_id는 UUID 형식으로 검증한 값만 받는다."""
         user_id = str(uuid.UUID(user_id))
-        response = self._request(
-            "GET",
-            "/rest/v1/profiles",
-            params={"user_id": f"eq.{user_id}", "select": "role,is_active,display_name", "limit": "1"},
-            headers=self._headers(),
+        rows = self._select(
+            "profiles", {"user_id": f"eq.{user_id}", "select": "role,is_active,display_name", "limit": "1"}
         )
-        if response.status_code != 200:
-            # 키·권한 설정 오류(RLS·GRANT)는 응답에 원인을 담지 않고 500으로 낸다.
-            raise SupabaseConfigError(f"profiles select status {response.status_code}")
-        rows = response.json()
         if not rows:
             return None
         row = rows[0]
         return Profile(role=row["role"], is_active=bool(row["is_active"]), display_name=row.get("display_name"))
+
+    def list_subjects(self) -> list[dict[str, Any]]:
+        """과목 전체(id, name)를 id 오름차순으로 준다."""
+        return self._select("subjects", {"select": "id,name", "order": "id.asc"})
+
+    def list_notes(self, include_unpublished: bool) -> list[dict[str, Any]]:
+        """노트 목록 열과 연결된 과목 id(note_subjects)를 E04 정렬로 준다.
+
+        include_unpublished가 False면 공개 노트만 DB에서 거르고 운영자 열(is_published·revision·needs_review)도
+        읽지 않는다. 쪽 나누기가 없어 API 최대 행(config.toml max_rows = 1000)을 넘으면 조용히 잘린다(1.5).
+        """
+        columns = "id,title,studied_on,parent_note_id,note_subjects(subject_id)"
+        params = {"order": "studied_on.desc.nullslast,id.desc"}
+        if include_unpublished:
+            columns += ",is_published,revision,needs_review"
+        else:
+            params["is_published"] = "eq.true"
+        return self._select("notes", {"select": columns, **params})
 
     def keyed_hash(self, value: str) -> str:
         """이메일·IP 같은 원문 대신 저장할 키. secret key로 서명한 해시라 값을 되돌려 추측하기 어렵다."""
