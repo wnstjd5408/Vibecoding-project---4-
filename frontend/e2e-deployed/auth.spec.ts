@@ -6,7 +6,9 @@ import { expect, test, type Page } from '@playwright/test'
 
 const { E2E_BASE_URL, E2E_EMAIL, E2E_PASSWORD, E2E_ACCESS_URL } = process.env
 
-test.skip(!E2E_BASE_URL || !E2E_EMAIL || !E2E_PASSWORD, 'E2E_BASE_URL, E2E_EMAIL, E2E_PASSWORD가 필요하다')
+// 주소와 시험 계정이 없으면 건너뛴다(목업 시험만 도는 환경).
+const configured = Boolean(E2E_BASE_URL && E2E_EMAIL && E2E_PASSWORD)
+test.skip(!configured, '배포 주소와 시험 계정 환경변수가 없다')
 
 type ApiResult = { status: number; body: unknown }
 
