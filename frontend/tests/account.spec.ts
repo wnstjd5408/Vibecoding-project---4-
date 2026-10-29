@@ -105,27 +105,29 @@ test('방문자가 내 정보를 직접 열면 로그인 화면으로 간다', a
   await expect(page.getByRole('heading', { level: 1, name: '로그인' })).toBeVisible()
 })
 
-test('로그아웃 확인은 E03 결과를 세 가지로 가른다(받지 못하면 로그인 상태가 유지된다고 단정하지 않는다)', async ({ page }) => {
+test('로그아웃 확인은 E03 결과를 세 가지로 가르고, 방문자로 확인한 상태를 함께 돌려준다', async ({ page }) => {
   await page.goto('/login')
   const result = await page.evaluate(async () => {
     const { checkLoggedOut } = await import('/src/account/logout.ts')
     const state = (status: string, role: string) => ({ status, role, displayName: null })
+    const run = async (status: string, role: string) => {
+      const check = await checkLoggedOut(async () => state(status, role) as never)
+      return { result: check.result, state: check.state }
+    }
     return {
-      // 방문자로 확인됐다
-      loggedOut: await checkLoggedOut(async () => state('ready', 'visitor') as never),
+      // 방문자로 확인됐다. 이 상태를 전역에 그대로 반영하므로 E03을 한 번 더 부르지 않는다
+      loggedOut: await run('ready', 'visitor'),
       // 아직 로그인 상태로 읽혔다
-      stillMember: await checkLoggedOut(async () => state('ready', 'member') as never),
-      stillOperator: await checkLoggedOut(async () => state('ready', 'operator') as never),
+      stillMember: await run('ready', 'member'),
+      stillOperator: await run('ready', 'operator'),
       // E03을 받지 못하면 loadAuthState는 예외 없이 status 'error', role 'visitor'를 돌려준다. 이때 로그아웃됐다고도, 안 됐다고도 단정하지 않는다.
-      stateError: await checkLoggedOut(async () => state('error', 'visitor') as never),
-      loading: await checkLoggedOut(async () => state('loading', 'visitor') as never),
+      stateError: await run('error', 'visitor'),
+      loading: await run('loading', 'visitor'),
     }
   })
-  expect(result).toEqual({
-    loggedOut: 'logged_out',
-    stillMember: 'still_logged_in',
-    stillOperator: 'still_logged_in',
-    stateError: 'unknown',
-    loading: 'unknown',
-  })
+  expect(result.loggedOut).toEqual({ result: 'logged_out', state: { status: 'ready', role: 'visitor', displayName: null } })
+  expect(result.stillMember.result).toBe('still_logged_in')
+  expect(result.stillOperator.result).toBe('still_logged_in')
+  expect(result.stateError.result).toBe('unknown')
+  expect(result.loading.result).toBe('unknown')
 })

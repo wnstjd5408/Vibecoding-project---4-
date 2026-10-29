@@ -27,7 +27,7 @@ type Failure = 'failed' | 'unconfirmed'
 export function AccountMenu() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { refresh } = useAuth()
+  const { apply } = useAuth()
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -102,14 +102,14 @@ export function AccountMenu() {
       return
     }
     const check = await checkLoggedOut()
-    if (check === 'logged_out') {
-      // 방문자로 확인된 뒤에 전역 상태를 갱신하고 이동한다.
-      await refresh()
+    if (check.result === 'logged_out') {
+      // 방문자로 확인된 상태를 그대로 전역에 반영하고 이동한다. E03을 한 번 더 부르지 않는다(두 번째 조회가 실패해 확인된 상태를 오류로 덮어쓰지 않게).
+      apply(check.state)
       setOpen(false)
       navigate(userPaths.noteList, { replace: true })
       return
     }
-    setFailure(check === 'unknown' ? 'unconfirmed' : 'failed')
+    setFailure(check.result === 'unknown' ? 'unconfirmed' : 'failed')
     setBusy(false)
   }
 
