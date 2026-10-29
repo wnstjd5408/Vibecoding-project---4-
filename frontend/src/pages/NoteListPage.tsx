@@ -5,8 +5,7 @@ import type { NoteListResponse } from '../api/types.ts'
 import { useAuth } from '../auth/useAuth.ts'
 import { AppHeader, Button, LinkButton, NoteListItem, StateMessage } from '../components/index.ts'
 import { Chip } from '../components/Chip.tsx'
-import { IconLinkButton } from '../components/IconButton.tsx'
-import { AccountIcon } from '../components/icons.tsx'
+import { AccountMenu } from '../account/AccountMenu.tsx'
 import { noteReadPath, operatorPaths, userPaths } from '../routes/paths.ts'
 import styles from './NoteListPage.module.css'
 
@@ -61,7 +60,7 @@ function NoteList() {
       {auth.role === 'operator' && <Link className={styles.link} to={operatorPaths.home}>운영자 메뉴</Link>}
       {auth.role === 'visitor'
         ? <LinkButton to={userPaths.login}>로그인</LinkButton>
-        : <IconLinkButton label="내 정보" to={userPaths.myInfo}><AccountIcon /></IconLinkButton>}
+        : <AccountMenu />}
     </>} />
     <main>
       <h1 className={styles.heading}>과목</h1>

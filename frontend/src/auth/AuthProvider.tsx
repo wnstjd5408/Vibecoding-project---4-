@@ -19,6 +19,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return next
   }, [])
 
+  const apply = useCallback((next: AuthState) => {
+    // 이 시점 이후 도착하는 오래된 조회 결과가 확인된 상태를 덮어쓰지 못하게 한다.
+    requests.current.begin()
+    setState(next)
+  }, [])
+
   useEffect(() => {
     const gate = requests.current
     const id = gate.begin()
@@ -31,6 +37,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const value = useMemo<AuthContextValue>(() => ({ ...state, refresh }), [state, refresh])
+  const value = useMemo<AuthContextValue>(() => ({ ...state, refresh, apply }), [state, refresh, apply])
   return <AuthContext value={value}>{children}</AuthContext>
 }
