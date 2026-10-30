@@ -15,6 +15,8 @@ export const operatorPaths = {
   home: '/admin', // F5-1a 운영자 노트 목록 (F1-1b의 "운영자 메뉴" 링크가 여기로 온다)
   glossary: '/admin/glossary', // F5-1c 용어 사전
   reports: '/admin/reports', // F5-2 신고
+  noteNew: '/admin/notes/new', // F5-1d 새 노트
+  noteEdit: '/admin/notes/:noteId', // F5-1b 노트 수정 (F5-1f 삭제 확인은 목록·수정 화면 위에 열린다)
   accounts: '/admin/accounts', // F4-3a 계정 발급
 } as const
 
