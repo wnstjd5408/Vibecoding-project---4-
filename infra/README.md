@@ -511,3 +511,32 @@ stderr는 메모리에서 고정 코드로 분류하며, 원문이나 예외를 
 
 `sslmode`, `channel_binding` 이외 URL 쿼리 옵션은 잘못된 조건으로 검사하지 않도록
 `PROBE_URL_UNSUPPORTED`로 표시한다. 정상 CLI 덤프의 옵션과 동작은 변경하지 않는다.
+
+### 비밀번호·SSL·풀러 오류 구분
+
+연결 진단은 덤프와 다른 시작 옵션을 넣지 않는다. `PGOPTIONS`로 전달하던
+읽기 전용/타임아웃 설정은 제거했고, 연결 검사는 SQL의
+`BEGIN READ ONLY; SELECT 1; ROLLBACK;`으로 수행한다. 프로세스 시간 제한은 유지한다.
+
+`TLS` probe는 PostgreSQL SSLRequest 뒤 인증서와 호스트 이름을 검증하며 사용자명이나
+비밀번호를 전송하지 않는다. runner의 CA 저장소를 쓰므로 컨테이너 libpq의 SSL 정책과
+완전히 같지는 않다. TLS probe 성공만으로 비밀번호나 풀러 정상 여부를 판단하지 않는다.
+TLS probe가 실패해도 기존 psql 검사를 수행해 각각의 결과를 남긴다.
+
+| 진단 코드 | 확인된 범위 |
+|---|---|
+| `DB_AUTH_FAILED` | 서버의 비밀번호 인증 거절. 사용자명·프로젝트 연결 대상도 확인해야 한다 |
+| `DB_TLS_CERTIFICATE_FAILED`, `TLS_CERTIFICATE_FAILED` | 인증서/호스트 이름 검증 실패 |
+| `DB_TLS_NEGOTIATION_FAILED`, `TLS_HANDSHAKE_FAILED` | TLS 협상 실패 |
+| `DB_POOLER_AUTH_LOOKUP_FAILED` | 풀러가 내부 인증 정보를 조회하지 못함. 사용자 비밀번호 오류로 단정하지 않는다 |
+| `DB_POOLER_UPSTREAM_UNAVAILABLE` | 풀러에서 상위 DB 연결 실패 |
+| `DB_POOLER_AUTH_BLOCKED` | 인증 실패 누적으로 일시 차단 |
+| `DB_POOLER_CIRCUIT_OPEN` | 풀러 보호 회로 차단. 이 코드만으로 세부 원인은 불명 |
+| `DB_NETWORK_RESTRICTED` | 풀러 네트워크 허용 목록에서 거절 |
+| `DB_STARTUP_OPTIONS_REJECTED` | 시작 메시지/옵션 거절 |
+| `PSQL_FAILED` | 아직 분류되지 않은 오류. 비밀번호·SSL·풀러 중 하나로 추정하지 않는다 |
+
+고정 코드의 근거는 [공식 Supavisor 오류 정의](https://github.com/supabase/supavisor/tree/main/lib/supavisor/errors)와
+[회로 차단 설명](https://github.com/supabase/supavisor/blob/main/lib/supavisor/circuit_breaker.ex)이다.
+원문이나 호스트·사용자명·비밀번호는 출력하지 않는다. 이 진단은 비밀번호 초기화,
+SSL 검증 해제, 풀러/서버 설정 변경을 자동 수행하지 않는다.

@@ -62,20 +62,72 @@ RULES = (
 )
 
 SQLSTATES = {
-    "28P01": "DB_AUTH_FAILED", "28000": "DB_AUTH_FAILED",
+    "28P01": "DB_AUTH_FAILED", "28000": "DB_AUTH_POLICY_FAILED",
     "42501": "DB_PERMISSION_DENIED", "3D000": "DB_NAME_INVALID",
     "53300": "DB_CONNECTION_LIMIT", "57P03": "DB_POOLER_UNAVAILABLE",
 }
+
+# Supavisor sends these fixed public identifiers in its PostgreSQL error message.
+# Match them before generic password text: an auth_query error is pooler-side,
+# not proof that the user's supplied password is wrong.
+# https://github.com/supabase/supavisor/tree/main/lib/supavisor/errors
+POOLER_CODES = {
+    "EAUTHQUERY": "DB_POOLER_AUTH_LOOKUP_FAILED",
+    "EAUTHSECRETS": "DB_POOLER_AUTH_LOOKUP_FAILED",
+    "ECIRCUITBREAKER": "DB_POOLER_CIRCUIT_OPEN",
+    "EWRONGPASSWORD": "DB_AUTH_FAILED",
+    "ESSLREQUIRED": "DB_SSL_REQUIRED",
+    "ESSLHANDSHAKE": "DB_TLS_NEGOTIATION_FAILED",
+    "EADDRNOTALLOWED": "DB_NETWORK_RESTRICTED",
+    "EBANNED": "DB_POOLER_TENANT_BANNED",
+    "EMAXCONN": "DB_CONNECTION_LIMIT",
+    "EMAXCONNSESSION": "DB_CONNECTION_LIMIT",
+    "ESTARTUPMESSAGE": "DB_STARTUP_OPTIONS_REJECTED",
+}
+
+CONNECTION_RULES = (
+    ("DB_POOLER_AUTH_BLOCKED", ("too many authentication failures",)),
+    ("DB_POOLER_AUTH_LOOKUP_FAILED", (
+        "authentication query failed", "auth_query connection failed",
+        "failed to retrieve database credentials", "authentication query returned wrong format",
+        "auth_query secret check timed out", "no auth_query configured",
+        "unsupported or invalid secret format", "failed to parse scram secret",
+        "failed to retrieve authentication secrets",
+    )),
+    ("DB_POOLER_UPSTREAM_UNAVAILABLE", (
+        "too many failed attempts to connect to the database",
+        "unable to establish connection to upstream database", "connection to database not available",
+    )),
+    ("DB_POOLER_CIRCUIT_OPEN", ("circuit breaker open",)),
+    ("DB_NETWORK_RESTRICTED", ("address not in tenant allow_list", "ip address is banned")),
+    ("DB_TLS_CERTIFICATE_FAILED", (
+        "does not match host name", "unable to get local issuer certificate",
+        "self-signed certificate", "certificate has expired",
+    )),
+    ("DB_TLS_NEGOTIATION_FAILED", ("ssl handshake failed", "received invalid response to ssl negotiation")),
+    ("DB_STARTUP_OPTIONS_REJECTED", ("unsupported startup parameter", "unrecognized configuration parameter")),
+    ("DB_AUTH_PROTOCOL_FAILED", (
+        "scram authentication requires", "channel binding required",
+        "server did not offer scram-sha-256-plus", "authentication method 10 not supported",
+        "server signature is incorrect", "malformed scram message",
+    )),
+)
 
 
 def classify_log(content: str) -> str:
     # Connection options/user input are not evidence of an error. In particular,
     # a valid sslmode=require URL must not turn unrelated failures into TLS errors.
     content = re.sub(r"postgres(?:ql)?://\S+", "", content, flags=re.IGNORECASE)
+    lowered = content.lower()
+    for code, markers in CONNECTION_RULES:
+        if any(marker in lowered for marker in markers):
+            return code
+    for provider_code in re.findall(r"\((E[A-Z]+)\)", content):
+        if provider_code in POOLER_CODES:
+            return POOLER_CODES[provider_code]
     for state in re.findall(r"(?:ERROR|FATAL):\s+([A-Z0-9]{5}):", content):
         if state in SQLSTATES:
             return SQLSTATES[state]
-    lowered = content.lower()
     for code, markers in RULES:
         if any(marker in lowered for marker in markers):
             return code
