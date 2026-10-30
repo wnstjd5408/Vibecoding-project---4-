@@ -106,7 +106,7 @@ def read_note(
         raise ApiError("not_found", stage="validate")
     ip_key = f"ip:{ip_bucket(client_ip(request))}"
     # 공개 읽기 제한은 E04와 같은 IP 키다. 명세 1.2의 순서(404 뒤)와 달리 DB를 읽기 전에 센다. 그래야 없는 id·
-    # 비공개 id를 무제한으로 두드릴 수 없고, 세는 방식이 같아 노트가 있는지도 새지 않는다(429는 어디서든 난다).
+    # 비공개 id를 무제한으로 두드릴 수 없고, 세는 방식이 같아 노트가 있는지도 새지 않는다(2026-10-30 김준성 결정).
     limiter.check(PUBLIC_READ, ip_key)
     operator = user is not None and user.is_operator
     note = supabase.get_note(int(note_id), include_unpublished=operator)
