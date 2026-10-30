@@ -309,8 +309,9 @@ Vercel 배포의 FastAPI가 장기 키 없이 Bedrock을 부를 때 맡는 역�
    terraform destroy
    ```
    마지막 줄이 `Destroy complete!`이고 오류가 없어야 한다.
-5. **Vercel AI 역할을 지운다.** 먼저 Vercel 프로젝트의 `AWS_ROLE_ARN`·`AI_AUTH_MODE`를 Production과 Preview(`staging`)에서 지운다(임시 확인 API는 MEG-121에서 이미 지웠다). 그다음 이 폴더를 지운다. 상태 버킷을 쓰므로 상태 버킷을 지우기 전에 실행한다.
+5. **Vercel AI 역할을 지운다.** 먼저 Vercel 프로젝트의 `AWS_ROLE_ARN`·`AI_AUTH_MODE`를 Production과 Preview(`staging`)에서 지운다(임시 확인 API는 MEG-121에서 이미 지웠다). Vercel 공급자(`oidc.vercel.com/<team>`)는 계정에 하나뿐이라 같은 팀의 다른 프로젝트 역할도 쓸 수 있다. 지우기 전에 아래 첫 명령으로 이 공급자를 신뢰하는 역할을 찾고, 이 폴더의 역할 2개 말고 다른 역할이 나오면 공급자는 남기고 담당자와 먼저 정한다. 그다음 이 폴더를 지운다. 상태 버킷을 쓰므로 상태 버킷을 지우기 전에 실행한다.
    ```powershell
+   aws iam list-roles --query "Roles[?contains(to_string(AssumeRolePolicyDocument), 'oidc.vercel.com')].RoleName" --output text
    cd vercel-oidc
    terraform destroy
    cd ..
