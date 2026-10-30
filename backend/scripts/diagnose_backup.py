@@ -32,6 +32,7 @@ def check_url(value: str) -> str:
 
 
 RULES = (
+    ("IMAGE_NETWORK_FAILED", ("failed to resolve reference", "tls handshake timeout", "net/http: request canceled")),
     ("DB_AUTH_FAILED", ("password authentication failed", "sasl authentication failed", "wrong password")),
     ("DB_USER_OR_PROJECT_INVALID", ("tenant or user not found", "role does not exist")),
     ("DB_PERMISSION_DENIED", ("permission denied", "must be superuser")),
@@ -41,7 +42,12 @@ RULES = (
     ("DB_TLS_FAILED", ("certificate verify failed", "ssl error", "tls handshake")),
     ("DB_VERSION_MISMATCH", ("server version mismatch",)),
     ("DOCKER_UNAVAILABLE", ("cannot connect to the docker daemon", "is the docker daemon running")),
-    ("CONTAINER_IMAGE_FAILED", ("pull access denied", "manifest unknown", "toomanyrequests")),
+    ("IMAGE_RATE_LIMITED", ("toomanyrequests", "too many requests", "pull rate limit")),
+    ("IMAGE_MANIFEST_MISSING", ("manifest unknown", "no matching manifest")),
+    ("IMAGE_ACCESS_DENIED", ("pull access denied", "unauthorized: authentication required")),
+    ("DUMP_TOOL_MISSING", ("pg_dump: not found", "pg_dumpall: not found", "executable file not found")),
+    ("DB_CONNECTION_CLOSED", ("server closed the connection", "unexpected eof", "connection reset by peer")),
+    ("DB_SSL_REQUIRED", ("ssl connection is required", "sslmode=require", "no pg_hba.conf entry")),
     ("CLI_ARGUMENT_INVALID", ("unknown flag", "unknown command", "unrecognized arguments")),
     ("DB_URL_INVALID", ("invalid connection string", "invalid percent-encoded token", "failed to parse connection string")),
 )

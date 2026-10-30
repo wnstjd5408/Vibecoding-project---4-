@@ -472,3 +472,24 @@ aws s3api list-object-versions --bucket $bucket --prefix db/latest/backup.tar --
 - `sts_event_region`은 백엔드 `BEDROCK_REGION`과 같아야 한다. 백엔드 리전을 바꾸면 이 값도 바꾼다.
 - 로컬 검사: `terraform fmt -check -recursive`, `terraform init -backend=false`, `terraform validate`. `infra/`, `infra/github-oidc/`, `infra/vercel-oidc/`, `infra/db-backup/`에서 각각 실행한다. PR CI에서는 Terraform을 실행하지 않는다. `main` 병합 뒤의 CD만 실행한다.
 - provider를 올릴 때는 `terraform providers lock -platform=windows_amd64 -platform=linux_amd64 -platform=darwin_arm64 -platform=darwin_amd64`로 잠금 파일을 갱신해 커밋한다.
+
+### 백업 이미지 다운로드 진단 보완 (MEG-94)
+
+`backend/scripts/dump_database.sh`는 CLI 2.121.0 / PostgreSQL 17에 맞는
+`17.11.0.004` 이미지를 ECR에서 먼저 받고, 실패하면 공식 GHCR 미러에서 받는다.
+두 레지스트리가 모두 실패하면 DB에 연결하지 않고 중단한다. CLI를 올릴 때 이 이미지
+핀도 함께 확인한다. 로그 원문은 출력하거나 아티팩트로 올리지 않는다.
+
+워크플로 `Dump database` 단계는 다음과 같이 연결한다. 기존 `run: |` 아래의
+덤프 함수와 중복 블록 전체를 교체해야 한다.
+
+```yaml
+      - name: Dump database
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: bash backend/scripts/dump_database.sh
+```
+
+진단 코드 `IMAGE_RATE_LIMITED`는 요청 제한, `IMAGE_MANIFEST_MISSING`은 태그/플랫폼
+매니페스트 없음, `IMAGE_ACCESS_DENIED`는 이미지 접근 거부다. 이전
+`CONTAINER_IMAGE_FAILED` 코드만으로는 이 셋을 구분할 수 없다.
