@@ -58,9 +58,6 @@ const inFlight = new Map<string, Promise<ExplainResponse>>()
 // 서버가 429·409 in_progress에서 준 retry_after_seconds 동안은 같은 선택의 요청을 보내지 않는다. 시트를 닫았다 다시 열어도 이어진다.
 const waits = new Map<string, { until: number; error: unknown }>()
 
-// 서버 값이 이상하게 커도 화면이 오래 막히지 않게 하는 상한(초)
-const MAX_WAIT_SECONDS = 600
-
 function idOf(target: ExplainTarget): string {
   return `${target.noteId}:${target.revision}:${target.start}:${target.end}`
 }
@@ -96,7 +93,7 @@ export function requestExplanation(target: ExplainTarget): Promise<ExplainRespon
     (error: unknown) => {
       if (!keepsKey(error)) keys.delete(id)
       const seconds = isApiError(error) && (error.code === 'rate_limited' || isApiError(error, 'conflict', 'in_progress')) ? error.retryAfterSeconds : undefined
-      if (seconds !== undefined && seconds > 0) waits.set(id, { until: Date.now() + Math.min(seconds, MAX_WAIT_SECONDS) * 1000, error })
+      if (seconds !== undefined && seconds > 0) waits.set(id, { until: Date.now() + seconds * 1000, error })
       throw error
     },
   )

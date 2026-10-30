@@ -1091,3 +1091,26 @@ test('review_status가 없는 1회용 설명은 "AI 생성·검수 전", 검수 
   await expect(sheet.getByText('AI 생성', { exact: true })).toBeVisible()
   await expect(sheet.getByText('AI 생성·검수 전')).toHaveCount(0)
 })
+
+// PR #67 AI 리뷰(재검증) P2 서버가 준 대기 시간은 줄이지 않는다. 600초를 넘는 값도 기한 전에는 요청이 늘지 않는다.
+test('429 retry_after_seconds가 600초를 넘어도 서버 기한 전에는 다시 보내지 않고 기한 뒤에 보낸다', async ({ page }) => {
+  await page.clock.install()
+  const { calls } = await setupAi(page, {
+    member: true,
+    respond: (_call, n) => n === 1 ? { status: 429, json: withRetryAfter('rate_limited', 900) } : { status: 200, json: aiSuccess },
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('900초 뒤에 다시 시도할 수 있어요')).toBeVisible()
+  await page.clock.fastForward(601_000)
+  await expect(retryButton(page)).toHaveAttribute('aria-disabled', 'true') // 600초가 지나도 서버 기한(900초)까지는 막혀 있다
+  await retryButton(page).click({ force: true })
+  await page.waitForTimeout(200)
+  expect(calls).toHaveLength(1)
+  await page.clock.fastForward(300_000)
+  await expect(retryButton(page)).not.toHaveAttribute('aria-disabled', 'true')
+  await retryButton(page).click()
+  await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls).toHaveLength(2)
+})

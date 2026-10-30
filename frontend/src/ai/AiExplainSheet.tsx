@@ -113,7 +113,8 @@ function AiExplainContent({ target, onBadge, onLoginRequired, onReloadNote }: Pi
   const [waitingUntil, setWaitingUntil] = useState<number | null>(null)
   useEffect(() => {
     if (waitingUntil === null) return
-    const timer = setTimeout(() => setWaitingUntil(null), Math.max(0, waitingUntil - Date.now()))
+    // setTimeout은 약 24일(2^31-1ms)을 넘으면 바로 실행되므로 그 안으로 줄인다. 일찍 풀려도 요청은 explain.ts가 서버 기한까지 막는다.
+    const timer = setTimeout(() => setWaitingUntil(null), Math.min(Math.max(0, waitingUntil - Date.now()), 2_147_483_647))
     return () => clearTimeout(timer)
   }, [waitingUntil])
 
