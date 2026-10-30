@@ -1,0 +1,93 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+
+# Install the independent shutdown timer BEFORE networking or package installation.
+cat >/etc/systemd/system/backup-runner-stop.service <<'UNIT'
+[Unit]
+Description=Stop backup runner after maximum boot lifetime
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/shutdown -h now
+UNIT
+cat >/etc/systemd/system/backup-runner-stop.timer <<'UNIT'
+[Unit]
+Description=Bound backup compute time even when GitHub jobs are cancelled
+[Timer]
+OnBootSec=60min
+AccuracySec=10s
+Unit=backup-runner-stop.service
+[Install]
+WantedBy=timers.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now backup-runner-stop.timer
+
+# The EIP association follows instance creation; retry while it becomes reachable.
+export DEBIAN_FRONTEND=noninteractive
+for attempt in $(seq 1 30); do
+  if apt-get update -qq && apt-get install -y -qq docker.io awscli git curl ca-certificates python3 libicu74; then
+    break
+  fi
+  if [ "$attempt" = 30 ]; then exit 1; fi
+  sleep 10
+done
+systemctl enable --now docker
+id runner >/dev/null 2>&1 || useradd --create-home --shell /bin/bash runner
+usermod -aG docker runner
+install -d -o runner -g runner -m 700 /opt/actions-runner
+curl --fail --silent --show-error --location --retry 5 \
+  'https://github.com/actions/runner/releases/download/v${runner_version}/actions-runner-linux-x64-${runner_version}.tar.gz' \
+  -o /tmp/actions-runner.tar.gz
+echo '${runner_sha256}  /tmp/actions-runner.tar.gz' | sha256sum --check --status
+tar -xzf /tmp/actions-runner.tar.gz -C /opt/actions-runner
+rm /tmp/actions-runner.tar.gz
+chown -R runner:runner /opt/actions-runner
+
+# Registration token is entered interactively through SSM, never Terraform/user-data.
+cat >/usr/local/sbin/register-backup-runner <<'REGISTER'
+#!/bin/bash
+set -euo pipefail
+set +x
+umask 077
+cd /opt/actions-runner
+if [ -e .runner ]; then
+  echo 'Runner already registered. Remove it in GitHub before replacing this instance.'
+  exit 1
+fi
+read -r -s -p 'One-hour registration token for the PRIVATE operations repository: ' registration_token
+printf '\n'
+trap 'unset registration_token ACTIONS_RUNNER_INPUT_TOKEN; rm -f /run/backup-runner-register.log' EXIT
+export ACTIONS_RUNNER_INPUT_TOKEN="$registration_token"
+unset registration_token
+if ! sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh --unattended --url 'https://github.com/${repository}' \
+  --name backup-fixed-ip --labels backup-fixed-ip \
+  --work _work > /run/backup-runner-register.log 2>&1; then
+  echo 'Registration failed; token and raw output suppressed.'
+  exit 1
+fi
+unset ACTIONS_RUNNER_INPUT_TOKEN
+./svc.sh install runner
+service_name=$(cat .service)
+mkdir -p "/etc/systemd/system/$service_name.d"
+cat >"/etc/systemd/system/$service_name.d/cleanup.conf" <<'UNIT'
+[Service]
+ExecStartPre=+/usr/local/sbin/clean-backup-runner
+UMask=0077
+UNIT
+systemctl daemon-reload
+./svc.sh start
+echo 'Runner registered. Stop the instance after setup.'
+REGISTER
+chmod 700 /usr/local/sbin/register-backup-runner
+
+# Cancelled jobs may leave data behind. Clean before EVERY runner service start.
+cat >/usr/local/sbin/clean-backup-runner <<'CLEAN'
+#!/bin/bash
+set -euo pipefail
+docker ps -aq | xargs -r docker rm -f >/dev/null
+find /opt/actions-runner/_work -mindepth 1 -delete 2>/dev/null || test ! -d /opt/actions-runner/_work
+find /opt/actions-runner/_diag -type f -delete 2>/dev/null || test ! -d /opt/actions-runner/_diag
+CLEAN
+chmod 700 /usr/local/sbin/clean-backup-runner
+echo 'Bootstrap complete; register using SSM. No GitHub token has been installed.'
