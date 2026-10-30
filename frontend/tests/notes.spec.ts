@@ -1502,3 +1502,72 @@ test('generating 대기 중(타이머 예약 상태)에 화면을 떠나면 이�
   await page.waitForTimeout(300)
   expect(calls.count).toBe(1)
 })
+
+// PR #79 AI 리뷰 P1: 표시 이름·역할이 같은 다른 계정이 이전 계정의 진행 중 E11 요청과 429 대기를 이어받으면 안 된다.
+// 계정 구분은 표시 이름이 아니라 로그인·로그아웃 때마다 올라가는 세션 번호로 한다. 브라우저에서 실제 로그아웃·로그인 흐름으로 시험한다.
+async function setupAccountSwitch(page: Page, respond: (n: number) => QuizReply | Promise<QuizReply>) {
+  const state = { loggedIn: true, calls: 0 }
+  await page.route('**/api/me', (route) => route.fulfill({ json: state.loggedIn ? { authenticated: true, role: 'member', display_name: '같은이름' } : { authenticated: false } }))
+  await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
+  await page.route('**/api/auth/logout', (route) => {
+    state.loggedIn = false
+    return route.fulfill({ status: 204 })
+  })
+  await page.route('**/api/auth/login', (route) => {
+    state.loggedIn = true
+    return route.fulfill({ json: { user: { role: 'member', display_name: '같은이름' } } })
+  })
+  await page.route('**/api/quiz/today', async (route) => {
+    state.calls += 1
+    const reply = await respond(state.calls)
+    if (reply === 'abort') return route.abort()
+    return route.fulfill(reply)
+  })
+  return state
+}
+
+// 로그아웃한 뒤 같은 표시 이름의 다른 계정(B)으로 로그인해 퀴즈 화면으로 온다.
+async function switchToSameNameAccount(page: Page) {
+  await page.getByRole('button', { name: /^내 계정/ }).click()
+  await page.getByRole('menuitem', { name: '로그아웃' }).click()
+  await expect(page).toHaveURL(/\/$/)
+  await goInAppQuiz(page, '/login')
+  await page.getByLabel('이메일').fill('b@example.test')
+  await page.getByLabel('비밀번호').fill('example-password')
+  await page.getByRole('button', { name: '로그인' }).click()
+  await expect(page).toHaveURL(/\/quiz$/)
+}
+
+const quizReady = (title: string): QuizReply => ok({ status: 'ready', quiz_date: '2026-10-23', items: [{ ...quizItems[0], question: title }] })
+
+test('A의 E11 요청이 진행 중일 때 로그아웃하고 같은 표시 이름의 B로 로그인해도 B는 A의 요청·문항을 받지 않는다', async ({ page }) => {
+  const held = gate()
+  const state = await setupAccountSwitch(page, async (n) => {
+    if (n === 1) {
+      await held.promise
+      return quizReady('A의 문항')
+    }
+    return quizReady('B의 문항')
+  })
+  await page.goto('/quiz')
+  await expect.poll(() => state.calls).toBe(1)
+  await switchToSameNameAccount(page)
+  await expect(page.getByRole('heading', { name: 'B의 문항' })).toBeVisible()
+  expect(state.calls).toBe(2) // B는 A의 진행 중 요청을 이어받지 않고 자기 요청을 보낸다
+  held.release() // 늦게 도착한 A의 응답
+  await page.waitForTimeout(300)
+  await expect(page.getByText('A의 문항')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'B의 문항' })).toBeVisible()
+})
+
+test('A가 429 대기 중일 때 같은 표시 이름의 B로 로그인하면 B는 그 대기를 이어받지 않는다', async ({ page }) => {
+  const state = await setupAccountSwitch(page, (n) => n === 1
+    ? { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 600 } } }
+    : ok({ status: 'none' }))
+  await page.goto('/quiz')
+  await expect(page.getByText('600초 뒤에 다시 시도할 수 있어요')).toBeVisible()
+  await switchToSameNameAccount(page)
+  await expect(page.getByRole('heading', { name: '오늘 풀 퀴즈가 없어요' })).toBeVisible()
+  expect(state.calls).toBe(2)
+  await expect(page.getByText('초 뒤에 다시 시도할 수 있어요')).toHaveCount(0)
+})

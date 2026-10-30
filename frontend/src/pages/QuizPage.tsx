@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { AccountMenu } from '../account/AccountMenu.tsx'
 import type { QuizItem } from '../api/types.ts'
+import { currentSession } from '../auth/sessionGeneration.ts'
 import { useAuth } from '../auth/useAuth.ts'
 import { AiBadge, AppHeader, Button, DifficultyChip, LinkButton, QuizCard, StateMessage } from '../components/index.ts'
 import type { Difficulty } from '../components/index.ts'
@@ -84,8 +85,8 @@ export default function QuizPage() {
   const visitor = auth.status !== 'loading' && auth.role === 'visitor'
   const canRequest = auth.status !== 'loading' && !visitor
   const current = result?.key === attempt ? result.view : null
-  // 계정이 바뀌면 이전 계정의 진행 중 요청·429 대기를 이어받지 않는다.
-  const account = `${auth.role}:${auth.displayName ?? ''}`
+  // 로그인·로그아웃이 있었으면 이전 세션의 진행 중 요청·429 대기를 이어받지 않는다. 표시 이름은 고유하지 않아 계정을 가르는 데 쓰지 않는다.
+  const account = String(currentSession())
   // 다시 확인·다시 시도를 누르면 눌린 버튼이 사라지므로, 결과 영역을 포커스 자리로 잡아 둔다.
   const bodyRef = useRef<HTMLDivElement>(null)
 
