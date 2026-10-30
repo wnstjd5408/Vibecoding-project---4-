@@ -24,6 +24,7 @@ import { Badge } from '../components/Badge.tsx'
 import { Chip } from '../components/Chip.tsx'
 import { IconButton, IconLinkButton } from '../components/IconButton.tsx'
 import { AccountIcon, ExpandIcon } from '../components/icons.tsx'
+import { AiExplainDemo, FavoriteDemo, QuizPromptDemo } from '../loginPrompt/LoginPromptDemo.tsx'
 import { devPaths, noteReadPath } from '../routes/paths.ts'
 import { cx } from '../components/cx.ts'
 import styles from './ComponentShowcase.module.css'
@@ -394,6 +395,24 @@ export default function ComponentShowcase() {
                   <TextField label="내 답" multiline placeholder="답을 입력해요" />
                 </QuizCard>
               </div>
+            </div>
+          </Row>
+        </Section>
+
+        <Section title="8. 로그인 안내 시트 (MEG-77)">
+          <Row label="즐겨찾기 · 가짜 E08 응답이 방문자에게 401 login_required를 주면 시트가 열리고 저장되지 않아요">
+            <div className={styles.inline}>
+              <FavoriteDemo />
+            </div>
+          </Row>
+          <Row label="AI 설명 버튼 · 가짜 E09 응답이 방문자에게 401 login_required를 주면 같은 시트가 열려요">
+            <div className={styles.inline}>
+              <AiExplainDemo />
+            </div>
+          </Row>
+          <Row label="상황별 본문 · 퀴즈 문구와 기본 문구(닫은 뒤 기본으로 열면 이전 문구가 남지 않아요)">
+            <div className={styles.inline}>
+              <QuizPromptDemo />
             </div>
           </Row>
         </Section>
