@@ -1,0 +1,232 @@
+/* 목업 F5-1a 목록 표, F5-1b·d 편집 폼, F5-1f 삭제 확인 창 */
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.title {
+  margin: 0 0 var(--space-4);
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 700;
+}
+
+.head .title {
+  margin: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.filterLabel {
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.filterSelect {
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-200);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+/* 새 노트 "+" 버튼: 먹색으로 채운 아이콘 버튼 */
+.newNote {
+  width: 46px;
+  height: 46px;
+  background: var(--ink);
+  color: var(--surface-100);
+}
+
+.status {
+  margin: 0 0 var(--space-3);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.error {
+  margin: 0 0 var(--space-3);
+  color: var(--red-pen);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.tableWrap {
+  overflow-x: auto;
+  border: 1px solid var(--surface-300);
+  border-radius: var(--radius-md);
+  background: var(--surface-200);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.table caption {
+  padding: var(--space-3) var(--space-4);
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+  text-align: left;
+}
+
+.table th {
+  background: var(--surface-200);
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.table td,
+.table th {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--surface-300);
+}
+
+.table tr:last-child td {
+  border-bottom: 0;
+}
+
+.table td:last-child {
+  white-space: nowrap;
+}
+
+.table strong {
+  font-weight: 600;
+}
+
+/* 표 안의 글자 버튼·링크: 밑줄 */
+.link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.empty {
+  margin: 0;
+  padding: var(--space-8) var(--space-4);
+}
+
+.formCard {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 760px;
+  padding: var(--space-6);
+  background: var(--surface-200);
+  border: 1px solid var(--surface-300);
+  border-radius: var(--radius-lg);
+}
+
+.body {
+  min-height: 200px;
+  resize: vertical;
+}
+
+.notice {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+/* 저장하려는 사이 다른 곳에서 바뀐 노트. 입력은 그대로 남는다. */
+.conflict {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--red-pen);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.conflict p {
+  margin: 0;
+}
+
+/* "취소"는 목록으로 돌아가는 링크라 버튼과 같은 모양으로 그린다 */
+.cancel {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.divider {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--surface-300);
+}
+
+.dialog {
+  box-sizing: border-box;
+  width: min(480px, calc(100% - 32px));
+  padding: var(--space-6);
+  border: 1px solid var(--surface-300);
+  border-radius: var(--radius-md);
+  background: var(--surface-200);
+  color: var(--ink);
+}
+
+.dialog::backdrop {
+  background: color-mix(in srgb, var(--ink) 40%, transparent);
+}
+
+.dialogTitle {
+  margin: var(--space-2) 0 var(--space-3);
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 700;
+}
+
+.dialogNote {
+  margin: 0 0 var(--space-2);
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 700;
+}
+
+.dialogBody {
+  margin: 0 0 var(--space-4);
+  font-size: 14px;
+  line-height: 22px;
+}
