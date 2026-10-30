@@ -159,6 +159,37 @@ def test_text_after_or_beside_code_is_still_unescaped(body):
     assert cut(body, find_spans(body, [(21, "A*")])) == [(21, "A\\*")]
 
 
+def test_code_block_opened_in_a_list_item_ends_with_the_item():
+    # 취소선 글자 "~1 약"을 가져오면 "- ~~~1 약~~"가 된다. CommonMark에서는 목록 항목 안의 코드 블록이라
+    # 항목이 끝나면 함께 끝난다. 뒤 문단까지 코드로 보면 A\*를 놓친다.
+    page = "00000000-0000-4000-8000-000000000001"
+    tree = {
+        page: [
+            {"id": "00000000-0000-4000-8000-000000000002", "type": "bulleted_list_item",
+             "bulleted_list_item": {"rich_text": [{"plain_text": "~1 약", "annotations": {"strikethrough": True}}]}},
+            {"id": "00000000-0000-4000-8000-000000000003", "type": "paragraph",
+             "paragraph": {"rich_text": [{"plain_text": "뒤 문단 A*"}]}},
+        ]
+    }
+    notion = Mock()
+    notion.children.side_effect = lambda block_id: tree[block_id]
+    body = convert(notion, page).markdown
+    assert body.startswith("- ~~~1")
+
+    assert cut(body, find_spans(body, [(21, "A*")])) == [(21, "A\\*")]
+
+
+def test_many_unmatched_backtick_runs_stay_fast():
+    # 이스케이프된 백틱 묶음("\``")은 여는 쪽 폭 1, 닫는 쪽 폭 2라 짝이 없다. 문단 끝까지 훑으면 O(n^2)였다.
+    body = "\\`` " * 50_000 + "A\\*"
+
+    started = time.perf_counter()
+    spans = find_spans(body, [(21, "A*")])
+
+    assert cut(body, spans) == [(21, "A\\*")]
+    assert time.perf_counter() - started < 5
+
+
 def test_toggle_code_block_from_the_notion_import():
     # 실제 가져오기 변환(convert)으로 토글 > 코드 블록, 그다음 문단을 만든다. 데이터는 합성이다.
     page, toggle = "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"

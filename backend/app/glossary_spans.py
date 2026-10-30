@@ -28,8 +28,8 @@ from dataclasses import dataclass
 _HIDDEN = re.compile(r"note-image:[^\s)]*|(?:https?|ftp)://[^\s)<>\]]*")
 _LINK_DESTINATION = re.compile(r"(?<!\\)(?:\\\\)*(\]\([^)\s]*)")
 # 코드 블록 여는 줄(백틱·물결 3개 이상). 가져오기는 토글·목록 안의 블록을 "  - " 뒤나 4칸 들여쓴 줄에 쓰므로
-# 앞의 들여쓰기와 목록 표시(-, +, *, 1. 1))를 받는다. 그룹 2는 info(언어 이름 등)다.
-_FENCE_OPEN = re.compile(r"[ \t]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)*(`{3,}|~{3,})([^\n]*)")
+# 앞의 들여쓰기와 목록 표시(-, +, *, 1. 1))를 받는다. 그룹 1은 펜스 앞부분, 2는 펜스, 3은 info(언어 이름 등)다.
+_FENCE_OPEN = re.compile(r"([ \t]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)*)(`{3,}|~{3,})([^\n]*)")
 _BACKTICKS = re.compile(r"`+")
 # 인라인 코드는 문단을 넘지 않는다. 빈 줄(공백·\r만 있는 줄 포함)이 문단 경계다.
 _BLANK_LINE = re.compile(r"\n[ \t\r]*\n")
@@ -132,9 +132,26 @@ def _code_mask(text: str) -> bytearray:
       닫는 줄까지다. 닫는 줄이 없으면 끝까지다. 백틱 펜스의 info에 백틱이 있으면 펜스가 아니라 인라인 코드다.
     - 인라인 코드: 백틱 묶음부터 같은 문단 안의 길이가 같은 다음 묶음까지다. 묶음의 첫 백틱이 이스케이프됐으면
       나머지 백틱이 여는 묶음이다. 닫는 묶음 앞의 백슬래시는 코드 글자라 따지지 않는다.
+    - 목록 안 코드 블록: 여는 줄에 목록 표시가 있거나 4칸 이상 들여썼으면, 그 펜스 글자 위치보다 덜 들여쓴
+      줄(빈 줄 제외)에서 목록 항목과 함께 끝난다.
     - 하지 않는 것: 4칸 들여쓴 코드 블록(가져오기는 목록 자식 줄을 4칸 들여쓰므로 코드로 보면 안 된다).
     """
     mask = bytearray(len(text))
+    if "```" in text or "~~~" in text:
+        _mask_fenced_blocks(text, mask)
+    if "`" in text:
+        _mask_code_spans(text, mask)
+    return mask
+
+
+def _indent(text: str, start: int, end: int) -> int:
+    position = start
+    while position < end and text[position] in " \t":
+        position += 1
+    return position - start
+
+
+def _mask_fenced_blocks(text: str, mask: bytearray) -> None:
     lines: list[tuple[int, int]] = []
     start = 0
     while start <= len(text):
@@ -148,21 +165,35 @@ def _code_mask(text: str) -> bytearray:
         line_start, line_end = lines[index]
         index += 1
         fence = _FENCE_OPEN.fullmatch(text, line_start, line_end)
-        if fence is None or (fence.group(1)[0] == "`" and "`" in fence.group(2)):
+        if fence is None or (fence.group(2)[0] == "`" and "`" in fence.group(3)):
             continue
-        char, width = fence.group(1)[0], len(fence.group(1))
+        char, width = fence.group(2)[0], len(fence.group(2))
+        prefix = fence.group(1)
+        # 목록 항목 안의 코드 블록은 항목이 끝나면 함께 끝난다. 맨 앞(0~3칸)의 코드 블록은 들여쓰기로 끝나지 않는다.
+        container = len(prefix) if prefix.strip() or len(prefix) >= 4 else 0
         block_end = len(text)
         while index < len(lines):
-            closing_start, closing_end = lines[index]
+            next_start, next_end = lines[index]
+            if container and next_start < next_end and text[next_start:next_end].strip(" \t\r"):
+                if _indent(text, next_start, next_end) < container:
+                    block_end = lines[index - 1][1]
+                    break
             index += 1
-            stripped = text[closing_start:closing_end].strip(" \t\r")
+            stripped = text[next_start:next_end].strip(" \t\r")
             if len(stripped) >= width and stripped == char * len(stripped):
-                block_end = closing_end
+                block_end = next_end
                 break
         mask[line_start:block_end] = b"\x01" * (block_end - line_start)
 
+
+def _mask_code_spans(text: str, mask: bytearray) -> None:
     breaks = [match.start() for match in _BLANK_LINE.finditer(text)]
     runs = [(run.start(), run.end()) for run in _BACKTICKS.finditer(text) if not mask[run.start()]]
+    # 길이별 묶음 번호 목록. 여는 묶음마다 같은 길이의 다음 묶음을 이분 탐색으로 찾는다(짝이 없는 묶음이 많아도
+    # 문단 끝까지 훑지 않는다).
+    by_width: dict[int, list[int]] = {}
+    for number, (run_start, run_end) in enumerate(runs):
+        by_width.setdefault(run_end - run_start, []).append(number)
     index = 0
     while index < len(runs):
         opener_start, opener_end = runs[index]
@@ -171,18 +202,16 @@ def _code_mask(text: str) -> bytearray:
             opener_start += 1
             if opener_start == opener_end:
                 continue
-        width = opener_end - opener_start
+        candidates = by_width.get(opener_end - opener_start, [])
+        later = bisect.bisect_left(candidates, index)
+        if later == len(candidates):
+            continue
+        closer_start, closer_end = runs[candidates[later]]
         next_break = bisect.bisect_right(breaks, opener_start)
-        limit = breaks[next_break] if next_break < len(breaks) else len(text)
-        for later in range(index, len(runs)):
-            closer_start, closer_end = runs[later]
-            if closer_start >= limit:
-                break
-            if closer_end - closer_start == width:
-                mask[opener_start:closer_end] = b"\x01" * (closer_end - opener_start)
-                index = later + 1
-                break
-    return mask
+        if next_break < len(breaks) and closer_start >= breaks[next_break]:
+            continue
+        mask[opener_start:closer_end] = b"\x01" * (closer_end - opener_start)
+        index = candidates[later] + 1
 
 
 def _search_text(text: str) -> tuple[str, list[int], bytearray]:
