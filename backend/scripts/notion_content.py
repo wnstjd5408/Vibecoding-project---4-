@@ -74,7 +74,7 @@ def convert(notion, page_id: str) -> Content:
             text = rich_text(data.get("rich_text", []))
             # Never traverse child pages/databases, synced content, attachments,
             # bookmarks, mentions or link-to-page blocks.
-            containers = {"paragraph", "heading_1", "heading_2", "heading_3",
+            containers = {"paragraph", "heading_1", "heading_2", "heading_3", "heading_4",
                           "bulleted_list_item", "numbered_list_item", "to_do",
                           "toggle", "quote", "callout", "column", "column_list", "table"}
             if kind == "image":
@@ -109,7 +109,7 @@ def convert(notion, page_id: str) -> Content:
                     continue
                 prefix = {"heading_1": "# ", "heading_2": "## ", "heading_3": "### ",
                           "bulleted_list_item": "- ", "numbered_list_item": "1. ",
-                          "quote": "> ", "callout": "> "}.get(kind, "")
+                          "heading_4": "#### ", "quote": "> ", "callout": "> "}.get(kind, "")
                 if kind == "to_do":
                     prefix = "- [x] " if data.get("checked") else "- [ ] "
                 if kind == "toggle":

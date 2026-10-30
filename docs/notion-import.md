@@ -79,16 +79,25 @@ uv run --no-sync python -m scripts.import_notion
 
 ## 지원 범위와 검증 한계
 
-문단·제목·목록·체크 항목·인용·콜아웃·코드·수식·표·토글·열·이미지를 변환한다.
+문단·1~4단계 제목·목록·체크 항목·인용·콜아웃·코드·수식·표·토글·열·이미지를 변환한다.
 굵게·기울임·취소선·인라인 코드·HTTP(S) 링크를 보존하며 링크는 읽으러 가지 않는다.
 토글은 굵은 제목과 들여쓴 목록, 표는 Markdown 표다. 원본 화면 배치·색·밑줄은 보존하지 않는다.
 토글 안의 여러 줄 코드·문단·표·중첩 블록은 블록 단위 목록 항목으로 보존한다.
 노트 화면은 GFM 표를 파싱해 표 셀과 머리글로 표시하며, 셀 내부의 용어 표시·원문 위치 계산을 유지한다.
 본문이 200,000자를 넘거나 깊이 32·블록 10,000개를 넘으면 페이지를 실패로 센다.
 
-이미지 허용 목록은 공식 문서에서 확인한 `s3.us-west-2.amazonaws.com`의 `/secure.notion-static.com/` 경로로 제한한다.
+이미지 허용 목록은 `s3.us-west-2.amazonaws.com`의 `/secure.notion-static.com/` 경로와
+Notion 파일 전용 버킷 호스트 `prod-files-secure.s3.us-west-2.amazonaws.com`의 객체 경로다.
+후자는 가상 호스트 방식이므로 버킷 이름을 경로에 다시 요구하지 않는다. 정확한 두 호스트만 허용하고
+임의 S3 버킷·하위 도메인은 허용하지 않는다. 선택된 페이지의 `file` 이미지에만 적용하며 `external` 이미지는 계속 거부한다.
+근거는 [Notion 파일 객체 문서](https://developers.notion.com/reference/file-object)의 `file` 계약과
+[Notion 공식 프로필 페이지](https://notion.notion.site/Notion-1c2f734c93b84ced9a1046d22b7c82e1)의 해당 파일 호스트 사용 사례다.
 다른 Notion 파일 호스트 및 외부 이미지도 현재는 거부한다. 새 호스트가 필요하면 공식 근거를 확인하고 코드·보안 테스트를 함께 검토해야 한다.
 문서 예시는 전체 호스트 목록을 보장하지 않는다. 실제 노트의 이미지 호스트 적합성은 아직 검증하지 않았다.
+
+목차(`table_of_contents`), embed, file, child_page, pdf, link_preview, unsupported, bookmark는
+본문 변환에서 제외된다. 제외 블록의 자식이나 링크 대상도 조회하지 않는다. `skipped_blocks`가 있으면
+실행 전에 종류를 확인하고 필요한 내용이 빠지는지 검토한다. API의 `unsupported` 블록은 종류 집계만으로 원문 내용을 판단할 수 없다.
 
 단위 시험은 HTTP 모의 응답과 메모리 이미지로 수행한다. SQL 통합 시험은 포트가 노출되지 않은
 별도 PostgreSQL 17 컨테이너에서 전체 마이그레이션을 적용하고 중복·과목 연결·원자성·권한을 확인한다.
