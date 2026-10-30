@@ -12,17 +12,23 @@
 - 겹치면 긴 쪽을 남긴다. 길이가 같으면 앞에 나온 쪽, 그다음 term_id가 작은 쪽이다.
 - 마크다운 백슬래시 이스케이프(백슬래시 + ASCII 문장부호)는 풀어서 비교한다. Notion 가져오기가 특수문자를
   이스케이프해 저장하므로 용어 `A*`는 본문의 `A` + 백슬래시 + `*`와 일치한다. 위치는 이스케이프 백슬래시를 포함한
-  원문 구간이다(원문을 자른 뒤 이스케이프를 풀면 용어 글자가 된다). 코드 안의 백슬래시도 이스케이프로 본다
-  (CommonMark에서 코드 안 백슬래시는 그대로 보이므로 코드 안에서는 드물게 어긋날 수 있다).
+  원문 구간이다(원문을 자른 뒤 이스케이프를 풀면 용어 글자가 된다). 코드(인라인 코드, 코드 블록) 안의 백슬래시는
+  CommonMark처럼 글자 그대로 둔다. 가져오기도 코드는 이스케이프하지 않고 저장한다.
+- 한계: 강조 표시 `*`와 글자 `*`를 구분하지 않는다(`**A**`에서 용어 `A*`가 일치할 수 있다). 마크다운 파서가 필요하다.
 """
 
 import re
 import unicodedata
 from dataclasses import dataclass
 
-# 글자로 보이지 않는 구간: 이미지 토큰(note-image:{notion_block_id}), 마크다운 링크 주소, 맨 URL.
-# 소문자로 바꾼 본문에 쓴다.
-_HIDDEN = re.compile(r"note-image:[^\s)]*|(?<!\\)\]\([^)\s]*|(?:https?|ftp)://[^\s)<>\]]*")
+# 글자로 보이지 않는 구간: 이미지 토큰(note-image:{notion_block_id}), 맨 URL, 마크다운 링크 주소.
+# 소문자로 바꾼 본문에 쓴다. 링크 주소는 `]` 앞 백슬래시가 짝수 개(0개 포함)일 때만이다. 홀수 개면 `]`가
+# 이스케이프된 글자라 링크가 아니다. 숨기는 구간은 그룹 1(`](...`)이다.
+_HIDDEN = re.compile(r"note-image:[^\s)]*|(?:https?|ftp)://[^\s)<>\]]*")
+_LINK_DESTINATION = re.compile(r"(?<!\\)(?:\\\\)*(\]\([^)\s]*)")
+# 코드 블록 여는 줄(백틱·물결 3개 이상)과 인라인 코드의 백틱 묶음.
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})", re.MULTILINE)
+_BACKTICKS = re.compile(r"`+")
 # 줄 안의 공백. str.splitlines가 줄 끝으로 보는 글자(\n, \r, \v, \f, \x1c~\x1e, \x85, U+2028, U+2029)는 뺀다.
 _LINE_SPACES = re.compile(r"[^\S\n\r\v\f\x1c-\x1e\x85\u2028\u2029]+")
 _SPACES = re.compile(r"\s+")
@@ -106,13 +112,56 @@ def _nfc_with_offsets(body: str) -> tuple[str, list[int], list[bool]]:
     return "".join(pieces), offsets, boundary
 
 
+def _is_escaped(text: str, index: int) -> bool:
+    """text[index] 바로 앞 백슬래시가 홀수 개면 그 글자는 이스케이프됐다."""
+    count = 0
+    while index - count > 0 and text[index - count - 1] == "\\":
+        count += 1
+    return count % 2 == 1
+
+
+def _code_mask(text: str) -> bytearray:
+    """코드 블록과 인라인 코드(구분 기호 포함) 위치를 1로 표시한다. 코드 안에서는 백슬래시가 이스케이프가 아니다.
+
+    CommonMark를 단순화했다: 코드 블록은 같은 글자로 같거나 긴 닫는 줄까지(없으면 끝까지), 인라인 코드는
+    이스케이프되지 않은 백틱 묶음부터 길이가 같은 다음 백틱 묶음까지다.
+    """
+    mask = bytearray(len(text))
+    position = 0
+    while (fence := _FENCE.search(text, position)) is not None:
+        marker = fence.group(1)
+        line_end = text.find("\n", fence.end())
+        closing = None
+        if line_end != -1:
+            closing_line = re.compile(r"^ {0,3}" + re.escape(marker[0]) + "{" + str(len(marker)) + r",}[ \t]*$", re.MULTILINE)
+            closing = closing_line.search(text, line_end + 1)
+        end = closing.end() if closing else len(text)
+        mask[fence.start() : end] = b"\x01" * (end - fence.start())
+        position = max(end, fence.end())
+
+    runs = [run for run in _BACKTICKS.finditer(text) if not mask[run.start()]]
+    index = 0
+    while index < len(runs):
+        opener = runs[index]
+        index += 1
+        if _is_escaped(text, opener.start()):
+            continue
+        width = opener.end() - opener.start()
+        for later in range(index, len(runs)):
+            if runs[later].end() - runs[later].start() == width:
+                mask[opener.start() : runs[later].end()] = b"\x01" * (runs[later].end() - opener.start())
+                index = later + 1
+                break
+    return mask
+
+
 def _search_text(text: str) -> tuple[str, list[int], bytearray]:
     """찾기용 글, 찾기용 위치 → text 위치 대응(길이 + 1개), 보이지 않는 구간 표시를 만든다.
 
     1. 줄 안의 공백 묶음을 공백 하나로 줄인다.
-    2. 보이지 않는 구간(_HIDDEN)을 이스케이프가 남은 글에서 표시한다(이스케이프된 `]` 뒤의 `(`는 링크가 아니다).
-    3. 백슬래시 이스케이프를 풀어 화면에 보이는 글자로 맞춘다. 풀린 글자의 위치는 백슬래시 위치로 대응시켜
-       용어가 이스케이프된 글자로 시작해도 원문 구간이 백슬래시부터 시작한다.
+    2. 보이지 않는 구간(_HIDDEN, _LINK_DESTINATION)을 이스케이프가 남은 글에서 표시한다.
+    3. 코드 밖의 백슬래시 이스케이프를 풀어 화면에 보이는 글자로 맞춘다. 풀린 글자의 위치는 백슬래시 위치로
+       대응시켜 용어가 이스케이프된 글자로 시작해도 원문 구간이 백슬래시부터 시작한다.
     """
     pieces: list[str] = []
     positions: list[int] = []
@@ -131,12 +180,21 @@ def _search_text(text: str) -> tuple[str, list[int], bytearray]:
     hidden = bytearray(len(collapsed))
     for match in _HIDDEN.finditer(collapsed):
         hidden[match.start() : match.end()] = b"\x01" * (match.end() - match.start())
+    for match in _LINK_DESTINATION.finditer(collapsed):
+        hidden[match.start(1) : match.end(1)] = b"\x01" * (match.end(1) - match.start(1))
 
+    # 대부분의 노트에는 백슬래시가 없다. 그때는 이스케이프를 풀 것이 없어 그대로 쓴다.
+    if "\\" not in collapsed:
+        return collapsed, positions, hidden
+
+    code = _code_mask(collapsed)
     out: list[str] = []
     out_positions: list[int] = []
     out_hidden = bytearray()
     cursor = 0
     for match in _ESCAPE.finditer(collapsed):
+        if code[match.start()]:
+            continue
         out.append(collapsed[cursor : match.start()])
         out_positions.extend(positions[cursor : match.start()])
         out_hidden += hidden[cursor : match.start()]

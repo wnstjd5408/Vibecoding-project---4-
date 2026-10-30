@@ -3,12 +3,12 @@
 본문은 모두 합성 데이터다. 위치는 파이썬 문자열 인덱스(= 유니코드 코드포인트)로 자른다.
 """
 
-import re
 import time
 import unicodedata
 
 import pytest
 
+from app import glossary_spans
 from app.glossary_spans import Span, find_spans, normalize_key
 
 TERMS = [(1, "해시"), (2, "해시테이블"), (3, "hashtable"), (4, "ip"), (5, "tcp/ip"), (6, "round robin"), (7, "exampleterm")]
@@ -64,7 +64,7 @@ def test_case_and_whitespace_are_normalized_on_both_sides():
 
 
 @pytest.mark.parametrize(
-    "body", ["## Round\n\nRobin 문단", "round\nrobin", "round \r\n robin", "round\rrobin", "round\u2028robin", "round\x85robin"]
+    "body", ["## Round\n\nRobin 문단", "round\nrobin", "round \r\n robin", "round\rrobin", "round\u2028robin", "round\u2029robin", "round\x85robin"]
 )
 def test_terms_do_not_match_across_line_breaks(body):
     # 제목과 다음 문단처럼 다른 블록에 걸친 강조를 만들지 않는다.
@@ -91,7 +91,7 @@ ESCAPED_TERMS = [(21, "A*"), (22, "__init__"), (23, "std::vector<T>")]
 
 
 def unescape(text: str) -> str:
-    return re.sub(r"\\([!-/:-@\[-`{-~])", r"\1", text)
+    return glossary_spans._ESCAPE.sub(r"\1", text)
 
 
 def test_markdown_escaped_terms_match_and_cut_includes_the_backslashes():
@@ -109,6 +109,44 @@ def test_escaped_backslash_and_escaped_bracket():
     # "\\"는 백슬래시 한 글자다. "\](" 는 이스케이프된 ] 라서 링크 주소가 아니다.
     assert cut("a\\\\b", find_spans("a\\\\b", [(1, "a\\b")])) == [(1, "a\\\\b")]
     assert cut("x\\](ip) ip", find_spans("x\\](ip) ip", [(4, "ip")])) == [(4, "ip"), (4, "ip")]
+
+
+def test_link_after_an_escaped_backslash_still_hides_its_address():
+    # "[dir\\](ip/route)"의 링크 글자는 "dir\"이고 ]는 진짜 링크 닫힘이다. 주소 안의 ip는 찾지 않는다.
+    body = "[dir\\\\](ip/route) ip"
+
+    assert [span.start for span in find_spans(body, [(4, "ip")])] == [len(body) - 2]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "코드 `a\\*b` 끝",
+        "코드 ``a\\*b`` 끝",
+        "```\nx = a\\*b\n```",
+        "~~~~\nx = a\\*b\n~~~~",
+        "```python\nx = a\\*b",  # 닫히지 않은 코드 블록은 끝까지 코드다
+    ],
+)
+def test_backslashes_inside_code_are_literal(body):
+    # 가져오기는 코드를 이스케이프하지 않는다. 코드 속 "a\*b"는 화면에 a\*b로 보이므로 용어 a*b가 아니다.
+    assert find_spans(body, [(1, "a*b")]) == []
+    # 반대로 백슬래시가 든 용어는 코드 안에서 그대로 찾는다.
+    assert cut(body, find_spans(body, [(2, "a\\*b")])) == [(2, "a\\*b")]
+
+
+def test_escaped_backtick_does_not_open_code():
+    body = "글자 \\` 다음 A\\* 와 \\` 끝"
+
+    assert cut(body, find_spans(body, [(21, "A*")])) == [(21, "A\\*")]
+
+
+def test_body_without_backslashes_skips_the_escape_pass():
+    text = "보통 노트 ip"
+
+    search, positions, hidden = glossary_spans._search_text(text)
+
+    assert (search, positions, bytes(hidden)) == (text, list(range(len(text) + 1)), bytes(len(text)))
 
 
 def test_image_tokens_are_never_matched():

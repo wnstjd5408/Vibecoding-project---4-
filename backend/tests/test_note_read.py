@@ -1,12 +1,11 @@
 """E05 노트 읽기 (MEG-73). 가짜 Supabase로 네트워크 없이 돈다. 데이터는 모두 합성이다."""
 
 import logging
-import re
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import session
+from app import glossary_spans, session
 from app.notes import SIGNED_URL_SECONDS
 from app.rate_limit import PUBLIC_READ, SIGNED_URL
 from scripts.notion_content import rich_text
@@ -344,4 +343,4 @@ def test_terms_escaped_by_the_notion_import_get_spans_over_http(client, fake, te
     assert [t["term_id"] for t in result["glossary_terms"]] == [30]
     [span] = result["glossary_spans"]
     # 원문 구간은 이스케이프 백슬래시를 포함하고, 이스케이프를 풀면 용어 글자다.
-    assert re.sub(r"\\([!-/:-@\[-`{-~])", r"\1", body[span["start"] : span["end"]]) == term
+    assert glossary_spans._ESCAPE.sub(r"\1", body[span["start"] : span["end"]]) == term
