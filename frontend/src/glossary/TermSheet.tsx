@@ -44,6 +44,15 @@ export function TermSheet({ open, onClose, openId, termId, label }: TermSheetPro
 
 type Result = { key: number; data: GlossaryResponse } | { key: number; error: 'not_found' | 'rate_limited' | 'failed' }
 
+type SeenImage = { id: number; alt: string }
+
+// 지금까지 본 이미지에 이번 응답의 이미지를 더한다. 먼저 본 순서를 지키고, 이미 있는 id는 처음 값을 둔다.
+function mergeSeen(previous: SeenImage[], images: { id: number; alt: string }[]): SeenImage[] {
+  const known = new Set(previous.map((image) => image.id))
+  const added = images.filter((image) => !known.has(image.id)).map(({ id, alt }) => ({ id, alt }))
+  return added.length === 0 ? previous : [...previous, ...added]
+}
+
 // 설명 본문은 용어 표시·노트 이미지 없이 마크다운만 그린다.
 const NO_SPANS: never[] = []
 const NO_IMAGES = {}
@@ -56,6 +65,8 @@ function TermSheetContent({ termId }: { termId: number }) {
   const [attempt, setAttempt] = useState(0)
   const [result, setResult] = useState<Result | null>(null)
   const [brokenImages, setBrokenImages] = useState<ReadonlySet<number>>(new Set())
+  // 지금까지 응답에 나온 이미지(id·대체 글). 다시 받은 응답에서 이미지가 빠져도 자리를 잃지 않고 대체 글로 보이게 한다.
+  const [seenImages, setSeenImages] = useState<SeenImage[]>([])
   // 열람 기록 결과: 아직(null), 기록됨(true), 기록 안 됨(false: 서버가 false를 줬거나 요청이 실패)
   const [recorded, setRecorded] = useState<boolean | null>(null)
   const viewSent = useRef(false)
@@ -69,7 +80,9 @@ function TermSheetContent({ termId }: { termId: number }) {
     const controller = new AbortController()
     apiFetch<GlossaryResponse>(`/api/glossary/${termId}`, { signal: controller.signal })
       .then((response) => {
-        if (!controller.signal.aborted) setResult({ key: attempt, data: response })
+        if (controller.signal.aborted) return
+        setSeenImages((previous) => mergeSeen(previous, response.images))
+        setResult({ key: attempt, data: response })
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return
@@ -95,6 +108,7 @@ function TermSheetContent({ termId }: { termId: number }) {
     refreshedImages.current.add(imageId)
     refreshing.current ??= apiFetch<GlossaryResponse>(`/api/glossary/${termId}`)
       .then((response) => {
+        setSeenImages((previous) => mergeSeen(previous, response.images))
         setResult({ key: attempt, data: response })
         return response
       })
@@ -120,12 +134,17 @@ function TermSheetContent({ termId }: { termId: number }) {
 
   // 로그인 상태인데 기록되지 않았으면 짧게 알린다. 방문자의 recorded: false는 정상이라 아무것도 보이지 않는다.
   const showViewNotice = recorded === false && auth.status !== 'loading' && auth.role !== 'visitor'
+  const imagesNow = new Map(current.data.images.map((image) => [image.id, image]))
   return (
     <>
       <NoteBody compact body={current.data.body_markdown} spans={NO_SPANS} images={NO_IMAGES} brokenImages={NO_BROKEN} onTerm={noop} onImageError={noop} />
-      {current.data.images.map((image) => brokenImages.has(image.id)
-        ? <p key={image.id} className={styles.imageFallback} role="img" aria-label={image.alt || MESSAGES.imageFailed}>{MESSAGES.imageFailed}{image.alt ? ` (${image.alt})` : ''}</p>
-        : <img key={image.id} className={styles.image} src={image.url} alt={image.alt} onError={() => onImageError(image.id, image.url)} />)}
+      {mergeSeen(seenImages, current.data.images).map((seen) => {
+        const image = imagesNow.get(seen.id)
+        // 실패했거나, 다시 받은 응답에서 빠진 이미지는 자리를 지키고 대체 글로 보인다.
+        return !image || brokenImages.has(seen.id)
+          ? <p key={seen.id} className={styles.imageFallback} role="img" aria-label={seen.alt || MESSAGES.imageFailed}>{MESSAGES.imageFailed}{seen.alt ? ` (${seen.alt})` : ''}</p>
+          : <img key={seen.id} className={styles.image} src={image.url} alt={image.alt} onError={() => onImageError(image.id, image.url)} />
+      })}
       {showViewNotice ? <p className={styles.notice} role="status">{MESSAGES.viewNotRecorded}</p> : null}
     </>
   )

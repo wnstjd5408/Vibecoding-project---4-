@@ -407,6 +407,25 @@ test('이미지가 안 열리면 E06을 한 번 다시 부르고, 재실패하�
   expect(calls.views).toBe(1)
 })
 
+// PR #58 Codex 리뷰 P2: 다시 받은 E06 응답에서 실패한 이미지가 빠지면 이미지 영역이 대체 글도 없이 사라졌다.
+test('E06을 다시 불러 응답에서 이미지가 빠져도 대체 글로 보이고 설명은 유지되며 E07은 다시 보내지 않는다', async ({ page }) => {
+  let imageFailed = false
+  page.on('requestfailed', (request) => { if (request.url().includes('/glossary-dropped.png')) imageFailed = true })
+  const calls = await setupTerm(page, {
+    member: true,
+    // 이미지가 한 번 실패한 뒤(다시 받는 요청)에는 이미지 목록이 비어 온다
+    glossaryBody: () => glossary(imageFailed ? [] : [{ id: 3, url: 'http://127.0.0.1:1/glossary-dropped.png', alt: '합성 구조도' }]),
+  })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('이미지를 불러오지 못했어요')).toBeVisible()
+  await expect(termSheet(page).getByText('(합성 구조도)')).toBeVisible()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await page.waitForTimeout(300)
+  expect(calls.views).toBe(1)
+  await expect(viewNotice(page)).toHaveCount(0)
+})
+
 test('E06을 다시 불러도 이미지 URL이 같으면 대체 글로 닫는다', async ({ page }) => {
   const calls = await setupTerm(page, { glossaryBody: () => glossary([{ id: 3, url: 'http://127.0.0.1:1/glossary-same.png', alt: '합성 구조도' }]) })
   await page.goto('/notes/11')
