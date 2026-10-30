@@ -144,13 +144,6 @@ def _code_mask(text: str) -> bytearray:
     return mask
 
 
-def _indent(text: str, start: int, end: int) -> int:
-    position = start
-    while position < end and text[position] in " \t":
-        position += 1
-    return position - start
-
-
 def _mask_fenced_blocks(text: str, mask: bytearray) -> None:
     lines: list[tuple[int, int]] = []
     start = 0
@@ -170,16 +163,18 @@ def _mask_fenced_blocks(text: str, mask: bytearray) -> None:
         char, width = fence.group(2)[0], len(fence.group(2))
         prefix = fence.group(1)
         # 목록 항목 안의 코드 블록은 항목이 끝나면 함께 끝난다. 맨 앞(0~3칸)의 코드 블록은 들여쓰기로 끝나지 않는다.
+        # 한계: 항목 내용 칸 대신 펜스 글자 칸을 기준으로 삼고 탭을 1칸으로 센다. 가져오기는 한 항목의 모든 줄을
+        # 같은 칸 수의 공백으로 들여쓰므로 차이가 나지 않는다.
         container = len(prefix) if prefix.strip() or len(prefix) >= 4 else 0
         block_end = len(text)
         while index < len(lines):
             next_start, next_end = lines[index]
-            if container and next_start < next_end and text[next_start:next_end].strip(" \t\r"):
-                if _indent(text, next_start, next_end) < container:
-                    block_end = lines[index - 1][1]
-                    break
+            line = text[next_start:next_end]
+            stripped = line.strip(" \t\r")
+            if container and stripped and len(line) - len(line.lstrip(" \t")) < container:
+                block_end = lines[index - 1][1]
+                break
             index += 1
-            stripped = text[next_start:next_end].strip(" \t\r")
             if len(stripped) >= width and stripped == char * len(stripped):
                 block_end = next_end
                 break

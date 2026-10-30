@@ -179,6 +179,19 @@ def test_code_block_opened_in_a_list_item_ends_with_the_item():
     assert cut(body, find_spans(body, [(21, "A*")])) == [(21, "A\\*")]
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        # 목록 자식으로 4칸 들여쓴 닫힌 코드 블록, 그다음 문단
+        "- 부모\n    ```\n    x = a\\*b\n    ```\n\n뒤 A\\*",
+        # 닫히지 않은 목록 안 코드 블록 뒤의 형제 목록 항목
+        "- ```\n  x = a\\*b\n- 형제 A\\*",
+    ],
+)
+def test_list_contained_code_blocks_end_at_the_right_line(body):
+    assert cut(body, find_spans(body, [(21, "A*"), (22, "a*b")])) == [(21, "A\\*")]
+
+
 def test_many_unmatched_backtick_runs_stay_fast():
     # 이스케이프된 백틱 묶음("\``")은 여는 쪽 폭 1, 닫는 쪽 폭 2라 짝이 없다. 문단 끝까지 훑으면 O(n^2)였다.
     body = "\\`` " * 50_000 + "A\\*"
