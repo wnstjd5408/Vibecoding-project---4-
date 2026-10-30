@@ -13,7 +13,9 @@ export const userPaths = {
 // 운영자(PC) 화면. 운영자 셸(MEG-78)이 이 묶음을 감싸 붙이고, 개별 운영자 화면은 이 아래에 경로를 더한다.
 export const operatorPaths = {
   home: '/admin', // F5-1a 운영자 노트 목록 (F1-1b의 "운영자 메뉴" 링크가 여기로 온다)
-  glossary: '/admin/glossary', // F5-1c 용어 사전
+  glossary: '/admin/glossary', // F5-1c 용어 사전 (용어를 고르지 않으면 첫 용어가 열린다)
+  glossaryNew: '/admin/glossary/new', // F5-1e 새 용어
+  glossaryTerm: '/admin/glossary/:termId', // F5-1c 용어 수정
   reports: '/admin/reports', // F5-2 신고
   accounts: '/admin/accounts', // F4-3a 계정 발급
 } as const
@@ -24,6 +26,11 @@ export const devPaths = {
   foundationDemo: '/dev/foundation', // 공통 기반 확인용 샘플 화면(MEG-105)
   componentShowcase: '/dev/components', // 공통 컴포넌트를 한 페이지에 모아 디자인과 비교하는 화면(MEG-70)
 } as const
+
+// glossaryTerm 경로에 용어 id를 채운다.
+export function glossaryTermPath(termId: number | string): string {
+  return operatorPaths.glossaryTerm.replace(':termId', String(termId))
+}
 
 // noteRead 경로에 노트 id를 채운다.
 export function noteReadPath(noteId: number | string): string {
