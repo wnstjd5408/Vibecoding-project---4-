@@ -8,8 +8,10 @@ DB 덤프에는 Storage 파일이 들어 있지 않아서 따로 받는다. 백�
 환경변수: SUPABASE_URL, SUPABASE_SECRET_KEY. 키는 출력하지 않는다.
 표준 라이브러리만 쓴다. 워크플로가 의존성 설치 없이 실행하게 하려는 것이다.
 
-종료 코드: 0 = 파일과 행이 일치, 3 = 불일치(파일은 모두 받았다), 그 밖 = 실행 실패.
-대조 결과는 <폴더>/manifest.json에 쓰고, 표준 출력에는 개수만 찍는다(공개 로그).
+종료 코드: 0 = 행마다 파일이 있다, 3 = 파일이 없는 행이 있다(받은 파일은 모두 남는다), 그 밖 = 실행 실패.
+행이 없는 파일은 실패로 보지 않는다. 이미지 행을 지운 뒤 Storage 객체는 storage_delete_jobs가 나중에
+지우므로(기술 검토 4절) 그 사이에는 정상적으로 생긴다. 개수는 manifest.json과 출력에 남긴다.
+공개 로그에는 개수만 찍는다. 경로 목록은 <폴더>/manifest.json에만 쓴다.
 """
 
 import argparse
@@ -27,26 +29,39 @@ from pathlib import Path
 TABLES = frozenset({"note_images", "glossary_images"})
 PAGE_SIZE = 1000
 TIMEOUT_SECONDS = 30
-EXIT_MISMATCH = 3
+EXIT_MISSING = 3
+# Supabase 대시보드에서 폴더를 만들면 생기는 빈 객체. 이미지가 아니다.
+PLACEHOLDER_NAME = ".emptyFolderPlaceholder"
 
 # (method, url, json body 또는 None) -> 응답 본문
 Fetch = Callable[[str, str, dict | None], bytes]
 
 
 class BackupError(Exception):
-    """설정 오류나 Supabase 응답 오류. 메시지에 키나 응답 본문을 넣지 않는다."""
+    """설정 오류나 Supabase 응답 오류. 메시지에 키·객체 경로·응답 본문을 넣지 않는다."""
 
 
 @dataclass(frozen=True)
 class Comparison:
     files: int
     rows: int
-    missing_files: list[str]  # 행은 있는데 파일이 없다
-    extra_files: list[str]  # 파일은 있는데 행이 없다
+    missing_files: list[str]  # 행은 있는데 파일이 없다 — 백업이 빠진 것이다
+    extra_files: list[str]  # 파일은 있는데 행이 없다 — 삭제 대기 중일 수 있다
 
     @property
-    def matches(self) -> bool:
-        return not self.missing_files and not self.extra_files
+    def complete(self) -> bool:
+        return not self.missing_files
+
+
+def _endpoint_kind(url: str) -> str:
+    """오류 메시지에 쓸 요청 종류. 다운로드 URL에는 객체 경로가 들어 있어 그대로 쓰지 않는다."""
+    if url.startswith("/storage/v1/object/list/"):
+        return "Storage 목록"
+    if url.startswith("/storage/v1/object/"):
+        return "Storage 다운로드"
+    if url.startswith("/rest/v1/"):
+        return "REST 조회"
+    return "기타"
 
 
 def make_fetch(base_url: str, secret_key: str) -> Fetch:
@@ -64,10 +79,10 @@ def make_fetch(base_url: str, secret_key: str) -> Fetch:
             with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
                 return response.read()
         except urllib.error.HTTPError as error:
-            # 응답 본문에 경로가 들어 있을 수 있어 상태 코드만 남긴다.
-            raise BackupError(f"Supabase 응답 {error.code}: {method} {url.split('?')[0]}") from None
-        except urllib.error.URLError as error:
-            raise BackupError(f"Supabase 연결 실패: {type(error.reason).__name__}") from None
+            raise BackupError(f"Supabase 응답 {error.code}: {_endpoint_kind(url)}") from None
+        except (urllib.error.URLError, OSError) as error:
+            # 연결 실패, 본문을 읽다 끊김·시간 초과
+            raise BackupError(f"Supabase 연결 실패({type(error).__name__}): {_endpoint_kind(url)}") from None
 
     return fetch
 
@@ -79,26 +94,27 @@ def _quote_path(path: str) -> str:
 def list_objects(fetch: Fetch, bucket: str, prefix: str = "") -> list[str]:
     """버킷의 모든 파일 경로. Storage 목록 API는 폴더를 한 단계씩만 보여 줘서 폴더마다 다시 부른다.
 
-    폴더 항목은 id가 null이다(Supabase Storage API 동작).
+    폴더 항목은 id가 null이다(Supabase Storage API 동작). 서버 상한이 PAGE_SIZE보다 작아도 빠지지 않게
+    빈 쪽이 올 때까지 받는다.
     """
     paths: list[str] = []
     offset = 0
     while True:
         body = {"prefix": prefix, "limit": PAGE_SIZE, "offset": offset, "sortBy": {"column": "name", "order": "asc"}}
         items = json.loads(fetch("POST", f"/storage/v1/object/list/{urllib.parse.quote(bucket, safe='')}", body))
+        if not items:
+            return paths
         for item in items:
             name = f"{prefix}{item['name']}"
             if item.get("id") is None:
                 paths.extend(list_objects(fetch, bucket, f"{name}/"))
-            else:
+            elif item["name"] != PLACEHOLDER_NAME:
                 paths.append(name)
-        if len(items) < PAGE_SIZE:
-            return paths
-        offset += PAGE_SIZE
+        offset += len(items)
 
 
 def list_row_paths(fetch: Fetch, table: str) -> list[str]:
-    """이미지 표의 storage_path 전부. id 순으로 나눠 받는다."""
+    """이미지 표의 storage_path 전부. id 순으로, 빈 쪽이 올 때까지 나눠 받는다."""
     if table not in TABLES:
         raise BackupError(f"허용하지 않는 표: {table}")
     paths: list[str] = []
@@ -106,10 +122,10 @@ def list_row_paths(fetch: Fetch, table: str) -> list[str]:
     while True:
         query = urllib.parse.urlencode({"select": "storage_path", "order": "id", "limit": PAGE_SIZE, "offset": offset})
         rows = json.loads(fetch("GET", f"/rest/v1/{table}?{query}", None))
-        paths.extend(row["storage_path"] for row in rows)
-        if len(rows) < PAGE_SIZE:
+        if not rows:
             return paths
-        offset += PAGE_SIZE
+        paths.extend(row["storage_path"] for row in rows)
+        offset += len(rows)
 
 
 def safe_target(out_dir: Path, object_path: str) -> Path:
@@ -126,8 +142,9 @@ def safe_target(out_dir: Path, object_path: str) -> Path:
 
 def download_all(fetch: Fetch, bucket: str, paths: list[str], out_dir: Path) -> None:
     quoted_bucket = urllib.parse.quote(bucket, safe="")
-    for path in paths:
-        target = safe_target(out_dir, path)
+    # 받기 전에 모든 경로를 검사해 나쁜 이름이 하나라도 있으면 아무것도 쓰지 않는다.
+    targets = [(path, safe_target(out_dir, path)) for path in paths]
+    for path, target in targets:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(fetch("GET", f"/storage/v1/object/authenticated/{quoted_bucket}/{_quote_path(path)}", None))
 
@@ -147,15 +164,17 @@ def compare(file_paths: list[str], row_paths: list[str]) -> Comparison:
 def run(fetch: Fetch, bucket: str, table: str, out_dir: Path) -> Comparison:
     files_dir = out_dir / "files"
     files_dir.mkdir(parents=True, exist_ok=True)
+    # 목록 직후에 행을 읽는다. 다운로드가 끝난 뒤에 읽으면 그동안 올라온 이미지가 "파일 없는 행"으로 잡힌다.
     object_paths = list_objects(fetch, bucket)
+    row_paths = list_row_paths(fetch, table)
     download_all(fetch, bucket, object_paths, files_dir)
-    result = compare(object_paths, list_row_paths(fetch, table))
+    result = compare(object_paths, row_paths)
     manifest = {
         "bucket": bucket,
         "table": table,
         "files": result.files,
         "rows": result.rows,
-        "matches": result.matches,
+        "complete": result.complete,
         "missing_files": result.missing_files,
         "extra_files": result.extra_files,
     }
@@ -181,13 +200,15 @@ def main(argv: list[str] | None = None) -> int:
     except BackupError as error:
         print(f"이미지 백업 실패: {error}", file=sys.stderr)
         return 1
+    except Exception as error:  # noqa: BLE001 — 공개 로그에 traceback(경로가 들어갈 수 있다)을 남기지 않는다
+        print(f"이미지 백업 실패: {type(error).__name__}", file=sys.stderr)
+        return 1
 
-    # 공개 로그에는 개수만 남긴다. 경로 목록은 manifest.json(비공개 버킷)에만 있다.
     print(
         f"{args.table}: 파일 {result.files}개, 행 {result.rows}개, "
-        f"파일 없음 {len(result.missing_files)}개, 행 없음 {len(result.extra_files)}개"
+        f"파일 없는 행 {len(result.missing_files)}개, 행 없는 파일 {len(result.extra_files)}개"
     )
-    return 0 if result.matches else EXIT_MISMATCH
+    return 0 if result.complete else EXIT_MISSING
 
 
 if __name__ == "__main__":

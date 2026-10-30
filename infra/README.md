@@ -24,7 +24,7 @@ AWS 계정의 비용 경보, 감사 로그, 감사 이벤트 알림을 Terraform
 | `alerts.tf` | SNS 토픽 `<owner>-cs-learning-audit-alerts`·이메일 구독, EventBridge 규칙 `<owner>-cs-learning-…`·대상 | ap-northeast-1(STS), us-east-1(IAM) | 새로 만듦 |
 | `github-oidc/` | GitHub OIDC 공급자, IAM 역할 `<owner>-infra-plan`·`<owner>-infra-apply` | 글로벌 | 새로 만듦. CD 전용이며 상태 파일이 따로다. CD가 아니라 사람이 로컬에서 적용한다 |
 | `vercel-oidc/` | Vercel OIDC 공급자(team issuer), IAM 역할 `<owner>-vercel-bedrock-prd`·`<owner>-vercel-bedrock-preview`와 Bedrock 호출 정책 | 글로벌(호출 리전 ap-northeast-1) | 새로 만듦(MEG-119). 상태 파일이 따로이고 사람이 로컬에서 적용한다. "Vercel OIDC 역할" 절 참고 |
-| `db-backup/` | 백업 버킷 `<owner>-cs-learning-db-backup`(공개 차단·SSE-S3·TLS 강제·수명 주기), IAM 역할 `<owner>-db-backup`과 업로드 정책 | ap-northeast-2(역할은 글로벌) | 새로 만듦(MEG-94). 상태 파일이 따로이고 사람이 로컬에서 적용한다. "DB·이미지 백업" 절 참고 |
+| `db-backup/` | 백업 버킷 `<owner>-cs-learning-db-backup`(공개 차단·SSE-S3·TLS 강제·버전 관리·수명 주기), IAM 역할 `<owner>-db-backup`과 업로드 정책 | ap-northeast-2(역할은 글로벌) | 새로 만듦(MEG-94). 상태 파일이 따로이고 사람이 로컬에서 적용한다. "DB·이미지 백업" 절 참고 |
 
 `imports.tf`의 `import` 블록이 콘솔 리소스를 상태로 가져온다. 가져온 리소스는 `plan`에서 변경·삭제가 0건이어야 한다.
 
@@ -295,14 +295,16 @@ GitHub Actions `DB Backup`(`.github/workflows/db-backup.yml`)이 매주 월요�
 
 **구성**
 
-- 버킷 `<owner>-cs-learning-db-backup`(ap-northeast-2): 공개 차단, 기본 암호화 SSE-S3, TLS가 아닌 요청 거부.
-  - `db/<시각>-<실행 ID>/`: `roles.sql.gz`, `schema.sql.gz`, `data.sql.gz`, `counts.json`. 데이터 덤프에는 `auth` 스키마(계정·비밀번호 해시·세션)와 `storage` 메타데이터도 들어 있다.
-  - `glossary-images/<시각>-<실행 ID>/`: 사전 이미지 파일과 `manifest.json`(파일·행 대조 결과)
-  - `note-images/<시각>-<실행 ID>/`: 노트 이미지. Notion 가져오기 직후 수동 실행으로 한 번 만든다.
-  - 수명 주기: `db/`·`glossary-images/`는 `retention_days`(기본 56일, 주 1회 기준 8개) 뒤 지운다. 규칙이 하루 단위로 돌아서 새 백업 직후에는 9개가 있을 수 있다. `note-images/`는 지우지 않는다.
-- 역할 `<owner>-db-backup`: GitHub Environment `db-backup`에서 온 토큰만 받는다. 권한은 위 세 위치의 `s3:PutObject`뿐이다. 이 역할로는 백업을 읽거나 지울 수 없다. 같은 키로 덮어쓰는 것은 막지 못하므로 워크플로는 실행마다 새 경로를 쓴다.
-- 이미지 버킷은 아직 없다. 이미지 버킷 이름을 정하는 이슈(MEG-81·MEG-85)가 끝나면 Environment 변수를 넣는다. 변수가 없으면 이미지 단계는 건너뛴다.
-- 공개 로그에는 파일 이름·크기·시각과 이미지 대조 개수만 찍는다. 행 수(사용자 수 포함)는 `counts.json`에만 둔다.
+- 버킷 `<owner>-cs-learning-db-backup`(ap-northeast-2): 공개 차단, 기본 암호화 SSE-S3, TLS가 아닌 요청 거부, 버전 관리.
+  - `db/latest/`: `roles.sql.gz`, `schema.sql.gz`, `data.sql.gz`, `counts.txt`(표별 행 수), `backup-info.json`(백업 ID·커밋). 데이터 덤프에는 `auth` 스키마(계정·비밀번호 해시·세션)와 `storage` 메타데이터도 들어 있다.
+  - `glossary-images/latest/`: 사전 이미지 `files/`, `manifest.json`(파일·행 대조 결과), `backup-info.json`
+  - `note-images/<백업 ID>/`: 노트 이미지. Notion 가져오기 직후 수동 실행으로 한 번 만든다.
+- 보관 개수: `db/latest/`·`glossary-images/latest/`는 실행마다 같은 키에 덮어쓰고, 버전 관리가 이전 백업을 이전 버전으로 남긴다. 수명 주기가 키마다 최근 `retention_count`(기본 8)개만 남기고 더 오래된 이전 버전을 지운다. 날짜가 아니라 개수로 세므로 예약 실행이 멈춰도 마지막 백업은 지워지지 않는다. 규칙이 하루 단위로 돌아서 새 백업 직후 하루 동안은 9개가 있을 수 있다. 수동 실행도 1개로 센다. `note-images/`는 지우지 않는다.
+- 역할 `<owner>-db-backup`: GitHub Environment `db-backup`에서 온 토큰만 받는다. 권한은 위 세 위치의 `s3:PutObject`뿐이다. 이 역할로는 백업을 읽거나 지울 수 없다. 덮어쓴 백업은 이전 버전으로 남지만, 이 역할로 8번 넘게 덮어쓰면 정상 백업이 밀려난다.
+- 행 수(`counts.txt`)는 데이터 덤프의 `COPY` 블록을 세어 만든다. 덤프와 같은 시점이고 모든 표가 들어간다.
+- 이미지 대조: 행은 있는데 파일이 없으면 백업이 빠진 것이라 실패로 끝낸다. 파일은 있는데 행이 없으면 경고만 한다. 이미지 행을 지운 뒤 Storage 객체는 삭제 작업(`storage_delete_jobs`)이 나중에 지우므로 그 사이에는 정상적으로 생긴다. 대시보드가 폴더를 만들 때 생기는 `.emptyFolderPlaceholder`는 이미지로 세지 않는다. 사전 이미지와 노트 이미지가 한 버킷을 나눠 쓰면 서로의 파일이 "행 없는 파일"로 잡힌다.
+- 이미지 버킷은 아직 없다. 이미지 버킷 이름을 정하는 이슈(MEG-81·MEG-85)가 끝나면 Environment 변수를 넣는다. 사전 이미지 변수가 없으면 이미지 단계는 건너뛴다. 노트 이미지를 요청했는데 변수가 없으면 실패한다.
+- 공개 로그에는 파일 이름·크기·백업 ID와 이미지 대조 개수만 찍는다. 행 수(사용자 수 포함), CLI·AWS 오류 원문(계정 ID가 들어 있다)은 찍지 않는다.
 
 **적용 순서 (사람, 로컬)**
 
@@ -313,27 +315,29 @@ GitHub Actions `DB Backup`(`.github/workflows/db-backup.yml`)이 매주 월요�
    terraform init "-backend-config=../backend.hcl"
    terraform plan "-out=plan.tfplan"
    ```
-   `Plan: 8 to add, 0 to change, 0 to destroy.`가 나와야 한다(버킷과 설정 6, 역할 1, 역할 정책 1).
+   `Plan: 9 to add, 0 to change, 0 to destroy.`가 나와야 한다(버킷과 설정 7, 역할 1, 역할 정책 1).
 2. 적용하고 출력값을 확인한다. 역할 ARN에는 계정 ID가 있으므로 이슈나 PR에 옮기지 않는다.
    ```powershell
    terraform apply plan.tfplan
    Remove-Item plan.tfplan
    terraform output
    ```
-3. GitHub 저장소 **Settings → Environments**에서 `db-backup`을 만든다. **Deployment branches and tags**는 `main`만 허용한다. 예약 실행이 멈추지 않도록 필수 승인자는 두지 않는다.
-4. `db-backup` Environment에 비밀값을 넣는다.
+3. Supabase 대시보드 **Project Settings → API Keys**에서 백업 전용 secret key를 새로 만든다. 백엔드 키를 같이 쓰면 이 Environment에서 키가 샐 때 백엔드 키도 바꿔야 한다(용도별 키, `docs/architecture.md` 8절·D-070). 이미지 버킷이 생기기 전에는 이 단계를 미뤄도 된다.
+4. GitHub 저장소 **Settings → Environments**에서 `db-backup`을 만든다. **Deployment branches and tags**는 `main`만 허용한다. 예약 실행이 멈추지 않도록 필수 승인자는 두지 않는다.
+5. `db-backup` Environment에 비밀값을 넣는다.
 
    | 이름 | 값 |
    |---|---|
    | `AWS_ROLE_ARN` | `terraform output role_arn` |
    | `BACKUP_BUCKET` | `terraform output bucket_name` |
    | `SUPABASE_DB_URL` | Supabase 대시보드 **Connect → Session pooler** 연결 문자열. GitHub 호스트 러너는 IPv6를 지원하지 않아 직접 연결(IPv6)은 실패한다. 비밀번호의 특수문자는 퍼센트 인코딩한다 |
-   | `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | 이미지 백업용. 운영 백엔드와 같은 값이다. 이미지 버킷이 생기기 전에는 비워 둬도 된다 |
+   | `SUPABASE_URL` | 운영 Supabase 주소. 이미지 백업용 |
+   | `SUPABASE_SECRET_KEY` | 3단계의 백업 전용 secret key. 이미지 백업용 |
 
    이미지 버킷이 생기면 같은 Environment의 **변수**(Variables)에 `GLOSSARY_IMAGE_BUCKET`·`NOTE_IMAGE_BUCKET`을 넣는다.
-5. **Actions → DB Backup → Run workflow**로 한 번 실행해 로그에서 `DB 백업 …` 줄과 파일 크기를 확인한다.
+6. **Actions → DB Backup → Run workflow**로 한 번 실행해 로그에서 `DB 백업 …` 줄과 파일 크기를 확인한다.
 
-워크플로 파일은 AI 계정이 push할 수 없다(토큰에 `workflow` 권한 없음, MEG-100). PR 브랜치에 사람이 웹에서 올린다.
+워크플로 파일은 AI 계정이 push할 수 없다(토큰에 `workflow` 권한 없음, MEG-100). PR 브랜치에 사람이 웹에서 올린다. `home_region`을 바꾸면 워크플로의 `BACKUP_REGION`도 같이 바꾼다.
 
 **수동 실행이 필요한 때**
 
@@ -342,25 +346,26 @@ GitHub Actions `DB Backup`(`.github/workflows/db-backup.yml`)이 매주 월요�
 
 **실패 알림**
 
-예약 실행이 실패하면 GitHub이 워크플로의 예약(cron)을 마지막으로 바꾼 사람에게 메일을 보낸다. 이미지 파일과 표 행이 어긋나면 받은 파일은 올린 뒤 실패로 끝난다. 공개 저장소의 예약 실행은 60일 동안 저장소 활동이 없으면 GitHub이 꺼 버린다. 꺼지면 **Actions → DB Backup → Enable workflow**로 다시 켠다.
+예약 실행이 실패하면 GitHub이 워크플로의 예약(cron)을 마지막으로 바꾼 사람에게 메일을 보낸다. 이미지 행에 파일이 없으면 받은 파일은 올린 뒤 실패로 끝난다. 공개 저장소의 예약 실행은 60일 동안 저장소 활동이 없으면 GitHub이 꺼 버린다. 꺼져 있는 동안 새 백업은 생기지 않지만 마지막 8개는 남는다. **Actions → DB Backup → Enable workflow**로 다시 켠다.
 
 **백업 확인 (AC-2, 사람)**
 
-사람 자격증명으로 최근 백업 목록과 크기를 본다. 역할에는 목록 권한이 없다.
+사람 자격증명으로 버전 목록과 크기를 본다. 역할에는 목록 권한이 없다. `$bucket`은 `terraform output -raw bucket_name`(`infra\db-backup`에서 실행)이다.
 
 ```powershell
-aws s3 ls "s3://$bucket/db/" --recursive --human-readable
+$bucket = terraform output -raw bucket_name
+aws s3api list-object-versions --bucket $bucket --prefix db/latest/data.sql.gz --query "Versions[].[LastModified,Size,VersionId]" --output table
 ```
 
 **복원 시험 (AC-4, 사람, 로컬)**
 
-운영 DB에 복원하지 않는다. 로컬 Supabase에 데이터 덤프를 넣어 `counts.json`과 비교한다. 2026-10-30 합성 데이터로 이 절차를 시험해 8개 표의 행 수가 같음을 확인했다.
+운영 DB에 복원하지 않는다. 로컬 Supabase에 데이터 덤프를 넣어 `counts.txt`와 비교한다. 2026-10-30 합성 데이터(표 58개, 이미지 행 1007개)로 이 절차를 시험해 모든 표의 행 수가 같음을 확인했다.
 
-1. 백업을 내려받는다. 실제 사용자 데이터라 저장소 폴더 밖에 받고 시험 뒤 지운다.
+1. 백업을 내려받는다. 실제 사용자 데이터라 저장소 폴더 밖에 받고 시험 뒤 지운다. 최신 백업이 아니라 이전 백업을 쓰려면 위 버전 목록의 `VersionId`로 `aws s3api get-object --version-id`를 쓴다. 같은 백업의 파일인지는 `backup-info.json`의 백업 ID로 확인한다.
    ```powershell
-   aws s3 cp "s3://$bucket/db/<시각>-<실행 ID>/" $env:TEMP\restore --recursive
+   aws s3 cp "s3://$bucket/db/latest/" $env:TEMP\restore --recursive
    ```
-2. 백업 시점의 `main` 커밋에서 로컬 DB를 마이그레이션만 적용한 빈 상태로 만든다. 시드를 넣으면 행 수가 달라지므로 `--no-seed`를 쓴다.
+2. `backup-info.json`의 커밋에서 로컬 DB를 마이그레이션만 적용한 빈 상태로 만든다. 시드를 넣으면 행 수가 달라지므로 `--no-seed`를 쓴다.
    ```powershell
    npx supabase start
    npx supabase db reset --no-seed
@@ -370,7 +375,16 @@ aws s3 ls "s3://$bucket/db/" --recursive --human-readable
    docker cp $env:TEMP\restore\data.sql.gz supabase_db_cs-class:/tmp/data.sql.gz
    docker exec supabase_db_cs-class sh -c "gunzip -c /tmp/data.sql.gz | psql -U supabase_admin -d postgres -X -q --single-transaction -v ON_ERROR_STOP=1; rm /tmp/data.sql.gz"
    ```
-4. 행 수를 `counts.json`과 비교한다. 쿼리는 워크플로의 `Count rows` 단계와 같다.
+4. 행 수를 `counts.txt`와 비교한다. 마지막 줄이 `불일치 0개`여야 한다.
+   ```powershell
+   $bad = 0
+   Get-Content $env:TEMP\restore\counts.txt | ForEach-Object {
+     $table, $expected = $_ -split ' '
+     $actual = docker exec supabase_db_cs-class psql -U supabase_admin -d postgres -X -A -t -c "select count(*) from $table"
+     if ($actual -ne $expected) { "불일치: $table 백업 $expected, 복원 $actual"; $bad++ }
+   }
+   "비교한 표 $((Get-Content $env:TEMP\restore\counts.txt).Count)개, 불일치 $($bad)개"
+   ```
 5. 내려받은 파일을 지우고 `npx supabase db reset`으로 로컬 DB를 되돌린다.
 
 새 Supabase 프로젝트로 옮겨야 할 때는 Supabase 문서 "Backup and restore using CLI"의 순서(roles → schema → data)를 따른다. 이미지 파일은 `files/` 폴더를 같은 경로로 다시 올린다.
@@ -403,14 +417,13 @@ aws s3 ls "s3://$bucket/db/" --recursive --human-readable
    cd ..
    ```
    마지막 줄이 `Destroy complete! Resources: 5 destroyed.`여야 한다.
-6. **백업 버킷과 역할을 지운다.** 먼저 GitHub에서 **Actions → DB Backup → Disable workflow**로 예약 실행을 끄고 `db-backup` Environment를 지운다(비밀값도 함께 지워진다). 보관할 백업이 있으면 내려받은 뒤 버킷을 비운다. 버전 관리가 꺼져 있어 객체만 지우면 된다. GitHub OIDC 공급자를 조회하므로 7단계보다 먼저 실행한다.
+6. **백업 버킷과 역할을 지운다.** 먼저 GitHub에서 **Actions → DB Backup → Disable workflow**로 예약 실행을 끄고 `db-backup` Environment를 지운다(비밀값도 함께 지워진다). Supabase의 백업 전용 secret key도 지운다. 보관할 백업이 있으면 내려받는다. 버전 관리가 켜져 있어 이전 버전까지 지워야 하므로 S3 콘솔에서 백업 버킷을 고르고 **비우기(Empty)** 를 누른다. 그다음 이 폴더를 지운다. GitHub OIDC 공급자를 조회하므로 7단계보다 먼저 실행한다.
    ```powershell
-   aws s3 rm "s3://$o-cs-learning-db-backup" --recursive
    cd db-backup
    terraform destroy
    cd ..
    ```
-   마지막 줄이 `Destroy complete! Resources: 8 destroyed.`여야 한다.
+   마지막 줄이 `Destroy complete! Resources: 9 destroyed.`여야 한다.
 7. **CD 역할을 지운다.** GitHub Environment 비밀값과 워크플로는 저장소에서 따로 지운다. 이 폴더는 상태 버킷을 쓰므로 상태 버킷을 지우기 전에 실행한다.
    ```powershell
    cd github-oidc

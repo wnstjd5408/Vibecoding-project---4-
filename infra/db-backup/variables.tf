@@ -11,21 +11,21 @@ variable "owner" {
 }
 
 variable "home_region" {
-  description = "백업 버킷을 만드는 리전"
+  description = "백업 버킷을 만드는 리전. .github/workflows/db-backup.yml의 BACKUP_REGION과 같아야 한다."
   type        = string
   default     = "ap-northeast-2"
 }
 
-# 2026-10-30 Q6 결정: 최근 8개 보관. 주 1회 백업이라 8주 = 56일이다.
-# 수명 주기 규칙은 하루 단위로 돌아서 새 백업이 생기는 순간에는 8~9개가 있을 수 있다.
-variable "retention_days" {
-  description = "DB 덤프와 사전 이미지 백업을 지우기 전까지 보관하는 일수"
+# 2026-10-30 Q6 결정: 최근 8개 보관(주 1회 기준 약 2개월). 수동 실행도 1개로 센다.
+# 수명 주기 규칙은 하루 단위로 돌아서 새 백업 직후에는 하루 동안 9개가 있을 수 있다.
+variable "retention_count" {
+  description = "db/latest/와 glossary-images/latest/의 키마다 남기는 백업 수(현재 버전 포함)"
   type        = number
-  default     = 56
+  default     = 8
 
   validation {
-    condition     = var.retention_days >= 7
-    error_message = "retention_days는 백업 주기(7일)보다 짧으면 안 된다."
+    condition     = var.retention_count >= 2 && var.retention_count <= 101
+    error_message = "retention_count는 2~101이다(S3 NewerNoncurrentVersions 상한 100 + 현재 버전 1)."
   }
 }
 

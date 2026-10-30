@@ -2,16 +2,20 @@
 # 버킷 정책과 IAM 역할은 Infra CD apply 역할의 권한 밖이라 이 폴더는 사람이 로컬에서만 apply한다.
 #
 # 버킷 안 위치:
-# - db/<시각>/            주 1회 DB 덤프(roles·schema·data)와 행 수. retention_days 뒤 지운다.
-# - glossary-images/<시각>/ 주 1회 사전 이미지. retention_days 뒤 지운다.
-# - note-images/<시각>/     Notion 가져오기 직후 1회 노트 이미지. 지우지 않는다(Q11 결정).
+# - db/latest/                주 1회 DB 덤프(roles·schema·data)와 표별 행 수. 같은 키에 덮어쓴다.
+# - glossary-images/latest/   주 1회 사전 이미지. 같은 키에 덮어쓴다.
+# - note-images/<시각>/         Notion 가져오기 직후 1회 노트 이미지. 지우지 않는다(Q11 결정).
+#
+# 보관 개수(2026-10-30 Q6 결정, 최근 8개)는 날짜가 아니라 버전 수로 센다. 버전 관리를 켜고 같은 키에
+# 덮어쓰면 이전 백업이 이전 버전으로 남고, 수명 주기가 retention_count개를 넘는 이전 버전만 지운다.
+# 날짜로 지우면 예약 실행이 멈췄을 때 56일 뒤 백업이 0개가 된다(2026-10-30 코드 리뷰 지적).
 # 데이터 덤프에는 auth 스키마(계정·비밀번호 해시)가 들어 있다. 공개 차단과 TLS 강제를 풀지 않는다.
 
 locals {
-  bucket_name       = "${var.owner}-cs-learning-db-backup"
-  oidc_host         = "token.actions.githubusercontent.com"
-  expiring_prefixes = ["db/", "glossary-images/"]
-  upload_prefixes   = ["db/", "glossary-images/", "note-images/"]
+  bucket_name        = "${var.owner}-cs-learning-db-backup"
+  oidc_host          = "token.actions.githubusercontent.com"
+  versioned_prefixes = ["db/latest/", "glossary-images/latest/"]
+  upload_prefixes    = ["db/latest/", "glossary-images/latest/", "note-images/"]
 }
 
 resource "aws_s3_bucket" "backup" {
@@ -43,20 +47,40 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "backup" {
   }
 }
 
+resource "aws_s3_bucket_versioning" "backup" {
+  bucket = aws_s3_bucket.backup.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
 resource "aws_s3_bucket_lifecycle_configuration" "backup" {
   bucket = aws_s3_bucket.backup.id
 
+  # 현재 버전 1개 + 이전 버전 retention_count - 1개를 남긴다. 그보다 오래된 이전 버전은 이전 버전이 된 지
+  # 하루 뒤 지운다. 현재 버전은 만료시키지 않으므로 실행이 멈춰도 마지막 백업은 남는다.
   dynamic "rule" {
-    for_each = local.expiring_prefixes
+    for_each = local.versioned_prefixes
     content {
-      id     = "expire-${trimsuffix(rule.value, "/")}"
+      id     = "keep-${replace(trimsuffix(rule.value, "/"), "/", "-")}"
       status = "Enabled"
       filter {
         prefix = rule.value
       }
-      expiration {
-        days = var.retention_days
+      noncurrent_version_expiration {
+        noncurrent_days           = 1
+        newer_noncurrent_versions = var.retention_count - 1
       }
+    }
+  }
+
+  # 이전 버전이 모두 지워진 삭제 표시는 남길 이유가 없다. 이 역할은 지우지 못해 평소에는 생기지 않는다.
+  rule {
+    id     = "remove-expired-delete-markers"
+    status = "Enabled"
+    filter {}
+    expiration {
+      expired_object_delete_marker = true
     }
   }
 
@@ -69,6 +93,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "backup" {
       days_after_initiation = 1
     }
   }
+
+  # 버전 관리가 켜진 뒤에 규칙을 건다.
+  depends_on = [aws_s3_bucket_versioning.backup]
 }
 
 data "aws_iam_policy_document" "bucket" {
@@ -140,7 +167,8 @@ resource "aws_iam_role" "backup" {
 }
 
 # 올리기만 한다. 읽기·지우기·목록 권한이 없어 이 역할이 새도 기존 백업을 받거나 지울 수 없다.
-# 같은 키로 덮어쓰는 것은 막지 못한다. 워크플로는 실행마다 새 시각·실행 ID 경로를 쓴다.
+# 덮어쓴 백업은 이전 버전으로 남는다. 다만 이 역할로 retention_count번 넘게 덮어쓰면 정상 백업이
+# 수명 주기로 밀려난다. 역할은 main 전용 Environment에서만 받을 수 있다.
 data "aws_iam_policy_document" "backup" {
   statement {
     sid       = "UploadBackups"
