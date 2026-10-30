@@ -1,6 +1,7 @@
 """E05 노트 읽기 (MEG-73). 가짜 Supabase로 네트워크 없이 돈다. 데이터는 모두 합성이다."""
 
 import logging
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 from app import session
 from app.notes import SIGNED_URL_SECONDS
 from app.rate_limit import PUBLIC_READ, SIGNED_URL
+from scripts.notion_content import rich_text
 from support import FakeSupabase, build_notes_app, cookie
 
 MEMBER = "00000000-0000-0000-0000-00000000000a"
@@ -326,3 +328,20 @@ def test_glossary_at_the_row_cap_is_logged(client, fake, caplog):
         assert read(client, NO_IMAGE_NOTE).status_code == 200
 
     assert "stage=db glossary_terms=1000 reached row cap" in caplog.text
+
+
+@pytest.mark.parametrize("term", ["A*", "__init__", "std::vector<T>"])
+def test_terms_escaped_by_the_notion_import_get_spans_over_http(client, fake, term):
+    # 실제 가져오기 변환(scripts/notion_content.py)으로 만든 본문. 특수문자가 백슬래시로 이스케이프된다.
+    body = rich_text([{"plain_text": f"설명: {term} 끝"}])
+    assert body != f"설명: {term} 끝"
+    fake.add_note(16, "Escaped", None, [], body_markdown=body)
+    fake.add_glossary_term(30, term.lower(), term)
+
+    result = read(client, 16).json()
+
+    assert result["body_markdown"] == body
+    assert [t["term_id"] for t in result["glossary_terms"]] == [30]
+    [span] = result["glossary_spans"]
+    # 원문 구간은 이스케이프 백슬래시를 포함하고, 이스케이프를 풀면 용어 글자다.
+    assert re.sub(r"\\([!-/:-@\[-`{-~])", r"\1", body[span["start"] : span["end"]]) == term

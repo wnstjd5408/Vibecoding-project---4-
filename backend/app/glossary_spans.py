@@ -10,6 +10,10 @@
 - note-image: 토큰 안은 찾지 않는다. (2026-10-30 김준성 확인) 화면에 글자로 보이지 않는 링크 주소(](...))와 맨 URL
   안도 찾지 않는다. 링크가 아닌 `](...)` 모양 글자 안의 용어는 놓친다.
 - 겹치면 긴 쪽을 남긴다. 길이가 같으면 앞에 나온 쪽, 그다음 term_id가 작은 쪽이다.
+- 마크다운 백슬래시 이스케이프(백슬래시 + ASCII 문장부호)는 풀어서 비교한다. Notion 가져오기가 특수문자를
+  이스케이프해 저장하므로 용어 `A*`는 본문의 `A` + 백슬래시 + `*`와 일치한다. 위치는 이스케이프 백슬래시를 포함한
+  원문 구간이다(원문을 자른 뒤 이스케이프를 풀면 용어 글자가 된다). 코드 안의 백슬래시도 이스케이프로 본다
+  (CommonMark에서 코드 안 백슬래시는 그대로 보이므로 코드 안에서는 드물게 어긋날 수 있다).
 """
 
 import re
@@ -18,10 +22,13 @@ from dataclasses import dataclass
 
 # 글자로 보이지 않는 구간: 이미지 토큰(note-image:{notion_block_id}), 마크다운 링크 주소, 맨 URL.
 # 소문자로 바꾼 본문에 쓴다.
-_HIDDEN = re.compile(r"note-image:[^\s)]*|\]\([^)\s]*|(?:https?|ftp)://[^\s)<>\]]*")
+_HIDDEN = re.compile(r"note-image:[^\s)]*|(?<!\\)\]\([^)\s]*|(?:https?|ftp)://[^\s)<>\]]*")
 # 줄 안의 공백. str.splitlines가 줄 끝으로 보는 글자(\n, \r, \v, \f, \x1c~\x1e, \x85, U+2028, U+2029)는 뺀다.
-_LINE_SPACES = re.compile(r"[^\S\n\r\v\f\x1c-\x1e\x85  ]+")
+_LINE_SPACES = re.compile(r"[^\S\n\r\v\f\x1c-\x1e\x85\u2028\u2029]+")
 _SPACES = re.compile(r"\s+")
+# 마크다운 백슬래시 이스케이프(CommonMark: 백슬래시 뒤의 ASCII 문장부호 하나).
+# 가져오기 스크립트(scripts/notion_content.py escaped)가 \ ` * _ { } [ ] < > ! | 앞에 백슬래시를 붙여 저장한다.
+_ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
 _ASCII_LOWER = {code: code + 32 for code in range(ord("A"), ord("Z") + 1)}
 
 
@@ -99,8 +106,14 @@ def _nfc_with_offsets(body: str) -> tuple[str, list[int], list[bool]]:
     return "".join(pieces), offsets, boundary
 
 
-def _collapse_line_spaces(text: str) -> tuple[str, list[int]]:
-    """줄 안의 공백 묶음을 공백 하나로 줄인 찾기용 글과, 찾기용 위치 → text 위치 대응(길이 + 1개)."""
+def _search_text(text: str) -> tuple[str, list[int], bytearray]:
+    """찾기용 글, 찾기용 위치 → text 위치 대응(길이 + 1개), 보이지 않는 구간 표시를 만든다.
+
+    1. 줄 안의 공백 묶음을 공백 하나로 줄인다.
+    2. 보이지 않는 구간(_HIDDEN)을 이스케이프가 남은 글에서 표시한다(이스케이프된 `]` 뒤의 `(`는 링크가 아니다).
+    3. 백슬래시 이스케이프를 풀어 화면에 보이는 글자로 맞춘다. 풀린 글자의 위치는 백슬래시 위치로 대응시켜
+       용어가 이스케이프된 글자로 시작해도 원문 구간이 백슬래시부터 시작한다.
+    """
     pieces: list[str] = []
     positions: list[int] = []
     cursor = 0
@@ -113,7 +126,28 @@ def _collapse_line_spaces(text: str) -> tuple[str, list[int]]:
     pieces.append(text[cursor:])
     positions.extend(range(cursor, len(text)))
     positions.append(len(text))
-    return "".join(pieces), positions
+    collapsed = "".join(pieces)
+
+    hidden = bytearray(len(collapsed))
+    for match in _HIDDEN.finditer(collapsed):
+        hidden[match.start() : match.end()] = b"\x01" * (match.end() - match.start())
+
+    out: list[str] = []
+    out_positions: list[int] = []
+    out_hidden = bytearray()
+    cursor = 0
+    for match in _ESCAPE.finditer(collapsed):
+        out.append(collapsed[cursor : match.start()])
+        out_positions.extend(positions[cursor : match.start()])
+        out_hidden += hidden[cursor : match.start()]
+        out.append(match.group(1))
+        out_positions.append(positions[match.start()])
+        out_hidden.append(hidden[match.start()] | hidden[match.start() + 1])
+        cursor = match.end()
+    out.append(collapsed[cursor:])
+    out_positions.extend(positions[cursor:])
+    out_hidden += hidden[cursor:]
+    return "".join(out), out_positions, out_hidden
 
 
 def find_spans(body: str, terms: list[tuple[int, str]]) -> list[Span]:
@@ -123,10 +157,7 @@ def find_spans(body: str, terms: list[tuple[int, str]]) -> list[Span]:
     비용은 대략 (용어 수 × 본문 길이)의 C 문자열 검색 + 후보 길이의 합이다.
     """
     nfc, offsets, boundary = _nfc_with_offsets(body)
-    text, positions = _collapse_line_spaces(_ascii_lower(nfc))
-    hidden = bytearray(len(text))
-    for match in _HIDDEN.finditer(text):
-        hidden[match.start() : match.end()] = b"\x01" * (match.end() - match.start())
+    text, positions, hidden = _search_text(_ascii_lower(nfc))
 
     # 정규화하면 같은 key가 되는 용어는 term_id가 작은 쪽만 쓴다.
     by_key: dict[str, int] = {}

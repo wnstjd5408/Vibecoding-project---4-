@@ -3,6 +3,7 @@
 본문은 모두 합성 데이터다. 위치는 파이썬 문자열 인덱스(= 유니코드 코드포인트)로 자른다.
 """
 
+import re
 import time
 import unicodedata
 
@@ -63,7 +64,7 @@ def test_case_and_whitespace_are_normalized_on_both_sides():
 
 
 @pytest.mark.parametrize(
-    "body", ["## Round\n\nRobin 문단", "round\nrobin", "round \r\n robin", "round\rrobin", "round robin", "round\x85robin"]
+    "body", ["## Round\n\nRobin 문단", "round\nrobin", "round \r\n robin", "round\rrobin", "round\u2028robin", "round\x85robin"]
 )
 def test_terms_do_not_match_across_line_breaks(body):
     # 제목과 다음 문단처럼 다른 블록에 걸친 강조를 만들지 않는다.
@@ -84,6 +85,30 @@ def test_link_addresses_and_bare_urls_are_not_matched():
     # 링크 글자(IP 문서)와 본문 끝의 IP만 찾는다. 링크 주소·맨 URL 안은 화면에 글자로 보이지 않는다.
     assert cut(body, find_spans(body, [(4, "ip")])) == [(4, "IP"), (4, "IP")]
     assert find_spans(body, [(4, "ip")])[-1].end == len(body)
+
+
+ESCAPED_TERMS = [(21, "A*"), (22, "__init__"), (23, "std::vector<T>")]
+
+
+def unescape(text: str) -> str:
+    return re.sub(r"\\([!-/:-@\[-`{-~])", r"\1", text)
+
+
+def test_markdown_escaped_terms_match_and_cut_includes_the_backslashes():
+    # Notion 가져오기는 A* 를 "A\*"로, __init__ 을 "\_\_init\_\_"로 저장한다(scripts/notion_content.py escaped).
+    body = "알고리즘 A\\* 와 \\_\\_init\\_\\_ 그리고 std::vector\\<T\\> 끝"
+
+    spans = find_spans(body, ESCAPED_TERMS)
+
+    assert cut(body, spans) == [(21, "A\\*"), (22, "\\_\\_init\\_\\_"), (23, "std::vector\\<T\\>")]
+    # 원문 구간에서 이스케이프를 풀면 용어 글자다(AC-2의 원문 기준).
+    assert [unescape(text) for _, text in cut(body, spans)] == ["A*", "__init__", "std::vector<T>"]
+
+
+def test_escaped_backslash_and_escaped_bracket():
+    # "\\"는 백슬래시 한 글자다. "\](" 는 이스케이프된 ] 라서 링크 주소가 아니다.
+    assert cut("a\\\\b", find_spans("a\\\\b", [(1, "a\\b")])) == [(1, "a\\\\b")]
+    assert cut("x\\](ip) ip", find_spans("x\\](ip) ip", [(4, "ip")])) == [(4, "ip"), (4, "ip")]
 
 
 def test_image_tokens_are_never_matched():
