@@ -190,6 +190,12 @@ const routes: Route[] = [
     pattern: /^\/api\/term-views$/,
     handle: () => ({ status: 200, body: { recorded: getMockSession() !== 'visitor' } }),
   },
+  // E09 AI 설명. 방문자는 항상 401 login_required다. 로그인한 사용자 응답은 이 화면들이 쓰지 않아 만들지 않는다(등록 안 된 경로와 같은 404).
+  {
+    method: 'POST',
+    pattern: /^\/api\/ai\/explanations$/,
+    handle: () => (getMockSession() === 'visitor' ? loginRequired() : notFound()),
+  },
   // E08 즐겨찾기. 방문자는 항상 401 login_required다.
   {
     method: 'PUT',

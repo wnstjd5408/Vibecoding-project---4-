@@ -1,0 +1,4 @@
+.body { margin: 0 0 var(--space-4); color: var(--ink-muted); font-size: 14px; line-height: 22px; }
+.actions { display: flex; gap: var(--space-2); }
+/* 목업 F1-1c처럼 로그인 버튼이 시트 너비를 채운다 */
+.actions > a { flex: 1; }

@@ -5,3 +5,4 @@
 .link { display: inline-flex; align-items: center; min-height: 44px; color: var(--ink); font-size: 14px; line-height: 22px; font-weight: 600; }
 .notes { border-top: 1px solid var(--surface-300); }
 .message { padding: var(--space-4); }
+.linkButton { display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 14px; line-height: 22px; font-weight: 600; cursor: pointer; text-decoration: underline; }
