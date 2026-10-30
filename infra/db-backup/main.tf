@@ -200,8 +200,9 @@ data "aws_iam_openid_connect_provider" "github" {
   url = "https://${local.oidc_host}"
 }
 
-# 이 저장소의 db-backup Environment에서 온 토큰만 받는다. 브랜치 제한(main만)은 Environment의
-# 배포 브랜치 규칙이 맡는다. 사람이 GitHub에서 설정한다(infra/README.md "DB·이미지 백업" 절).
+# 기본값은 이 저장소의 db-backup Environment다(배포 브랜치 규칙으로 main만 허용).
+# 고정 IP 러너로 전환할 때만 backup_oidc_subject로 private 운영 저장소 main을 지정한다.
+# 둘을 동시에 허용하지 않는다. infra/backup-runner/README.md 참조.
 data "aws_iam_policy_document" "trust" {
   statement {
     effect  = "Allow"
@@ -221,7 +222,7 @@ data "aws_iam_policy_document" "trust" {
     condition {
       test     = "StringEquals"
       variable = "${local.oidc_host}:sub"
-      values   = ["repo:${var.github_subject_repository}:environment:${var.backup_environment}"]
+      values   = [var.backup_oidc_subject != null ? var.backup_oidc_subject : "repo:${var.github_subject_repository}:environment:${var.backup_environment}"]
     }
   }
 }
