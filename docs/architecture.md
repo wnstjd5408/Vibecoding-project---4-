@@ -212,6 +212,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 |---|---|---|---|
 | `SUPABASE_URL` | Supabase 프로젝트 주소 | 필수 | 백엔드(로컬·Vercel) |
 | `SUPABASE_SECRET_KEY` | 백엔드 전용 secret key. RLS를 우회하므로 프런트엔드·로그·URL에 넣지 않는다 | 필수. 용도별로 키를 따로 만든다 | 백엔드(로컬·Vercel) |
+| `NOTE_IMAGE_BUCKET` | 노트 이미지 비공개 버킷 이름. 노트 읽기(E05)가 이 버킷의 서명 URL을 발급한다 | 이미지가 있는 노트를 읽을 때만 필요하다. 비어 있거나 영문·숫자·`_`·`-` 밖의 글자가 있으면 그 요청이 500이다. 이름이 틀려도 Storage가 오류를 주지 않아 이미지만 빠지고 `stage=storage ... unsigned_images` ERROR 로그가 남는다(MEG-73) | 백엔드(로컬·Vercel) |
 | `NOTION_TOKEN` | 가져오기 전용 읽기 통합 토큰 | 가져오기 때만. 끝나면 폐기한다(2절 5번) | 운영자 로컬 |
 | `NOTION_DATABASE_ID` | 가져올 노트 데이터베이스 | 가져오기 때만 | 운영자 로컬 |
 | `AI_AUTH_MODE` | Bedrock 인증 방식 `oidc` 또는 `api_key` | 비우면 `oidc`. 다른 값은 오류 | 백엔드(로컬·Vercel) |
@@ -225,7 +226,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 
 - 백업 워크플로(`DB Backup`, 7절)는 앱 환경변수가 아니라 GitHub `db-backup` Environment의 비밀값을 쓴다. `SUPABASE_DB_URL`(세션 풀러 연결 문자열, DB 덤프용), `SUPABASE_URL`·`SUPABASE_SECRET_KEY`(이미지 백업용, 백업 전용 키), `AWS_ROLE_ARN`·`BACKUP_BUCKET`(S3 업로드)이고, 변수는 `GLOSSARY_IMAGE_BUCKET`·`NOTE_IMAGE_BUCKET`이다. 앱이 도는 동안 FastAPI 밖에서 DB를 읽는 예외다(D-072). 설정은 [인프라 가이드](../infra/README.md)의 "DB·이미지 백업" 절을 따른다.
 - 가져오기 스크립트가 DB·버킷에 쓸 때 쓰는 가져오기 전용 secret key의 변수 이름은 아직 없다. 가져오기 구현(MEG-85)에서 정한다. (미정, D-070)
-- 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정), `backend/app/config.py`(허용 출처), `backend/app/supabase.py`(Supabase 주소·secret key), `frontend/src/api/source.ts`(가짜/실제 전환)다. `VITE_API_BASE_URL`은 사용하지 않는다. Notion 변수는 가져오기 구현 때 읽는다.
+- 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정), `backend/app/config.py`(허용 출처), `backend/app/supabase.py`(Supabase 주소·secret key·노트 이미지 버킷), `frontend/src/api/source.ts`(가짜/실제 전환)다. `VITE_API_BASE_URL`은 사용하지 않는다. Notion 변수는 가져오기 구현 때 읽는다.
 
 ## 9. 아직 정하지 않은 것
 
