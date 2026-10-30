@@ -74,13 +74,23 @@ jobs:
         run: |
           out="${RUNNER_TEMP}/backup/db"
           mkdir -p "${out}"
+          python3 backend/scripts/diagnose_backup.py
           dump() {
             name="$1"; shift
             if ! npx supabase db dump --db-url "${SUPABASE_DB_URL}" -f "${out}/${name}.sql" "$@" \
               > "${RUNNER_TEMP}/dump-${name}.log" 2>&1; then
+              python3 backend/scripts/diagnose_backup.py --log "${RUNNER_TEMP}/dump-${name}.log"
               echo "::error::${name} 덤프 실패. 공개 로그라서 출력을 남기지 않는다."
               exit 1
             fi
+          }
+          dump roles --role-only
+          dump schema
+          dump data --use-copy --data-only
+          if ! grep -q '^COPY ' "${out}/data.sql"; then
+            echo "::error::data 덤프에 COPY 문이 없다"
+            exit 1
+          fi
           }
           dump roles --role-only
           dump schema
