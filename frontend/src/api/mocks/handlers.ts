@@ -21,6 +21,16 @@ export function mockError(status: number, code: string, message: string, detail?
 const loginRequired = () => mockError(401, 'login_required', 'Login is required')
 const notFound = () => mockError(404, 'not_found', 'Resource not found')
 
+// 운영자 API의 가짜 응답이 맨 앞에서 부른다. 서버처럼 방문자는 401 login_required, 일반 사용자는 403 forbidden을 돌려주고,
+// 운영자면 null이라 그대로 이어서 처리한다(backend/app/auth.py의 require_operator와 같은 규칙이다).
+//   handle: () => operatorOnly() ?? { status: 200, body: ... }
+export function operatorOnly(): MockResponse | null {
+  const session = getMockSession()
+  if (session === 'visitor') return loginRequired()
+  if (session === 'member') return mockError(403, 'forbidden', 'Operator permission is required')
+  return null
+}
+
 // 합성 계정. 실제 계정·비밀번호가 아니다. 역할 값은 서버 계약(member·operator)과 같다.
 const ACCOUNTS = {
   'member@example.test': { password: 'example-password', role: 'member', display_name: '합성 사용자' },
