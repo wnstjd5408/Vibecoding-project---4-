@@ -106,6 +106,30 @@ test.describe('F1-1c 노트 목록의 방문자 "오늘의 퀴즈"', () => {
     await expect(page.getByRole('dialog')).toHaveCount(0)
   })
 
+  // PR #56 Codex 리뷰 P2: 경로를 떠나며 숨겨진 시트가 원래 경로로 돌아왔을 때 되살아나면 안 된다.
+  test('시트를 연 채 뒤로 갔다 앞으로 돌아와도 닫힌 시트가 다시 열리지 않는다', async ({ page }) => {
+    await page.goto('/dev/foundation')
+    // 새로 고치지 않고 앱 안 링크로 옮겨야 히스토리 이동이 앱 안에서 일어난다
+    await page.getByRole('link', { name: 'F1-1 과목·노트 목록' }).click()
+    await expect(page).toHaveURL(/\/$/)
+    const quiz = page.getByRole('button', { name: '오늘의 퀴즈' })
+    await quiz.click()
+    await expect(sheet(page)).toBeVisible()
+    // 시트를 닫지 않은 채 뒤로
+    await page.goBack()
+    await expect(page).toHaveURL(/\/dev\/foundation$/)
+    await expect(sheet(page)).toHaveCount(0)
+    // 앞으로: 퀴즈 버튼을 다시 누르지 않았으므로 시트는 닫혀 있어야 한다
+    await page.goForward()
+    await expect(page).toHaveURL(/\/$/)
+    await expect(quiz).toBeVisible()
+    await expect(sheet(page)).toBeHidden()
+    // 새로 누르면 정상으로 열리고, 퀴즈 문구다
+    await quiz.click()
+    await expect(sheet(page)).toBeVisible()
+    await expect(sheet(page).getByText(QUIZ_BODY)).toBeVisible()
+  })
+
   test('로그인한 사용자에게는 시트가 아니라 /quiz 링크다', async ({ page }) => {
     await page.goto('/login')
     await page.getByLabel('이메일').fill('member@example.test')
