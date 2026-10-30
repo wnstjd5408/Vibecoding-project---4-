@@ -15,7 +15,9 @@ from app.errors import FIELD_MESSAGES, ApiError, request_id_of
 from app.net import client_ip, ip_bucket
 from app.rate_limit import LOGIN_FAILURE, LOGIN_IP, WRITE, RateLimiter, get_rate_limiter
 from app.session import decode_refresh_cookie, new_deadline, stage_clear, stage_session
-from app.supabase import AccountInputRejected, EmailExists, SupabaseClient, get_supabase
+from app.supabase import (
+    AccountInputRejected, AuthCreationUncertain, AuthRateLimited, EmailExists, SupabaseClient, get_supabase,
+)
 
 logger = logging.getLogger("app.accounts")
 
@@ -48,6 +50,19 @@ def create_account(
     limiter.check(WRITE, f"user:{user.user_id}")
     try:
         user_id = supabase.create_auth_user(_normalized(str(body.email)), body.initial_password)
+    except AuthRateLimited as exc:
+        raise ApiError("rate_limited", retry_after_seconds=exc.retry_after_seconds, stage="auth") from None
+    except AuthCreationUncertain as exc:
+        # 전송 전에 정한 ID만 삭제한다. 이메일로 기존 사용자를 찾아 삭제하지 않는다.
+        # 404여도 늦은 커밋을 배제할 수 없으므로 ID를 남겨 운영자가 확인하게 한다.
+        logger.warning("request_id=%s stage=auth creation_uncertain auth_user_id=%s",
+                       request_id_of(request), exc.user_id)
+        try:
+            supabase.delete_auth_user(exc.user_id)
+        except Exception:
+            logger.error("request_id=%s stage=auth cleanup_unconfirmed auth_user_id=%s",
+                         request_id_of(request), exc.user_id)
+        raise ApiError("service_unavailable", stage="auth") from None
     except EmailExists:
         raise ApiError("conflict", "email_exists", stage="auth") from None
     except AccountInputRejected as exc:

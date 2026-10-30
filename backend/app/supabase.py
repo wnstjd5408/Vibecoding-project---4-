@@ -8,6 +8,9 @@ import hmac
 import os
 import re
 import uuid
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from math import ceil
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,6 +34,31 @@ class SupabaseUnavailable(Exception):
 
 class SupabaseConfigError(Exception):
     """환경변수가 없거나 키 권한이 거부됐다. main.py의 처리기가 500으로 바꾼다."""
+
+
+class AuthCreationUncertain(SupabaseUnavailable):
+    """Auth 생성 결과를 확인하지 못했다. 이 요청이 정한 ID만 복구 대상으로 쓴다."""
+
+    def __init__(self, user_id: str):
+        self.user_id = user_id
+        super().__init__("auth creation outcome unknown")
+
+
+class AuthRateLimited(Exception):
+    def __init__(self, retry_after: str | None):
+        # 초 형식과 HTTP-date 모두 허용한다. 누락·비정상 값은 60초 안내로 대체한다.
+        seconds = 60
+        if retry_after:
+            try:
+                seconds = int(retry_after)
+            except ValueError:
+                try:
+                    deadline = parsedate_to_datetime(retry_after)
+                    seconds = ceil((deadline - datetime.now(timezone.utc)).total_seconds())
+                except (ValueError, TypeError, OverflowError):
+                    pass
+        self.retry_after_seconds = max(1, min(seconds, 2147483647))
+        super().__init__("auth rate limited")
 
 
 class EmailExists(Exception):
@@ -112,11 +140,13 @@ class SupabaseClient:
     def _headers(self, bearer: str | None = None) -> dict[str, str]:
         return {"apikey": self._secret_key, "Authorization": f"Bearer {bearer or self._secret_key}"}
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+    def _request(self, method: str, path: str, *, preserve_rate_limit: bool = False, **kwargs: Any) -> httpx.Response:
         try:
             response = self._http.request(method, f"{self._url}{path}", **kwargs)
         except httpx.HTTPError as exc:
             raise SupabaseUnavailable(type(exc).__name__) from None
+        if preserve_rate_limit and response.status_code == 429:
+            raise AuthRateLimited(response.headers.get("Retry-After"))
         if response.status_code >= 500 or response.status_code in _TRANSIENT_STATUSES:
             raise SupabaseUnavailable(f"status {response.status_code}")
         return response
@@ -199,10 +229,15 @@ class SupabaseClient:
 
     def create_auth_user(self, email: str, password: str) -> str:
         """운영자 발급 계정을 만든다. 이메일 확인 메일·초대 메일은 보내지 않는다."""
-        response = self._request(
-            "POST", "/auth/v1/admin/users", headers=self._headers(),
-            json={"email": email, "password": password, "email_confirm": True},
-        )
+        user_id = str(uuid.uuid4())
+        try:
+            response = self._request(
+                "POST", "/auth/v1/admin/users", headers=self._headers(), preserve_rate_limit=True,
+                json={"id": user_id, "email": email, "password": password, "email_confirm": True},
+            )
+        except SupabaseUnavailable:
+            # 5xx·응답 유실은 서버에서 커밋됐을 수 있다. 새 POST를 자동 재시도하지 않는다.
+            raise AuthCreationUncertain(user_id) from None
         if response.status_code in (400, 422):
             code = _auth_error_code(response)
             if code == "email_exists":
@@ -216,9 +251,12 @@ class SupabaseClient:
         if response.status_code not in (200, 201):
             raise SupabaseUnavailable(f"auth create status {response.status_code}")
         try:
-            return str(uuid.UUID(str(response.json()["id"])))
+            returned_id = str(uuid.UUID(str(response.json()["id"])))
+            if returned_id != user_id:
+                raise ValueError("unexpected user id")
+            return user_id
         except (ValueError, KeyError, TypeError):
-            raise SupabaseUnavailable("malformed auth create response") from None
+            raise AuthCreationUncertain(user_id) from None
 
     def create_member_profile(self, user_id: str, display_name: str) -> None:
         response = self._request(

@@ -94,3 +94,34 @@ def test_local_weak_password_has_no_account(local_accounts):
     response = operator.post('/api/admin/users', json={**payload(), 'initial_password': 'x'}, headers=origin())
     assert response.status_code == 422
     assert len(created) == count
+
+
+def test_local_committed_auth_response_loss_allows_reissue(local_accounts, monkeypatch):
+    """Drop a real Auth success response after the server commits the user."""
+    import json
+    import httpx
+    db, operator, created = local_accounts
+    class LoseOneResponse(httpx.HTTPTransport):
+        lost_id = None
+        def handle_request(self, request):
+            response = super().handle_request(request)
+            if request.method == 'POST' and request.url.path == '/auth/v1/admin/users' and self.lost_id is None:
+                assert response.status_code == 200
+                self.lost_id = json.loads(request.content)['id']
+                response.close()
+                raise httpx.ReadTimeout('injected response loss', request=request)
+            return response
+    transport = LoseOneResponse()
+    body = payload()
+    with httpx.Client(transport=transport, timeout=5) as http:
+        with monkeypatch.context() as patch:
+            patch.setattr(db, '_http', http)
+            response = operator.post('/api/admin/users', json=body, headers=origin())
+            assert response.status_code == 503
+            assert transport.lost_id is not None
+            assert db._request('GET', f'/auth/v1/admin/users/{transport.lost_id}', headers=db._headers()).status_code == 404
+            assert db.get_profile(transport.lost_id) is None
+            reissue = operator.post('/api/admin/users', json=body, headers=origin())
+            assert reissue.status_code == 201
+            assert reissue.json()['id'] != transport.lost_id
+            assert db.sign_in_with_password(body['email'], body['initial_password']) is not None
