@@ -682,7 +682,7 @@ for (const [name, failure] of [
   ['성공', null],
   ['일반 오류(500)', { status: 500 }],
 ] as const) {
-  test(`E08 응답을 기다리는 중 시트를 닫고 새 시트를 연 뒤 ${name} 응답이 와도 새 시트에 이전 상태나 안내가 남지 않는다`, async ({ page }) => {
+  test(`E08 응답을 기다리는 중 시트를 닫고 새 시트를 연 뒤 ${name} 응답이 와도 새 시트에 오류·저장 완료 안내가 남지 않고 버튼은 서버가 저장한 값에 맞춰진다`, async ({ page }) => {
     const held = gate()
     const calls = await setupFavorite(page, { member: true, gate: held.promise, favoriteResponse: () => failure })
     await page.goto('/notes/11')
@@ -696,13 +696,63 @@ for (const [name, failure] of [
     await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
     held.release()
     await page.waitForTimeout(400)
-    // 새 시트는 자기 상태 그대로다: 이전 요청의 저장 표시도 오류 안내도 없다
-    await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+    // 이 시트에서 누른 요청이 아니라 오류 안내도 저장 완료 안내도 없다. 버튼은 서버가 저장한 값에 맞춰진다(성공이면 켜짐, 실패면 꺼짐 그대로).
+    if (failure === null) await expect(favoriteOn(page)).toHaveAttribute('aria-pressed', 'true')
+    else await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
     await expect(favoriteAlert(page)).toHaveCount(0)
     await expect(termSheet(page).getByText('즐겨찾기에 저장했어요')).toHaveCount(0)
     await expect(loginPromptSheet(page)).toHaveCount(0)
   })
 }
+
+// PR #61 Codex 리뷰 P2(2): 저장 요청이 진행 중일 때 시트를 닫았다 다시 열면, 서버는 이미 저장했는데 새 시트의 버튼이 꺼진 채로 남았다.
+// 다시 연 시트는 진행 중인 요청을 이어서 보고(버튼이 막힘), 끝나면 서버가 저장한 값으로 버튼이 맞춰져야 한다. 요청을 취소하는 것이 서버 저장을 취소한다고 보지 않는다.
+test('저장 중 시트를 닫았다 다시 열면 버튼이 막혀 있다가 끝나면 서버가 저장한 값(켜짐)으로 맞춰지고, 다음 클릭은 해제 요청을 보낸다', async ({ page }) => {
+  const held = gate()
+  const calls = await setupFavorite(page, { member: true, gate: held.promise })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await favoriteOff(page).click()
+  await expect.poll(() => calls.favorites).toBe(1)
+  await page.keyboard.press('Escape')
+  await expect(termSheet(page)).toBeHidden()
+  // 다시 열면 E06은 아직 저장 전이라 꺼짐이지만, 진행 중인 요청이 있어 버튼은 막혀 있다
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+  await expect(favoriteOff(page)).toHaveAttribute('aria-disabled', 'true')
+  await favoriteOff(page).click({ force: true }) // 막혀 있으므로 새 요청이 나가지 않는다
+  expect(calls.favorites).toBe(1)
+  held.release()
+  // 서버가 저장한 값(켜짐)으로 맞춰지고 버튼이 풀린다. 이 시트에서 누른 것이 아니라 저장 완료 안내는 없다.
+  await expect(favoriteOn(page)).toHaveAttribute('aria-pressed', 'true')
+  await expect(favoriteOn(page)).not.toHaveAttribute('aria-disabled', 'true')
+  await expect(termSheet(page).getByText('즐겨찾기에 저장했어요')).toHaveCount(0)
+  // 사용자가 해제하려고 누르면 켜기(true)를 다시 보내지 않고 해제(false)를 보낸다
+  await favoriteOn(page).click()
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+  expect(calls.bodies).toEqual([{ favorited: true }, { favorited: false }])
+})
+
+test('저장 중 시트를 닫았다 다시 열어 둔 채 요청이 실패하면 버튼은 풀리고 오류 안내·로그인 안내는 뜨지 않으며 꺼짐 그대로다', async ({ page }) => {
+  const held = gate()
+  const calls = await setupFavorite(page, { member: true, gate: held.promise, favoriteResponse: () => ({ status: 500 }) })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await favoriteOff(page).click()
+  await expect.poll(() => calls.favorites).toBe(1)
+  await page.keyboard.press('Escape')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await expect(favoriteOff(page)).toHaveAttribute('aria-disabled', 'true')
+  held.release()
+  await expect(favoriteOff(page)).not.toHaveAttribute('aria-disabled', 'true')
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+  await expect(favoriteAlert(page)).toHaveCount(0)
+  await expect(loginPromptSheet(page)).toHaveCount(0)
+})
 
 // 같은 용어가 본문에 여러 번 나올 때 두 번째 링크로 열었다면 포커스는 첫 번째가 아니라 그 링크로 돌아와야 한다.
 const twiceNote = {

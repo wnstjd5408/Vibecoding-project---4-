@@ -60,6 +60,20 @@ function mergeSeen(previous: SeenImage[], images: { id: number; alt: string }[])
   return added.length === 0 ? previous : [...previous, ...added]
 }
 
+// 진행 중인 즐겨찾기 요청(용어별). 시트를 닫았다 다시 열어도 같은 요청을 이어서 보게 한다.
+// 서버는 요청을 이미 받았을 수 있어(닫는다고 저장이 취소되지 않는다), 다시 연 시트는 그 결과로 버튼을 맞춰야 한다.
+const favoriteRequests = new Map<number, Promise<FavoriteResponse>>()
+
+function requestFavorite(termId: number, favorited: boolean): Promise<FavoriteResponse> {
+  const request = apiFetch<FavoriteResponse>(`/api/favorites/${termId}`, { method: 'PUT', body: { favorited } })
+  favoriteRequests.set(termId, request)
+  const clear = () => {
+    if (favoriteRequests.get(termId) === request) favoriteRequests.delete(termId)
+  }
+  request.then(clear, clear)
+  return request
+}
+
 // 설명 본문은 용어 표시·노트 이미지 없이 마크다운만 그린다.
 const NO_SPANS: never[] = []
 const NO_IMAGES = {}
@@ -88,8 +102,24 @@ function TermSheetContent({ termId, onLoginRequired }: { termId: number; onLogin
   }, [])
   // 즐겨찾기: 응답을 받은 뒤에만 상태를 바꾼다(null이면 E06의 is_favorite를 쓴다). 요청 중에는 중복 요청을 막는다.
   const [favoriteSaved, setFavoriteSaved] = useState<boolean | null>(null)
-  const [favoritePending, setFavoritePending] = useState(false)
+  // 같은 용어의 요청이 이미 진행 중이면(시트를 닫았다 다시 연 경우) 처음부터 막힌 상태로 시작한다.
+  const [favoritePending, setFavoritePending] = useState(() => favoriteRequests.has(termId))
   const [favoriteFailed, setFavoriteFailed] = useState(false)
+  // 스크린 리더에 알릴 저장 결과. 이 시트에서 누른 요청의 결과만 알린다(다른 시트의 요청 결과는 상태만 맞춘다).
+  const [favoriteMessage, setFavoriteMessage] = useState('')
+  // 시트를 다시 열었을 때 같은 용어의 요청이 진행 중이면 그 요청을 이어서 보고, 끝나면 서버가 저장한 값으로 버튼을 맞춘다.
+  // 실패하면(로그인 필요 포함) 이 시트에서 누른 것이 아니므로 안내를 열거나 오류를 띄우지 않고 막힌 것만 푼다.
+  useEffect(() => {
+    const inFlight = favoriteRequests.get(termId)
+    if (!inFlight) return
+    inFlight
+      .then((response) => {
+        if (alive.current) setFavoriteSaved(response.is_favorite)
+      }, () => {})
+      .finally(() => {
+        if (alive.current) setFavoritePending(false)
+      })
+  }, [termId])
   // 이미지마다 E06을 다시 부르는 것은 한 번뿐이다. 새 URL도 실패하거나 URL이 그대로면 대체 글로 둔다.
   const refreshedImages = useRef(new Set<number>())
   const refreshing = useRef<Promise<GlossaryResponse> | null>(null)
@@ -144,10 +174,14 @@ function TermSheetContent({ termId, onLoginRequired }: { termId: number; onLogin
     if (favoritePending) return
     setFavoritePending(true)
     setFavoriteFailed(false)
+    setFavoriteMessage('')
     try {
-      const response = await apiFetch<FavoriteResponse>(`/api/favorites/${termId}`, { method: 'PUT', body: { favorited: next } })
-      // 그 사이 시트가 닫혔거나 화면이 바뀌었으면 결과를 쓰지 않는다.
-      if (alive.current) setFavoriteSaved(response.is_favorite)
+      const response = await requestFavorite(termId, next)
+      // 그 사이 시트가 닫혔거나 화면이 바뀌었으면 결과를 쓰지 않는다. 다시 연 시트는 진행 중 요청을 따로 이어서 본다.
+      if (alive.current) {
+        setFavoriteSaved(response.is_favorite)
+        setFavoriteMessage(response.is_favorite ? MESSAGES.favoriteOn : MESSAGES.favoriteOff)
+      }
     } catch (error) {
       if (!alive.current) return
       // 401 login_required는 로그인 안내가 맡는다. 눌림 상태는 바뀐 적이 없어 되돌릴 것도 없다. 그 밖의 오류는 여기서 안내한다.
@@ -189,7 +223,7 @@ function TermSheetContent({ termId, onLoginRequired }: { termId: number; onLogin
         <FavoriteToggle pressed={favorite} aria-disabled={favoritePending} onPressedChange={changeFavorite} />
       </div>
       {/* 저장 결과를 스크린 리더에 알린다. 실패했을 때는 비워 두어 저장된 것처럼 읽히지 않는다. */}
-      <p className={styles.srOnly} role="status">{favoriteSaved === null || favoriteFailed ? '' : favoriteSaved ? MESSAGES.favoriteOn : MESSAGES.favoriteOff}</p>
+      <p className={styles.srOnly} role="status">{favoriteFailed ? '' : favoriteMessage}</p>
     </>
   )
 }
