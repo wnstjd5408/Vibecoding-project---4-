@@ -272,3 +272,53 @@ test('선택이 본문 밖이나 이미지 대체 문구에 걸치면 null이다
   // 제목에서 본문까지 걸치면 null
   expect(await select({ selector: 'h1', offset: 0 }, { selector: bodyText, offset: 3 })).toBeNull()
 })
+
+// MEG-77 로그인 안내 시트의 오류 분기. 브라우저의 실제 fetch 경로로 서버 응답을 합성한다.
+// handleLoginRequired는 HTTP 401이면서 code가 login_required일 때만 시트를 연다. 그 밖은 호출한 화면의 기존 오류 처리다.
+// 실제 백엔드의 401은 이 시험이 확인하지 못한다.
+const errorBody = (code: string, message: string) => ({ error: { code, message, request_id: 'r-test-0001' } })
+
+for (const [name, status, code, message, opens] of [
+  ['401 login_required는 시트를 연다', 401, 'login_required', 'Login is required', true],
+  ['403 login_required(상태가 다름)는 시트를 열지 않는다', 403, 'login_required', 'Login is required', false],
+  ['401 invalid_credentials(code가 다름)는 시트를 열지 않는다', 401, 'invalid_credentials', 'Invalid email or password', false],
+  ['401이어도 message만 같고 code가 다르면 시트를 열지 않는다', 401, 'something_else', 'Login is required', false],
+  ['500 서버 오류는 시트를 열지 않는다', 500, 'internal_error', 'Internal server error', false],
+  ['429 요청 과다는 시트를 열지 않는다', 429, 'rate_limited', 'Too many requests', false],
+] as const) {
+  test(`즐겨찾기 ${name}`, async ({ page }) => {
+    await page.route('**/api/me', (route) => route.fulfill({ json: { authenticated: false } }))
+    await page.route('**/api/favorites/7', (route) => route.fulfill({ status, json: errorBody(code, message) }))
+    await page.goto('/dev/components')
+    const demo = page.getByRole('region', { name: '로그인 안내 시트 (MEG-77)' })
+    await demo.getByRole('button', { name: '즐겨찾기', exact: true }).click()
+    const sheet = page.getByRole('dialog', { name: '로그인이 필요해요' })
+    if (opens) {
+      await expect(sheet).toBeVisible()
+      await expect(page.getByTestId('favorite-status')).toHaveText('')
+    } else {
+      // 기존 오류 처리(데모의 실패 문구)로 넘어가고 시트는 열리지 않는다
+      await expect(page.getByTestId('favorite-status')).toHaveText('즐겨찾기를 저장하지 못했어요')
+      await expect(sheet).toHaveCount(0)
+    }
+    // 어느 경우에도 저장 성공 표시와 눌림 상태는 남지 않는다
+    await expect(demo.getByRole('button', { name: '즐겨찾기함' })).toHaveCount(0)
+  })
+}
+
+test('AI 설명도 401 login_required만 시트를 열고 다른 오류는 기존 오류 처리로 넘어간다', async ({ page }) => {
+  await page.route('**/api/me', (route) => route.fulfill({ json: { authenticated: false } }))
+  let status = 500
+  await page.route('**/api/ai/explanations', (route) => route.fulfill(
+    status === 401 ? { status, json: errorBody('login_required', 'Login is required') } : { status, json: errorBody('internal_error', 'Internal server error') },
+  ))
+  await page.goto('/dev/components')
+  const demo = page.getByRole('region', { name: '로그인 안내 시트 (MEG-77)' })
+  const sheet = page.getByRole('dialog', { name: '로그인이 필요해요' })
+  await demo.getByRole('button', { name: 'AI 설명', exact: true }).click()
+  await expect(page.getByTestId('ai-status')).toHaveText('AI 설명을 불러오지 못했어요')
+  await expect(sheet).toHaveCount(0)
+  status = 401
+  await demo.getByRole('button', { name: 'AI 설명', exact: true }).click()
+  await expect(sheet).toBeVisible()
+})
