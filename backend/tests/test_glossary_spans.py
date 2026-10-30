@@ -5,11 +5,13 @@
 
 import time
 import unicodedata
+from unittest.mock import Mock
 
 import pytest
 
-from app import glossary_spans
 from app.glossary_spans import Span, find_spans, normalize_key
+from scripts.notion_content import convert
+from support import unescape_markdown
 
 TERMS = [(1, "해시"), (2, "해시테이블"), (3, "hashtable"), (4, "ip"), (5, "tcp/ip"), (6, "round robin"), (7, "exampleterm")]
 
@@ -90,10 +92,6 @@ def test_link_addresses_and_bare_urls_are_not_matched():
 ESCAPED_TERMS = [(21, "A*"), (22, "__init__"), (23, "std::vector<T>")]
 
 
-def unescape(text: str) -> str:
-    return glossary_spans._ESCAPE.sub(r"\1", text)
-
-
 def test_markdown_escaped_terms_match_and_cut_includes_the_backslashes():
     # Notion 가져오기는 A* 를 "A\*"로, __init__ 을 "\_\_init\_\_"로 저장한다(scripts/notion_content.py escaped).
     body = "알고리즘 A\\* 와 \\_\\_init\\_\\_ 그리고 std::vector\\<T\\> 끝"
@@ -102,7 +100,7 @@ def test_markdown_escaped_terms_match_and_cut_includes_the_backslashes():
 
     assert cut(body, spans) == [(21, "A\\*"), (22, "\\_\\_init\\_\\_"), (23, "std::vector\\<T\\>")]
     # 원문 구간에서 이스케이프를 풀면 용어 글자다(AC-2의 원문 기준).
-    assert [unescape(text) for _, text in cut(body, spans)] == ["A*", "__init__", "std::vector<T>"]
+    assert [unescape_markdown(text) for _, text in cut(body, spans)] == ["A*", "__init__", "std::vector<T>"]
 
 
 def test_escaped_backslash_and_escaped_bracket():
@@ -126,6 +124,10 @@ def test_link_after_an_escaped_backslash_still_hides_its_address():
         "```\nx = a\\*b\n```",
         "~~~~\nx = a\\*b\n~~~~",
         "```python\nx = a\\*b",  # 닫히지 않은 코드 블록은 끝까지 코드다
+        "```\r\nx = a\\*b\r\n```\r\n",  # CRLF
+        "  - ```\n    x = a\\*b\n    ```",  # 가져오기가 토글 안 코드 블록을 쓰는 모양
+        "1. ~~~\n   x = a\\*b\n   ~~~",
+        "\\``a\\*b`",  # 첫 백틱만 이스케이프되고 나머지 `가 인라인 코드를 연다
     ],
 )
 def test_backslashes_inside_code_are_literal(body):
@@ -141,12 +143,44 @@ def test_escaped_backtick_does_not_open_code():
     assert cut(body, find_spans(body, [(21, "A*")])) == [(21, "A\\*")]
 
 
-def test_body_without_backslashes_skips_the_escape_pass():
-    text = "보통 노트 ip"
+@pytest.mark.parametrize(
+    "body",
+    [
+        # 코드 블록이 닫힌 뒤의 글은 코드가 아니다(CRLF·토글 안 코드 블록 포함).
+        "```\r\nx\r\n```\r\n뒤 A\\*",
+        "**t**\n\n  - ```\n    x = 1\n    ```\n\n뒤 A\\*",
+        # 줄 머리의 ``` a``b ```는 info에 백틱이 있어 코드 블록이 아니라 인라인 코드다(가져오기가 이렇게 쓴다).
+        "``` a``b ``` 다음\n\n뒤 A\\*",
+        # 짝 없는 백틱은 다음 문단의 백틱과 짝짓지 않는다.
+        "`혼자\n\n뒤 A\\*\n\n끝`",
+    ],
+)
+def test_text_after_or_beside_code_is_still_unescaped(body):
+    assert cut(body, find_spans(body, [(21, "A*")])) == [(21, "A\\*")]
 
-    search, positions, hidden = glossary_spans._search_text(text)
 
-    assert (search, positions, bytes(hidden)) == (text, list(range(len(text) + 1)), bytes(len(text)))
+def test_toggle_code_block_from_the_notion_import():
+    # 실제 가져오기 변환(convert)으로 토글 > 코드 블록, 그다음 문단을 만든다. 데이터는 합성이다.
+    page, toggle = "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"
+    tree = {
+        page: [
+            {"id": toggle, "type": "toggle", "has_children": True, "toggle": {"rich_text": [{"plain_text": "t"}]}},
+            {"id": "00000000-0000-4000-8000-000000000003", "type": "paragraph",
+             "paragraph": {"rich_text": [{"plain_text": "뒤 문단 A*"}]}},
+        ],
+        toggle: [
+            {"id": "00000000-0000-4000-8000-000000000004", "type": "code",
+             "code": {"rich_text": [{"plain_text": "x = a\\*b"}]}},
+        ],
+    }
+    notion = Mock()
+    notion.children.side_effect = lambda block_id: tree[block_id]
+    body = convert(notion, page).markdown
+
+    spans = find_spans(body, [(1, "a*"), (2, "a*b")])
+
+    # 코드 속 a\*b는 용어 a*b가 아니고, 문단의 A*(A\*)만 찾는다.
+    assert cut(body, spans) == [(1, "A\\*")]
 
 
 def test_image_tokens_are_never_matched():

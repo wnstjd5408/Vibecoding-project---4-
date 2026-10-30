@@ -1,6 +1,7 @@
 """공통 계층 시험용 앱과 가짜 Supabase. 네트워크·DB 없이 돈다."""
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 
 from fastapi import Depends, FastAPI, Header
@@ -396,3 +397,8 @@ def cookie(token: str) -> dict[str, str]:
 
 def origin(value: str = ALLOWED_ORIGIN) -> dict[str, str]:
     return {"Origin": value}
+
+
+def unescape_markdown(text: str) -> str:
+    """마크다운 백슬래시 이스케이프를 푼다. 시험이 앱 코드(app/glossary_spans.py)와 따로 쓰는 기준 구현이다."""
+    return re.sub(r"\\([!-/:-@\[-`{-~])", r"\1", text)

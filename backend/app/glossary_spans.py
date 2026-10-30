@@ -17,6 +17,7 @@
 - 한계: 강조 표시 `*`와 글자 `*`를 구분하지 않는다(`**A**`에서 용어 `A*`가 일치할 수 있다). 마크다운 파서가 필요하다.
 """
 
+import bisect
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -26,9 +27,12 @@ from dataclasses import dataclass
 # 이스케이프된 글자라 링크가 아니다. 숨기는 구간은 그룹 1(`](...`)이다.
 _HIDDEN = re.compile(r"note-image:[^\s)]*|(?:https?|ftp)://[^\s)<>\]]*")
 _LINK_DESTINATION = re.compile(r"(?<!\\)(?:\\\\)*(\]\([^)\s]*)")
-# 코드 블록 여는 줄(백틱·물결 3개 이상)과 인라인 코드의 백틱 묶음.
-_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})", re.MULTILINE)
+# 코드 블록 여는 줄(백틱·물결 3개 이상). 가져오기는 토글·목록 안의 블록을 "  - " 뒤나 4칸 들여쓴 줄에 쓰므로
+# 앞의 들여쓰기와 목록 표시(-, +, *, 1. 1))를 받는다. 그룹 2는 info(언어 이름 등)다.
+_FENCE_OPEN = re.compile(r"[ \t]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]+)*(`{3,}|~{3,})([^\n]*)")
 _BACKTICKS = re.compile(r"`+")
+# 인라인 코드는 문단을 넘지 않는다. 빈 줄(공백·\r만 있는 줄 포함)이 문단 경계다.
+_BLANK_LINE = re.compile(r"\n[ \t\r]*\n")
 # 줄 안의 공백. str.splitlines가 줄 끝으로 보는 글자(\n, \r, \v, \f, \x1c~\x1e, \x85, U+2028, U+2029)는 뺀다.
 _LINE_SPACES = re.compile(r"[^\S\n\r\v\f\x1c-\x1e\x85\u2028\u2029]+")
 _SPACES = re.compile(r"\s+")
@@ -123,33 +127,59 @@ def _is_escaped(text: str, index: int) -> bool:
 def _code_mask(text: str) -> bytearray:
     """코드 블록과 인라인 코드(구분 기호 포함) 위치를 1로 표시한다. 코드 안에서는 백슬래시가 이스케이프가 아니다.
 
-    CommonMark를 단순화했다: 코드 블록은 같은 글자로 같거나 긴 닫는 줄까지(없으면 끝까지), 인라인 코드는
-    이스케이프되지 않은 백틱 묶음부터 길이가 같은 다음 백틱 묶음까지다.
+    공백을 합치기 전의 글에 쓴다. CommonMark를 가져오기 형식(scripts/notion_content.py)에 맞춰 단순화했다.
+    - 코드 블록: 여는 줄(들여쓰기·목록 표시 허용)부터, 같은 글자가 여는 줄 이상 이어지고 나머지가 공백·\\r뿐인
+      닫는 줄까지다. 닫는 줄이 없으면 끝까지다. 백틱 펜스의 info에 백틱이 있으면 펜스가 아니라 인라인 코드다.
+    - 인라인 코드: 백틱 묶음부터 같은 문단 안의 길이가 같은 다음 묶음까지다. 묶음의 첫 백틱이 이스케이프됐으면
+      나머지 백틱이 여는 묶음이다. 닫는 묶음 앞의 백슬래시는 코드 글자라 따지지 않는다.
+    - 하지 않는 것: 4칸 들여쓴 코드 블록(가져오기는 목록 자식 줄을 4칸 들여쓰므로 코드로 보면 안 된다).
     """
     mask = bytearray(len(text))
-    position = 0
-    while (fence := _FENCE.search(text, position)) is not None:
-        marker = fence.group(1)
-        line_end = text.find("\n", fence.end())
-        closing = None
-        if line_end != -1:
-            closing_line = re.compile(r"^ {0,3}" + re.escape(marker[0]) + "{" + str(len(marker)) + r",}[ \t]*$", re.MULTILINE)
-            closing = closing_line.search(text, line_end + 1)
-        end = closing.end() if closing else len(text)
-        mask[fence.start() : end] = b"\x01" * (end - fence.start())
-        position = max(end, fence.end())
+    lines: list[tuple[int, int]] = []
+    start = 0
+    while start <= len(text):
+        end = text.find("\n", start)
+        end = len(text) if end == -1 else end
+        lines.append((start, end))
+        start = end + 1
 
-    runs = [run for run in _BACKTICKS.finditer(text) if not mask[run.start()]]
+    index = 0
+    while index < len(lines):
+        line_start, line_end = lines[index]
+        index += 1
+        fence = _FENCE_OPEN.fullmatch(text, line_start, line_end)
+        if fence is None or (fence.group(1)[0] == "`" and "`" in fence.group(2)):
+            continue
+        char, width = fence.group(1)[0], len(fence.group(1))
+        block_end = len(text)
+        while index < len(lines):
+            closing_start, closing_end = lines[index]
+            index += 1
+            stripped = text[closing_start:closing_end].strip(" \t\r")
+            if len(stripped) >= width and stripped == char * len(stripped):
+                block_end = closing_end
+                break
+        mask[line_start:block_end] = b"\x01" * (block_end - line_start)
+
+    breaks = [match.start() for match in _BLANK_LINE.finditer(text)]
+    runs = [(run.start(), run.end()) for run in _BACKTICKS.finditer(text) if not mask[run.start()]]
     index = 0
     while index < len(runs):
-        opener = runs[index]
+        opener_start, opener_end = runs[index]
         index += 1
-        if _is_escaped(text, opener.start()):
-            continue
-        width = opener.end() - opener.start()
+        if _is_escaped(text, opener_start):
+            opener_start += 1
+            if opener_start == opener_end:
+                continue
+        width = opener_end - opener_start
+        next_break = bisect.bisect_right(breaks, opener_start)
+        limit = breaks[next_break] if next_break < len(breaks) else len(text)
         for later in range(index, len(runs)):
-            if runs[later].end() - runs[later].start() == width:
-                mask[opener.start() : runs[later].end()] = b"\x01" * (runs[later].end() - opener.start())
+            closer_start, closer_end = runs[later]
+            if closer_start >= limit:
+                break
+            if closer_end - closer_start == width:
+                mask[opener_start:closer_end] = b"\x01" * (closer_end - opener_start)
                 index = later + 1
                 break
     return mask
@@ -187,13 +217,14 @@ def _search_text(text: str) -> tuple[str, list[int], bytearray]:
     if "\\" not in collapsed:
         return collapsed, positions, hidden
 
-    code = _code_mask(collapsed)
+    # 코드 판정은 들여쓰기·줄 끝이 그대로인 원래 글에서 한다.
+    code = _code_mask(text)
     out: list[str] = []
     out_positions: list[int] = []
     out_hidden = bytearray()
     cursor = 0
     for match in _ESCAPE.finditer(collapsed):
-        if code[match.start()]:
+        if code[positions[match.start()]]:
             continue
         out.append(collapsed[cursor : match.start()])
         out_positions.extend(positions[cursor : match.start()])
