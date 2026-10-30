@@ -6,6 +6,8 @@ import { useAuth } from '../auth/useAuth.ts'
 import { AppHeader, Button, LinkButton, NoteListItem, StateMessage } from '../components/index.ts'
 import { Chip } from '../components/Chip.tsx'
 import { AccountMenu } from '../account/AccountMenu.tsx'
+import { LOGIN_PROMPT_MESSAGES } from '../loginPrompt/messages.ts'
+import { useLoginPrompt } from '../loginPrompt/useLoginPrompt.ts'
 import { noteReadPath, operatorPaths, userPaths } from '../routes/paths.ts'
 import styles from './NoteListPage.module.css'
 
@@ -19,6 +21,7 @@ export default function NoteListPage() {
 
 function NoteList() {
   const auth = useAuth()
+  const { openLoginPrompt } = useLoginPrompt()
   const [params, setParams] = useSearchParams()
   const subject = params.get('subject_id') ?? ''
   const [attempt, setAttempt] = useState(0)
@@ -68,7 +71,9 @@ function NoteList() {
         <Chip selected={!subject} onClick={() => selectSubject()}>전체</Chip>
         {subjects.map((item) => <Chip key={item.id} selected={subject === String(item.id)} onClick={() => selectSubject(item.id)}>{item.name}</Chip>)}
       </div>
-      <div className={styles.quiz}><Link className={styles.link} to={auth.role === 'visitor' ? userPaths.login : userPaths.quiz}>오늘의 퀴즈</Link></div>
+      <div className={styles.quiz}>{auth.role === 'visitor'
+        ? <button type="button" className={styles.linkButton} onClick={() => openLoginPrompt({ body: LOGIN_PROMPT_MESSAGES.quizBody })}>오늘의 퀴즈</button>
+        : <Link className={styles.link} to={userPaths.quiz}>오늘의 퀴즈</Link>}</div>
       <section className={styles.notes} aria-label="노트 목록" aria-busy={!current}>
         {!current ? <div className={styles.message}><StateMessage kind="loading" title="노트를 불러오는 중이에요" headingLevel={2} /></div>
           : 'error' in current ? <div className={styles.message}><StateMessage kind="error" title={current.error} headingLevel={2}

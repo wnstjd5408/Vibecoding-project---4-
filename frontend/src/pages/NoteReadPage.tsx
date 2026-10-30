@@ -4,7 +4,8 @@ import { apiFetch, isApiError } from '../api/client.ts'
 import type { NoteReadResponse } from '../api/types.ts'
 import { AccountMenu } from '../account/AccountMenu.tsx'
 import { useAuth } from '../auth/useAuth.ts'
-import { AppHeader, BottomSheet, Button, LinkButton, StateMessage } from '../components/index.ts'
+import { AppHeader, Button, LinkButton, StateMessage } from '../components/index.ts'
+import { TermSheet } from '../glossary/TermSheet.tsx'
 import { NoteBody } from '../notes/NoteBody.tsx'
 import { userPaths } from '../routes/paths.ts'
 import styles from './NoteReadPage.module.css'
@@ -17,7 +18,6 @@ const MESSAGES = {
   failed: '노트를 불러오지 못했어요',
   rateLimited: '요청이 많아요. 잠시 뒤에 다시 시도해 주세요.',
   retry: '다시 시도',
-  termPending: '용어 설명은 아직 준비 중이에요.',
 }
 
 type Result = { key: string; data: NoteReadResponse } | { key: string; error: 'not_found' | 'failed' | 'rate_limited' }
@@ -32,7 +32,9 @@ function NoteRead({ noteId }: { noteId: string }) {
   const auth = useAuth()
   const [attempt, setAttempt] = useState(0)
   const [result, setResult] = useState<Result | null>(null)
-  const [termId, setTermId] = useState<number | null>(null)
+  // 열린 용어 시트. openId는 열 때마다 올라가 같은 용어를 다시 열어도 새로 불러온다.
+  const [openTerm, setOpenTerm] = useState<{ termId: number; openId: number } | null>(null)
+  const openCount = useRef(0)
   const [brokenImages, setBrokenImages] = useState<ReadonlySet<string>>(new Set())
   const key = `${noteId}:${attempt}`
   const valid = /^\d+$/.test(noteId)
@@ -74,7 +76,11 @@ function NoteRead({ noteId }: { noteId: string }) {
   }, [noteId, key])
 
   const note = current && 'data' in current ? current.data : null
-  const term = note?.glossary_terms.find((item) => item.term_id === termId)
+  const term = note?.glossary_terms.find((item) => item.term_id === openTerm?.termId)
+  const showTerm = (termId: number) => {
+    openCount.current += 1
+    setOpenTerm({ termId, openId: openCount.current })
+  }
 
   return <div className={styles.page}>
     <AppHeader backTo={userPaths.noteList} backLabel="목록" actions={
@@ -93,12 +99,10 @@ function NoteRead({ noteId }: { noteId: string }) {
             <h1 className={styles.title}>{current.data.title}</h1>
             <p className={styles.meta}>{[...current.data.subjects.map((item) => item.name), ...(current.data.studied_on ? [current.data.studied_on] : [])].join(' · ')}</p>
             <NoteBody body={current.data.body_markdown} spans={current.data.glossary_spans} images={current.data.images}
-              brokenImages={brokenImages} onTerm={setTermId} onImageError={onImageError} />
+              brokenImages={brokenImages} onTerm={showTerm} onImageError={onImageError} />
           </article>}
     </main>
-    {/* 용어를 누르면 열리는 시트. MEG-74는 용어 이름만 보이고, 설명·이미지·즐겨찾기는 MEG-76이 이 안을 채운다. */}
-    <BottomSheet open={term !== undefined} onClose={() => setTermId(null)} title={term?.label ?? ''}>
-      <p className={styles.pending}>{MESSAGES.termPending}</p>
-    </BottomSheet>
+    {/* 용어를 누르면 열리는 시트(F1-3). 즐겨찾기 버튼과 로그인 안내 연결은 PR #56(MEG-77) 병합·MEG-90 구현 뒤에 이 안에 더한다. */}
+    <TermSheet open={term !== undefined} onClose={() => setOpenTerm(null)} openId={openTerm?.openId ?? 0} termId={openTerm?.termId ?? null} label={term?.label ?? ''} />
   </div>
 }
