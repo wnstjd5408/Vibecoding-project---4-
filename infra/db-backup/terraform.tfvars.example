@@ -1,0 +1,4 @@
+# terraform.tfvars로 복사해 실제 값을 넣는다. terraform.tfvars는 커밋하지 않는다.
+
+# 이메일 @ 앞부분. infra/terraform.tfvars의 owner와 같은 값.
+owner = "OWNER"

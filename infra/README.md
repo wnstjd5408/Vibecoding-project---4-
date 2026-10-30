@@ -24,6 +24,7 @@ AWS 계정의 비용 경보, 감사 로그, 감사 이벤트 알림을 Terraform
 | `alerts.tf` | SNS 토픽 `<owner>-cs-learning-audit-alerts`·이메일 구독, EventBridge 규칙 `<owner>-cs-learning-…`·대상 | ap-northeast-1(STS), us-east-1(IAM) | 새로 만듦 |
 | `github-oidc/` | GitHub OIDC 공급자, IAM 역할 `<owner>-infra-plan`·`<owner>-infra-apply` | 글로벌 | 새로 만듦. CD 전용이며 상태 파일이 따로다. CD가 아니라 사람이 로컬에서 적용한다 |
 | `vercel-oidc/` | Vercel OIDC 공급자(team issuer), IAM 역할 `<owner>-vercel-bedrock-prd`·`<owner>-vercel-bedrock-preview`와 Bedrock 호출 정책 | 글로벌(호출 리전 ap-northeast-1) | 새로 만듦(MEG-119). 상태 파일이 따로이고 사람이 로컬에서 적용한다. "Vercel OIDC 역할" 절 참고 |
+| `db-backup/` | 백업 버킷 `<owner>-cs-learning-db-backup`(공개 차단·SSE-S3·TLS 강제·수명 주기), IAM 역할 `<owner>-db-backup`과 업로드 정책 | ap-northeast-2(역할은 글로벌) | 새로 만듦(MEG-94). 상태 파일이 따로이고 사람이 로컬에서 적용한다. "DB·이미지 백업" 절 참고 |
 
 `imports.tf`의 `import` 블록이 콘솔 리소스를 상태로 가져온다. 가져온 리소스는 `plan`에서 변경·삭제가 0건이어야 한다.
 
@@ -288,6 +289,92 @@ Vercel 배포의 FastAPI가 장기 키 없이 Bedrock을 부를 때 맡는 역�
 - 실제 호출 확인과 STS 실패 알림 시험은 MEG-118에서 한다. 알림 규칙(`alerts.tf`)은 역할을 구분하지 않으므로 메일은 CloudTrail 이벤트 ID·시각·대상 역할과 대조한다.
 - 되돌리려면 Vercel의 `AWS_ROLE_ARN`을 지운 뒤 이 폴더에서 `terraform destroy`한다("정리(삭제) 방법" 5단계). `AI_AUTH_MODE` 기본값이 `oidc`라서 그 뒤의 AI 호출은 설정 오류로 실패한다. AI 기능이 이미 배포돼 있으면 먼저 `docs/ai-credentials.md`의 대체 경로(`api_key`)로 바꾸거나 AI 기능을 끈다.
 
+## DB·이미지 백업 (MEG-94)
+
+GitHub Actions `DB Backup`(`.github/workflows/db-backup.yml`)이 매주 월요일 03:00 KST에 운영 Supabase DB를 덤프해 이 버킷에 올린다. 2026-10-30 Q6 결정은 주 1회 자동 실행, 사전 대량 수정 전 수동 1회, RPO 7일, 최근 8개 보관이다.
+
+**구성**
+
+- 버킷 `<owner>-cs-learning-db-backup`(ap-northeast-2): 공개 차단, 기본 암호화 SSE-S3, TLS가 아닌 요청 거부.
+  - `db/<시각>-<실행 ID>/`: `roles.sql.gz`, `schema.sql.gz`, `data.sql.gz`, `counts.json`. 데이터 덤프에는 `auth` 스키마(계정·비밀번호 해시·세션)와 `storage` 메타데이터도 들어 있다.
+  - `glossary-images/<시각>-<실행 ID>/`: 사전 이미지 파일과 `manifest.json`(파일·행 대조 결과)
+  - `note-images/<시각>-<실행 ID>/`: 노트 이미지. Notion 가져오기 직후 수동 실행으로 한 번 만든다.
+  - 수명 주기: `db/`·`glossary-images/`는 `retention_days`(기본 56일, 주 1회 기준 8개) 뒤 지운다. 규칙이 하루 단위로 돌아서 새 백업 직후에는 9개가 있을 수 있다. `note-images/`는 지우지 않는다.
+- 역할 `<owner>-db-backup`: GitHub Environment `db-backup`에서 온 토큰만 받는다. 권한은 위 세 위치의 `s3:PutObject`뿐이다. 이 역할로는 백업을 읽거나 지울 수 없다. 같은 키로 덮어쓰는 것은 막지 못하므로 워크플로는 실행마다 새 경로를 쓴다.
+- 이미지 버킷은 아직 없다. 이미지 버킷 이름을 정하는 이슈(MEG-81·MEG-85)가 끝나면 Environment 변수를 넣는다. 변수가 없으면 이미지 단계는 건너뛴다.
+- 공개 로그에는 파일 이름·크기·시각과 이미지 대조 개수만 찍는다. 행 수(사용자 수 포함)는 `counts.json`에만 둔다.
+
+**적용 순서 (사람, 로컬)**
+
+1. 계획을 만든다. `owner`는 `infra/`와 같은 값, 상태 버킷은 `infra/backend.hcl`을 그대로 쓴다. GitHub OIDC 공급자는 `infra/github-oidc/`가 이미 만들었다(이 폴더는 조회만 한다).
+   ```powershell
+   cd infra\db-backup
+   Copy-Item terraform.tfvars.example terraform.tfvars   # owner를 채운다
+   terraform init "-backend-config=../backend.hcl"
+   terraform plan "-out=plan.tfplan"
+   ```
+   `Plan: 8 to add, 0 to change, 0 to destroy.`가 나와야 한다(버킷과 설정 6, 역할 1, 역할 정책 1).
+2. 적용하고 출력값을 확인한다. 역할 ARN에는 계정 ID가 있으므로 이슈나 PR에 옮기지 않는다.
+   ```powershell
+   terraform apply plan.tfplan
+   Remove-Item plan.tfplan
+   terraform output
+   ```
+3. GitHub 저장소 **Settings → Environments**에서 `db-backup`을 만든다. **Deployment branches and tags**는 `main`만 허용한다. 예약 실행이 멈추지 않도록 필수 승인자는 두지 않는다.
+4. `db-backup` Environment에 비밀값을 넣는다.
+
+   | 이름 | 값 |
+   |---|---|
+   | `AWS_ROLE_ARN` | `terraform output role_arn` |
+   | `BACKUP_BUCKET` | `terraform output bucket_name` |
+   | `SUPABASE_DB_URL` | Supabase 대시보드 **Connect → Session pooler** 연결 문자열. GitHub 호스트 러너는 IPv6를 지원하지 않아 직접 연결(IPv6)은 실패한다. 비밀번호의 특수문자는 퍼센트 인코딩한다 |
+   | `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | 이미지 백업용. 운영 백엔드와 같은 값이다. 이미지 버킷이 생기기 전에는 비워 둬도 된다 |
+
+   이미지 버킷이 생기면 같은 Environment의 **변수**(Variables)에 `GLOSSARY_IMAGE_BUCKET`·`NOTE_IMAGE_BUCKET`을 넣는다.
+5. **Actions → DB Backup → Run workflow**로 한 번 실행해 로그에서 `DB 백업 …` 줄과 파일 크기를 확인한다.
+
+워크플로 파일은 AI 계정이 push할 수 없다(토큰에 `workflow` 권한 없음, MEG-100). PR 브랜치에 사람이 웹에서 올린다.
+
+**수동 실행이 필요한 때**
+
+- 사전을 대량으로 고치기 전: **Run workflow**를 기본값으로 실행한다.
+- Notion 가져오기 직후: `note_images`를 체크하고 실행한다. `note-images/`에 만료 없이 남는다.
+
+**실패 알림**
+
+예약 실행이 실패하면 GitHub이 워크플로의 예약(cron)을 마지막으로 바꾼 사람에게 메일을 보낸다. 이미지 파일과 표 행이 어긋나면 받은 파일은 올린 뒤 실패로 끝난다. 공개 저장소의 예약 실행은 60일 동안 저장소 활동이 없으면 GitHub이 꺼 버린다. 꺼지면 **Actions → DB Backup → Enable workflow**로 다시 켠다.
+
+**백업 확인 (AC-2, 사람)**
+
+사람 자격증명으로 최근 백업 목록과 크기를 본다. 역할에는 목록 권한이 없다.
+
+```powershell
+aws s3 ls "s3://$bucket/db/" --recursive --human-readable
+```
+
+**복원 시험 (AC-4, 사람, 로컬)**
+
+운영 DB에 복원하지 않는다. 로컬 Supabase에 데이터 덤프를 넣어 `counts.json`과 비교한다. 2026-10-30 합성 데이터로 이 절차를 시험해 8개 표의 행 수가 같음을 확인했다.
+
+1. 백업을 내려받는다. 실제 사용자 데이터라 저장소 폴더 밖에 받고 시험 뒤 지운다.
+   ```powershell
+   aws s3 cp "s3://$bucket/db/<시각>-<실행 ID>/" $env:TEMP\restore --recursive
+   ```
+2. 백업 시점의 `main` 커밋에서 로컬 DB를 마이그레이션만 적용한 빈 상태로 만든다. 시드를 넣으면 행 수가 달라지므로 `--no-seed`를 쓴다.
+   ```powershell
+   npx supabase start
+   npx supabase db reset --no-seed
+   ```
+3. 데이터 덤프를 넣는다. `postgres` 역할로 넣으면 `storage.buckets_vectors`에서 권한 오류가 난다. 로컬 슈퍼유저 `supabase_admin`으로 넣는다. PowerShell 파이프는 한글 인코딩을 바꿀 수 있어 파일을 컨테이너에 복사해 그 안에서 압축을 푼다.
+   ```powershell
+   docker cp $env:TEMP\restore\data.sql.gz supabase_db_cs-class:/tmp/data.sql.gz
+   docker exec supabase_db_cs-class sh -c "gunzip -c /tmp/data.sql.gz | psql -U supabase_admin -d postgres -X -q --single-transaction -v ON_ERROR_STOP=1; rm /tmp/data.sql.gz"
+   ```
+4. 행 수를 `counts.json`과 비교한다. 쿼리는 워크플로의 `Count rows` 단계와 같다.
+5. 내려받은 파일을 지우고 `npx supabase db reset`으로 로컬 DB를 되돌린다.
+
+새 Supabase 프로젝트로 옮겨야 할 때는 Supabase 문서 "Backup and restore using CLI"의 순서(roles → schema → data)를 따른다. 이미지 파일은 `files/` 폴더를 같은 경로로 다시 올린다.
+
 ## 정리(삭제) 방법
 
 수업이 끝나면 이 폴더가 만든 리소스와 상태 버킷을 모두 지운다. 사람이 PowerShell에서 실행한다. `$o`는 owner, `$log`는 로그 버킷 이름, `$state`는 상태 버킷 이름이다.
@@ -316,14 +403,22 @@ Vercel 배포의 FastAPI가 장기 키 없이 Bedrock을 부를 때 맡는 역�
    cd ..
    ```
    마지막 줄이 `Destroy complete! Resources: 5 destroyed.`여야 한다.
-6. **CD 역할을 지운다.** GitHub Environment 비밀값과 워크플로는 저장소에서 따로 지운다. 이 폴더는 상태 버킷을 쓰므로 상태 버킷을 지우기 전에 실행한다.
+6. **백업 버킷과 역할을 지운다.** 먼저 GitHub에서 **Actions → DB Backup → Disable workflow**로 예약 실행을 끄고 `db-backup` Environment를 지운다(비밀값도 함께 지워진다). 보관할 백업이 있으면 내려받은 뒤 버킷을 비운다. 버전 관리가 꺼져 있어 객체만 지우면 된다. GitHub OIDC 공급자를 조회하므로 7단계보다 먼저 실행한다.
+   ```powershell
+   aws s3 rm "s3://$o-cs-learning-db-backup" --recursive
+   cd db-backup
+   terraform destroy
+   cd ..
+   ```
+   마지막 줄이 `Destroy complete! Resources: 8 destroyed.`여야 한다.
+7. **CD 역할을 지운다.** GitHub Environment 비밀값과 워크플로는 저장소에서 따로 지운다. 이 폴더는 상태 버킷을 쓰므로 상태 버킷을 지우기 전에 실행한다.
    ```powershell
    cd github-oidc
    terraform destroy
    ```
    마지막 줄이 `Destroy complete! Resources: 5 destroyed.`여야 한다.
-7. **상태 버킷을 지운다.** 버전 관리가 켜져 있어 이전 버전까지 지워야 한다. S3 콘솔에서 상태 버킷을 고르고 **비우기(Empty)** 다음 **삭제(Delete)** 를 누른다.
-8. **삭제 확인:** 아래 명령이 모두 빈 결과나 NotFound(404) 오류를 내야 한다.
+8. **상태 버킷을 지운다.** 버전 관리가 켜져 있어 이전 버전까지 지워야 한다. S3 콘솔에서 상태 버킷을 고르고 **비우기(Empty)** 다음 **삭제(Delete)** 를 누른다.
+9. **삭제 확인:** 아래 명령이 모두 빈 결과나 NotFound(404) 오류를 내야 한다.
    ```powershell
    aws budgets describe-budgets --account-id (aws sts get-caller-identity --query Account --output text) --query "Budgets[?BudgetName=='cs-learning-monthly']"
    aws ce get-anomaly-monitors --query "AnomalyMonitors[?contains(MonitorName, '$o')]"
@@ -339,6 +434,8 @@ Vercel 배포의 FastAPI가 장기 키 없이 Bedrock을 부를 때 맡는 역�
    aws iam get-role --role-name "$o-infra-apply"   # NoSuchEntity
    aws iam get-role --role-name "$o-vercel-bedrock-prd"       # NoSuchEntity
    aws iam get-role --role-name "$o-vercel-bedrock-preview"   # NoSuchEntity
+   aws s3api head-bucket --bucket "$o-cs-learning-db-backup"  # 404
+   aws iam get-role --role-name "$o-db-backup"                # NoSuchEntity
    ```
 
 ## 알아 둘 것
@@ -346,5 +443,5 @@ Vercel 배포의 FastAPI가 장기 키 없이 Bedrock을 부를 때 맡는 역�
 - 비용 이상 탐지 모니터 이름은 콘솔에서 `Daily summaries`로 잘못 저장돼 있었다. 가져오기가 끝난 뒤 `<owner>-cs-learning-cost-monitor`로 고쳤다(제자리 변경).
 - `alerts.tf` 리소스 이름을 바꾸면 토픽과 구독이 새로 만들어지므로 확인 메일 2통을 다시 눌러야 한다.
 - `sts_event_region`은 백엔드 `BEDROCK_REGION`과 같아야 한다. 백엔드 리전을 바꾸면 이 값도 바꾼다.
-- 로컬 검사: `terraform fmt -check -recursive`, `terraform init -backend=false`, `terraform validate`. `infra/`, `infra/github-oidc/`, `infra/vercel-oidc/`에서 각각 실행한다. PR CI에서는 Terraform을 실행하지 않는다. `main` 병합 뒤의 CD만 실행한다.
+- 로컬 검사: `terraform fmt -check -recursive`, `terraform init -backend=false`, `terraform validate`. `infra/`, `infra/github-oidc/`, `infra/vercel-oidc/`, `infra/db-backup/`에서 각각 실행한다. PR CI에서는 Terraform을 실행하지 않는다. `main` 병합 뒤의 CD만 실행한다.
 - provider를 올릴 때는 `terraform providers lock -platform=windows_amd64 -platform=linux_amd64 -platform=darwin_arm64 -platform=darwin_amd64`로 잠금 파일을 갱신해 커밋한다.
