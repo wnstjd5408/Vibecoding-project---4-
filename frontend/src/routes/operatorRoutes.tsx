@@ -1,3 +1,4 @@
+import AccountsPage from '../operator/accounts/AccountsPage.tsx'
 import type { RouteObject } from 'react-router'
 import Placeholder from '../pages/Placeholder.tsx'
 import { operatorPaths } from './paths.ts'
@@ -19,6 +20,6 @@ export const operatorRoutes: RouteObject[] = [
   },
   {
     path: operatorPaths.accounts,
-    element: <Placeholder screenId="F4-3a" title="계정 발급" ticket="운영자 화면 티켓(MEG-78 셸 이후)" />,
+    element: <AccountsPage />,
   },
 ]
