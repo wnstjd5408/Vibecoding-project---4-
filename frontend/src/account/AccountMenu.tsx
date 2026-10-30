@@ -6,6 +6,7 @@ import { Link, useLocation, useNavigate } from 'react-router'
 import { IconButton } from '../components/IconButton.tsx'
 import { AccountIcon } from '../components/icons.tsx'
 import { cx } from '../components/cx.ts'
+import { markExplicitLogout } from '../auth/logoutIntent.ts'
 import { useAuth } from '../auth/useAuth.ts'
 import { userPaths } from '../routes/paths.ts'
 import { checkLoggedOut, logout } from './logout.ts'
@@ -104,6 +105,8 @@ export function AccountMenu() {
     const check = await checkLoggedOut()
     if (check.result === 'logged_out') {
       // 방문자로 확인된 상태를 그대로 전역에 반영하고 이동한다. E03을 한 번 더 부르지 않는다(두 번째 조회가 실패해 확인된 상태를 오류로 덮어쓰지 않게).
+      // 직접 한 로그아웃임을 표시한다. 운영자 화면이 세션 만료와 구분해 안내 팝업을 띄울지 정한다.
+      markExplicitLogout()
       apply(check.state)
       setOpen(false)
       navigate(userPaths.noteList, { replace: true })
