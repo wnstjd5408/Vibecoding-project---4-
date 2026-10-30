@@ -31,6 +31,62 @@ PAGE = "00000000-0000-4000-8000-000000000002"
 IMAGE = "00000000-0000-4000-8000-000000000003"
 CHILD = "00000000-0000-4000-8000-000000000004"
 URL = "https://s3.us-west-2.amazonaws.com/secure.notion-static.com/example.png?signature=SYNTHETIC"
+FILE_URL = "https://prod-files-secure.s3.us-west-2.amazonaws.com/space/file/example.png?signature=SYNTHETIC"
+
+
+def test_virtual_hosted_file_download_preserves_host_and_target(monkeypatch):
+    connection, response = Mock(), Mock()
+    response.status = 200
+    response.getheader.side_effect = lambda key, default=None: default
+    response.read.return_value = b"synthetic"
+    connection.getresponse.return_value = response
+    address = (2, 1, 6, "", ("8.8.8.8", 443))
+    dns = Mock(return_value=[address])
+    connect = Mock(return_value=connection)
+    monkeypatch.setattr(images, "public_addresses", dns)
+    monkeypatch.setattr(images, "PinnedHTTPSConnection", connect)
+    assert images.download(FILE_URL) == b"synthetic"
+    dns.assert_called_once_with(images.FILE_HOST)
+    connect.assert_called_once_with(images.FILE_HOST, address)
+    connection.request.assert_called_once_with("GET", "/space/file/example.png?signature=SYNTHETIC",
+                                               headers={"Accept-Encoding": "identity"})
+    connection.close.assert_called_once()
+
+
+@pytest.mark.parametrize("url", [
+    FILE_URL.replace("https:", "http:"),
+    FILE_URL.replace(images.FILE_HOST, images.FILE_HOST + ".evil.example"),
+    FILE_URL.replace("prod-files-secure", "other-bucket"),
+    FILE_URL.replace("https://", "https://user:pass@"),
+    FILE_URL.replace(".com/", ".com:444/"),
+    FILE_URL.replace("example.png", "%2e%2e/secret"),
+    FILE_URL.replace("example.png", "../secret"),
+    FILE_URL + "#fragment", FILE_URL + "\r\nInjected: true",
+    "https://" + images.FILE_HOST + "/",
+])
+def test_virtual_hosted_file_rejects_unsafe_urls_before_dns(monkeypatch, url):
+    dns = Mock(side_effect=AssertionError)
+    monkeypatch.setattr(images.socket, "getaddrinfo", dns)
+    with pytest.raises(images.ImageRejected):
+        images.download(url)
+    dns.assert_not_called()
+
+
+def test_heading_four_preserves_text_children_and_excluded_blocks():
+    excluded = ["table_of_contents", "embed", "file", "child_page", "pdf",
+                "link_preview", "unsupported", "bookmark"]
+    blocks = [{"id": IMAGE, "type": "heading_4", "has_children": True,
+               "heading_4": {"rich_text": [{"plain_text": "Fourth heading"}]}}]
+    blocks += [{"id": f"00000000-0000-4000-8000-{n:012d}", "type": kind,
+                "has_children": True} for n, kind in enumerate(excluded, 10)]
+    tree = {PAGE: blocks, IMAGE: [{"id": CHILD, "type": "paragraph",
+                                "paragraph": {"rich_text": [{"plain_text": "Child text"}]}}]}
+    notion = Mock()
+    notion.children.side_effect = lambda block_id: tree[block_id]
+    content = convert(notion, PAGE)
+    assert content.markdown == "#### Fourth heading\n\nChild text"
+    assert content.skipped == len(excluded)
+    assert notion.children.call_count == 2
 
 
 def png(size=(2, 2)):
@@ -196,12 +252,13 @@ def test_url_policy_before_dns(monkeypatch, url):
 
 
 @pytest.mark.parametrize("ip", ["127.0.0.1", "10.0.0.1", "169.254.169.254", "::1", "fc00::1", "::ffff:127.0.0.1", "0.0.0.0"])
-def test_dns_any_nonpublic_answer_rejected_before_connect(monkeypatch, ip):
+@pytest.mark.parametrize("url", [URL, FILE_URL])
+def test_dns_any_nonpublic_answer_rejected_before_connect(monkeypatch, ip, url):
     monkeypatch.setattr(images.socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("8.8.8.8", 443)), (2, 1, 6, "", (ip, 443))])
     connect = Mock(side_effect=AssertionError)
     monkeypatch.setattr(images, "PinnedHTTPSConnection", connect)
     with pytest.raises(images.ImageRejected):
-        images.download(URL)
+        images.download(url)
     connect.assert_not_called()
 
 
@@ -218,7 +275,8 @@ def test_numeric_connection_preserves_tls_hostname(monkeypatch):
 @pytest.mark.parametrize("status,headers,data", [(302, {"Location": "http://127.0.0.1"}, b""),
     (200, {"Content-Length": str(images.MAX_BYTES + 1)}, b""), (200, {"Content-Encoding": "gzip"}, b""),
     (200, {"Content-Type": "image/svg+xml"}, b"<svg/>"), (200, {}, b"x" * (images.MAX_BYTES + 1))], ids=["redirect", "length", "encoding", "svg", "stream"])
-def test_download_rejects_redirect_and_stream_limits(monkeypatch, status, headers, data):
+@pytest.mark.parametrize("url", [URL, FILE_URL])
+def test_download_rejects_redirect_and_stream_limits(monkeypatch, status, headers, data, url):
     connection, response = Mock(), Mock()
     response.status = status
     response.getheader.side_effect = lambda key, default=None: headers.get(key, default)
@@ -227,7 +285,7 @@ def test_download_rejects_redirect_and_stream_limits(monkeypatch, status, header
     monkeypatch.setattr(images, "public_addresses", lambda host: [(2, 1, 6, "", ("8.8.8.8", 443))])
     monkeypatch.setattr(images, "PinnedHTTPSConnection", lambda *a: connection)
     with pytest.raises(images.ImageRejected):
-        images.download(URL)
+        images.download(url)
     connection.close.assert_called_once()
     assert connection.request.call_count == 1
     if "Content-Length" in headers:

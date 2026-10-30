@@ -16,6 +16,9 @@ MAX_PIXELS = 25_000_000
 # Unknown hosts fail closed; changes require documentation and review.
 HOST = "s3.us-west-2.amazonaws.com"
 PREFIX = "/secure.notion-static.com/"
+# Virtual-hosted Notion bucket; never allow arbitrary S3 buckets or subdomains.
+FILE_HOST = "prod-files-secure.s3.us-west-2.amazonaws.com"
+HOST_PREFIXES = {HOST: PREFIX, FILE_HOST: "/"}
 
 
 class ImageRejected(Exception):
@@ -25,14 +28,16 @@ class ImageRejected(Exception):
 def image_target(url: str) -> tuple[str, str]:
     try:
         parsed = urlsplit(url)
-        if (parsed.scheme != "https" or parsed.hostname != HOST
+        prefix = HOST_PREFIXES.get(parsed.hostname)
+        if (parsed.scheme != "https" or prefix is None
                 or parsed.port not in (None, 443) or parsed.username or parsed.password
-                or parsed.fragment or not parsed.path.startswith(PREFIX)
+                or parsed.fragment or not parsed.path.startswith(prefix)
+                or len(parsed.path) <= len(prefix)
                 or any(part in {".", ".."} for part in unquote(parsed.path).split("/"))
                 or any(ord(c) < 33 or ord(c) > 126 for c in url)
                 or "\\" in url):
             raise ImageRejected("url")
-        return HOST, parsed.path + ("?" + parsed.query if parsed.query else "")
+        return parsed.hostname, parsed.path + ("?" + parsed.query if parsed.query else "")
     except ValueError:
         raise ImageRejected("url") from None
 
