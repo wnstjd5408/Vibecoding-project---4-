@@ -46,6 +46,13 @@ class FakeSupabase:
     notes: list[dict] = field(default_factory=list)
     # list_notes를 부를 때마다 넘긴 include_unpublished 값
     note_queries: list[bool] = field(default_factory=list)
+    # E05: 사전 용어(terms + glossary_entries) 행, Storage 노트 이미지 버킷에 있는 경로, 서명 요청 기록
+    glossary: list[dict] = field(default_factory=list)
+    stored_images: set[str] = field(default_factory=set)
+    storage_down: bool = False
+    sign_calls: list[tuple[list[str], int]] = field(default_factory=list)
+    # get_note를 부를 때마다 넘긴 (note_id, include_unpublished)
+    note_reads: list[tuple[int, bool]] = field(default_factory=list)
 
     def add_user(
         self, token: str, user_id: str, role: str = "member", is_active: bool = True, display_name: str | None = None
@@ -147,6 +154,9 @@ class FakeSupabase:
         parent_note_id: int | None = None,
         revision: int = 1,
         needs_review: bool = False,
+        body_markdown: str = "",
+        sources: list[dict] | None = None,
+        images: list[dict] | None = None,
     ) -> None:
         self.notes.append(
             {
@@ -158,8 +168,15 @@ class FakeSupabase:
                 "revision": revision,
                 "needs_review": needs_review,
                 "subject_ids": subject_ids,
+                "body_markdown": body_markdown,
+                # note_sources 행(id, url, label)과 note_images 행(notion_block_id, storage_path, alt)
+                "sources": sources or [],
+                "images": images or [],
             }
         )
+
+    def add_glossary_term(self, term_id: int, key: str, label: str) -> None:
+        self.glossary.append({"id": term_id, "key": key, "label": label})
 
     def list_subjects(self) -> list[dict]:
         if self.down:
@@ -181,6 +198,34 @@ class FakeSupabase:
             {**{c: n[c] for c in columns}, "note_subjects": [{"subject_id": sid} for sid in n["subject_ids"]]}
             for n in rows
         ]
+
+    def get_note(self, note_id: int, include_unpublished: bool) -> dict | None:
+        """SupabaseClient.get_note와 같은 거르기와 내장 열(note_subjects·note_sources·note_images)."""
+        if self.down:
+            raise SupabaseUnavailable("down")
+        self.note_reads.append((note_id, include_unpublished))
+        names = {s["id"]: s["name"] for s in self.subjects}
+        for n in self.notes:
+            if n["id"] == note_id and (include_unpublished or n["is_published"]):
+                return {
+                    **{c: n[c] for c in ("id", "revision", "title", "studied_on", "body_markdown")},
+                    "note_subjects": [{"subjects": {"id": sid, "name": names[sid]}} for sid in n["subject_ids"]],
+                    "note_sources": list(n["sources"]),
+                    "note_images": list(n["images"]),
+                }
+        return None
+
+    def list_glossary_terms(self) -> list[dict]:
+        if self.down:
+            raise SupabaseUnavailable("down")
+        return sorted(self.glossary, key=lambda t: t["id"])
+
+    def sign_note_images(self, paths: list[str], expires_in: int) -> dict[str, str]:
+        """Storage 흉내: 버킷에 없는 경로는 결과에서 빠진다."""
+        if self.down or self.storage_down:
+            raise SupabaseUnavailable("down")
+        self.sign_calls.append((paths, expires_in))
+        return {p: f"https://storage.example.test/signed/{p}?token=EXAMPLE_ONLY" for p in paths if p in self.stored_images}
 
     def keyed_hash(self, value: str) -> str:
         return hashlib.sha256(f"fake-secret:{value}".encode()).hexdigest()[:32]
@@ -330,7 +375,7 @@ def build_accounts_app(fake: FakeSupabase) -> FastAPI:
 
 
 def build_notes_app(fake: FakeSupabase) -> FastAPI:
-    """E04 라우터를 붙인 시험 앱."""
+    """E04·E05 라우터를 붙인 시험 앱."""
     app = FastAPI()
     install_common_layer(app)
     app.dependency_overrides[get_supabase] = lambda: fake

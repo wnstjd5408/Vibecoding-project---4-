@@ -391,3 +391,101 @@ def test_notes_select_rejected_is_a_config_error():
 def test_notes_select_server_error_is_unavailable():
     with pytest.raises(SupabaseUnavailable):
         client_with(lambda r: httpx.Response(503)).list_subjects()
+
+
+# --- E05 노트 읽기·사전 용어·서명 URL (MEG-73) ---
+
+NOTE_SELECT = (
+    "id,revision,title,studied_on,body_markdown,"
+    "note_subjects(subjects(id,name)),note_sources(id,url,label),"
+    "note_images(notion_block_id,storage_path,alt)"
+)
+
+
+def test_get_note_for_non_operator_filters_published_in_db_and_skips_private_columns():
+    row = {"id": 11, "title": "t"}
+    seen, handler = capture([row])
+
+    assert client_with(handler).get_note(11, include_unpublished=False) == row
+    assert seen["path"] == "/rest/v1/notes"
+    assert seen["params"] == {"id": "eq.11", "select": NOTE_SELECT, "limit": "1", "is_published": "eq.true"}
+    # memo·needs_review·is_published 같은 비공개 열은 읽지 않는다.
+    assert not {"memo", "needs_review", "importance", "is_published"} & set(seen["params"]["select"].split(","))
+
+
+def test_get_note_for_operator_reads_unpublished_and_missing_is_none():
+    seen, handler = capture([])
+
+    assert client_with(handler).get_note(13, include_unpublished=True) is None
+    assert "is_published" not in seen["params"]
+
+
+def test_list_glossary_terms_reads_only_terms_with_a_glossary_entry():
+    seen, handler = capture([])
+
+    client_with(handler).list_glossary_terms()
+
+    assert seen["path"] == "/rest/v1/terms"
+    assert seen["params"] == {"select": "id,key,label,glossary_entries!inner(term_id)", "order": "id.asc"}
+
+
+def signing_client(handler, bucket: str | None = "note-images") -> SupabaseClient:
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    return SupabaseClient("https://project.supabase.co/", "sb_secret_test", http, note_image_bucket=bucket)
+
+
+def test_sign_note_images_signs_all_paths_in_one_call_and_drops_failed_items():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["body"] = request.content.decode()
+        seen["authorization"] = request.headers["authorization"]
+        # 로컬 Storage(2026-10-30)에서 본 모양. 서명 경로는 공백을 그대로 담아 온다. 토큰은 가짜다.
+        return httpx.Response(
+            200,
+            json=[
+                {"error": None, "path": "notes/11/a b+(1).png", "signedURL": "/object/sign/note-images/notes/11/a b+(1).png?token=fake-token"},
+                {"error": "Either the object does not exist or you do not have access to it", "path": "notes/11/gone.png", "signedURL": None},
+            ],
+        )
+
+    signed = signing_client(handler).sign_note_images(["notes/11/a b+(1).png", "notes/11/gone.png"], 300)
+
+    assert signed == {
+        "notes/11/a b+(1).png": "https://project.supabase.co/storage/v1/object/sign/note-images/notes/11/a%20b+(1).png?token=fake-token"
+    }
+    assert seen["path"] == "/storage/v1/object/sign/note-images"
+    assert '"expiresIn":300' in seen["body"].replace(" ", "")
+    assert seen["authorization"] == "Bearer sb_secret_test"
+
+
+@pytest.mark.parametrize("bucket", [None, "", "../other", "note images"])
+def test_sign_without_a_valid_bucket_is_a_config_error_and_sends_nothing(bucket):
+    def handler(request):
+        raise AssertionError("must not call Storage")
+
+    with pytest.raises(SupabaseConfigError):
+        signing_client(handler, bucket).sign_note_images(["notes/11/a.png"], 300)
+
+
+def test_sign_rejected_is_a_config_error():
+    with pytest.raises(SupabaseConfigError):
+        signing_client(lambda r: httpx.Response(400, json={"error": "Bucket not found"})).sign_note_images(["a.png"], 300)
+
+
+@pytest.mark.parametrize("response", [httpx.Response(503), httpx.Response(200, json={"not": "a list"}), httpx.Response(200, text="oops")])
+def test_sign_outage_or_malformed_body_is_unavailable(response):
+    with pytest.raises(SupabaseUnavailable):
+        signing_client(lambda r: response).sign_note_images(["a.png"], 300)
+
+
+def test_from_env_reads_the_note_image_bucket(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setenv("NOTE_IMAGE_BUCKET", " note-images ")
+
+    assert SupabaseClient.from_env()._note_image_bucket == "note-images"
+
+    monkeypatch.delenv("NOTE_IMAGE_BUCKET")
+    assert SupabaseClient.from_env()._note_image_bucket is None
