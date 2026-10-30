@@ -28,9 +28,10 @@ test('AC-1·AC-2 과목 선택, 노트 열기, 뒤로 돌아오기', async ({ pa
   await expect(page.getByRole('link', { name: /연결과 학습/ })).toBeVisible()
   await expect(page.getByText('null')).toHaveCount(0)
   await testInfo.attach('과목 선택', { body: await page.screenshot(), contentType: 'image/png' })
+  await page.route('**/api/notes/12', (route) => route.fulfill({ json: { id: 12, revision: 1, title: '연결과 학습 노트', studied_on: null, subjects: [], sources: [], body_markdown: '본문', images: {}, glossary_terms: [], glossary_spans: [] } }))
   await page.getByRole('link', { name: /연결과 학습/ }).click()
   await expect(page).toHaveURL(/\/notes\/12$/)
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('F1-2')
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('연결과 학습 노트')
   await testInfo.attach('노트 읽기 경로', { body: await page.screenshot(), contentType: 'image/png' })
   await page.goBack()
   await expect(page.getByRole('button', { name: 'AI', exact: true })).toHaveAttribute('aria-pressed', 'true')
@@ -128,4 +129,85 @@ test('네트워크 오류와 잘못된 과목을 복구할 수 있다', async ({
   await expect(page.getByRole('alert')).toContainText('과목을 확인할 수 없어요')
   await page.getByRole('button', { name: '전체', exact: true }).click()
   await expect(page.getByRole('region', { name: '노트 목록' }).getByRole('link')).toHaveCount(2)
+})
+
+// MEG-74 노트 읽기(F1-2). 브라우저의 실제 fetch 경로로 E05 응답을 합성해 시험한다. 실제 백엔드의 E05는 아직 없어 확인하지 못한다.
+test('이미지가 열리지 않으면 E05를 다시 부르고, 새 URL도 실패하면 대체 글로 보인다', async ({ page }) => {
+  await page.route('**/api/me', (route) => route.fulfill({ json: { authenticated: false } }))
+  // 실제 E05 모양(note-image 토큰)의 응답을 가로채 이미지 URL을 깨뜨린다. 응답 횟수를 센다.
+  let calls = 0
+  const failedImages: string[] = []
+  page.on('requestfailed', (request) => { if (request.url().includes('/broken-')) failedImages.push(request.url()) })
+  await page.route('**/api/notes/99', (route) => {
+    calls += 1
+    return route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({
+        id: 99, revision: 1, title: '이미지 시험', studied_on: null, subjects: [], sources: [],
+        body_markdown: '앞 ![그림](note-image:blk-1) 뒤',
+        images: { 'blk-1': { url: `http://127.0.0.1:1/broken-${calls}.png`, alt: '그림', expires_at: '2026-10-23T05:35:00Z' } },
+        glossary_terms: [], glossary_spans: [],
+      }),
+    })
+  })
+  await page.goto('/notes/99')
+  await expect(page.getByText('이미지를 불러오지 못했어요')).toBeVisible()
+  // 처음 URL과 다시 받은 URL이 각각 한 번씩만 실패하고 더 되풀이하지 않는다(개발 서버의 StrictMode가 E05를 한 번 더 부를 수 있어 호출 수로는 세지 않는다)
+  await page.waitForTimeout(500)
+  expect(failedImages).toHaveLength(2)
+  expect(new Set(failedImages).size).toBe(2)
+  expect(calls).toBeGreaterThanOrEqual(2)
+})
+
+test('본문 속 HTML은 해석하지 않고 글자 그대로 보인다', async ({ page }) => {
+  await page.route('**/api/me', (route) => route.fulfill({ json: { authenticated: false } }))
+  await page.route('**/api/notes/98', (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({
+      id: 98, revision: 1, title: 'HTML 시험', studied_on: null, subjects: [], sources: [],
+      body_markdown: '<b>굵게 아님</b> <img src=x onerror="window.__xss=1">\n\n[나쁜 링크](javascript:window.__xss=1)',
+      images: {}, glossary_terms: [], glossary_spans: [],
+    }),
+  }))
+  await page.goto('/notes/98')
+  await expect(page.getByText('<b>굵게 아님</b>')).toBeVisible()
+  await expect(page.locator('[data-note-body] b')).toHaveCount(0)
+  await expect(page.locator('[data-note-body] img')).toHaveCount(0)
+  await expect(page.getByRole('link', { name: '나쁜 링크' })).toHaveCount(0)
+  expect(await page.evaluate(() => (window as unknown as { __xss?: number }).__xss)).toBeUndefined()
+})
+
+
+// AC-3 안 되는 경우: 위치를 계산하지 못하는 글자(들여쓴 코드 블록, 지원하지 않는 이름 엔티티)에 걸친 선택은 추정하지 않고 null이다.
+test('위치를 계산하지 못하는 글자에 걸친 선택은 null이다', async ({ page }) => {
+  await page.route('**/api/me', (route) => route.fulfill({ json: { authenticated: false } }))
+  await page.route('**/api/notes/97', (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({
+      id: 97, revision: 1, title: '위치 시험', studied_on: null, subjects: [], sources: [],
+      body_markdown: '앞 글자\n\n    들여쓴 코드\n\n&eacute; 뒤 글자\n\n정상 글자',
+      images: {}, glossary_terms: [], glossary_spans: [],
+    }),
+  }))
+  await page.goto('/notes/97')
+  await expect(page.getByText('들여쓴 코드')).toBeVisible()
+  const result = (from: string, to: string) => page.evaluate(async ({ from, to }) => {
+    const { sourceRangeOfSelection } = await import('/src/notes/selection.ts')
+    const root = document.querySelector('[data-note-body]')!
+    const find = (needle: string) => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) if (node.textContent?.includes(needle)) return node as Text
+      throw new Error(needle)
+    }
+    const a = find(from)
+    const b = find(to)
+    const range = document.createRange()
+    range.setStart(a, 0)
+    range.setEnd(b, b.textContent!.length)
+    return sourceRangeOfSelection(root, range)
+  }, { from, to })
+  expect(await result('들여쓴 코드', '들여쓴 코드')).toBeNull()
+  expect(await result('앞 글자', '들여쓴 코드')).toBeNull() // 위치를 모르는 글자가 범위 안에 끼어 있다
+  expect(await result('뒤 글자', '뒤 글자')).toBeNull() // 지원하지 않는 엔티티가 든 글 덩어리(문단) 전체가 계산 불가다
+  expect(await result('정상 글자', '정상 글자')).not.toBeNull() // 다른 문단은 그대로 계산된다
 })

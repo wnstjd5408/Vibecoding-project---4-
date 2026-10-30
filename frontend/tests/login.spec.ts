@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
+import { goInApp } from './inApp.ts'
 
 // MEG-64 로그인 화면(F4-1). playwright.config.ts가 VITE_API_MOCK=true로 서버를 띄우므로 가짜 응답과 합성 계정으로 시험한다.
 // 합성 계정은 src/api/mocks/handlers.ts에 있다. 실제 계정·비밀번호가 아니다.
@@ -12,16 +13,14 @@ async function submit(page: Page, email: string, password: string) {
 }
 
 // 로그인 상태를 읽는다. 가짜 로그인 상태는 메모리에만 있어 새로 고치면 사라지므로, 앱 안 링크로만 옮긴다.
-// 이동 링크(DevNav)가 있는 임시 화면에서 공통 기반 샘플(/dev/foundation)로 가서 useAuth의 현재 상태 문장을 돌려준다.
+// 앱 안에서 공통 기반 샘플(/dev/foundation)로 옮겨서 useAuth의 현재 상태 문장을 돌려준다.
 async function readAuthState(page: Page) {
   const guestLink = page.getByRole('link', { name: '로그인 없이 노트 보기' })
   if (await guestLink.count()) {
     await guestLink.click()
     await expect(page.getByRole('heading', { level: 1, name: '과목' })).toBeVisible()
   }
-  const list = page.getByRole('region', { name: '노트 목록' })
-  if (await list.count()) await list.getByRole('link').first().click()
-  await page.getByRole('link', { name: '공통 기반 샘플' }).click()
+  await goInApp(page, '/dev/foundation')
   return page.getByText('현재 상태:')
 }
 

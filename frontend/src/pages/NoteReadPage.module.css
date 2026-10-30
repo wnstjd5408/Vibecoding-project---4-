@@ -1,0 +1,6 @@
+.page { max-width: 560px; min-height: 100svh; margin-inline: auto; }
+.main { padding: var(--space-6) var(--space-4) var(--space-8); }
+.title { margin: 0 0 var(--space-1); font-size: 24px; line-height: 32px; }
+.meta { margin: 0 0 var(--space-6); color: var(--ink-muted); font-size: 14px; line-height: 22px; }
+.link { display: inline-flex; align-items: center; min-height: 44px; color: var(--ink); font-size: 14px; line-height: 22px; font-weight: 600; }
+.pending { margin: 0; color: var(--ink-muted); font-size: 14px; line-height: 22px; }
