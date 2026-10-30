@@ -1,4 +1,4 @@
-"""E01~E03 계정: 로그인, 로그아웃, 내 상태 (API spec v0.2 2.2·2.4, 1.2).
+"""E01~E03·E24 계정: 로그인, 로그아웃, 내 상태, 운영자 발급 (API spec v0.2 2.2·2.4, 1.2).
 
 로그인은 FastAPI가 Supabase Auth를 대신 부른다. 브라우저는 세션 쿠키만 가진다(D-007, D-032).
 """
@@ -6,19 +6,64 @@
 import logging
 
 from fastapi import APIRouter, Depends, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic_core import PydanticCustomError
 
-from app.auth import SessionUser, forwarded_ip, get_session_user, revoke_quietly
+from app.auth import SessionUser, forwarded_ip, get_session_user, require_operator, revoke_quietly
 from app.config import REFRESH_COOKIE, SESSION_COOKIE
-from app.errors import ApiError
+from app.errors import FIELD_MESSAGES, ApiError, request_id_of
 from app.net import client_ip, ip_bucket
-from app.rate_limit import LOGIN_FAILURE, LOGIN_IP, RateLimiter, get_rate_limiter
+from app.rate_limit import LOGIN_FAILURE, LOGIN_IP, WRITE, RateLimiter, get_rate_limiter
 from app.session import decode_refresh_cookie, new_deadline, stage_clear, stage_session
-from app.supabase import SupabaseClient, get_supabase
+from app.supabase import AccountInputRejected, EmailExists, SupabaseClient, get_supabase
 
 logger = logging.getLogger("app.accounts")
 
 router = APIRouter(prefix="/api")
+
+
+class CreateAccountRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: EmailStr = Field(min_length=1, max_length=320)
+    display_name: str = Field(min_length=1, max_length=100)
+    initial_password: str = Field(min_length=1, max_length=1024, repr=False)
+
+    @field_validator("initial_password")
+    @classmethod
+    def password_bytes(cls, value: str) -> str:
+        # Auth의 bcrypt 한계는 문자 수가 아닌 UTF-8 바이트 수다. 조용한 잘림을 막는다.
+        if len(value.encode("utf-8")) > 72:
+            raise PydanticCustomError("string_too_long", "Password exceeds byte limit")
+        return value
+
+
+@router.post("/admin/users", status_code=201, summary="E24 create member account")
+def create_account(
+    body: CreateAccountRequest,
+    request: Request,
+    user: SessionUser = Depends(require_operator),
+    supabase: SupabaseClient = Depends(get_supabase),
+    limiter: RateLimiter = Depends(get_rate_limiter),
+):
+    limiter.check(WRITE, f"user:{user.user_id}")
+    try:
+        user_id = supabase.create_auth_user(_normalized(str(body.email)), body.initial_password)
+    except EmailExists:
+        raise ApiError("conflict", "email_exists", stage="auth") from None
+    except AccountInputRejected as exc:
+        raise ApiError("validation_failed", fields=[{
+            "name": exc.field, "reason": "invalid_value", "message": FIELD_MESSAGES["invalid_value"],
+        }], stage="validate") from None
+    try:
+        supabase.create_member_profile(user_id, body.display_name)
+    except Exception:  # Auth 생성 이후의 DB 오류는 연결 장애도 500이다(S12).
+        try:
+            supabase.delete_auth_user(user_id)
+        except Exception:
+            # 운영자가 대시보드에서 정리할 id만 남긴다. 이메일·비밀번호·외부 오류는 기록하지 않는다.
+            logger.error("request_id=%s stage=auth cleanup_failed auth_user_id=%s", request_id_of(request), user_id)
+        raise ApiError("internal_error", stage="db") from None
+    return {"id": user_id, "role": "member"}
 
 
 class LoginRequest(BaseModel):

@@ -33,6 +33,18 @@ class SupabaseConfigError(Exception):
     """환경변수가 없거나 키 권한이 거부됐다. main.py의 처리기가 500으로 바꾼다."""
 
 
+class EmailExists(Exception):
+    """Auth가 같은 이메일의 기존 계정을 확인했다."""
+
+
+class AccountInputRejected(Exception):
+    """Auth의 입력 거절. 외부 오류 원문 대신 필드 이름만 보관한다."""
+
+    def __init__(self, field: str):
+        self.field = field
+        super().__init__(field)
+
+
 @dataclass(frozen=True)
 class Profile:
     role: str
@@ -184,6 +196,48 @@ class SupabaseClient:
             # 키·권한 설정 오류(RLS·GRANT)는 응답에 원인을 담지 않고 500으로 낸다.
             raise SupabaseConfigError(f"{table} select status {response.status_code}")
         return response.json()
+
+    def create_auth_user(self, email: str, password: str) -> str:
+        """운영자 발급 계정을 만든다. 이메일 확인 메일·초대 메일은 보내지 않는다."""
+        response = self._request(
+            "POST", "/auth/v1/admin/users", headers=self._headers(),
+            json={"email": email, "password": password, "email_confirm": True},
+        )
+        if response.status_code in (400, 422):
+            code = _auth_error_code(response)
+            if code == "email_exists":
+                raise EmailExists()
+            if code in ("email_address_invalid", "email_address_not_authorized"):
+                raise AccountInputRejected("email")
+            if code == "weak_password":
+                raise AccountInputRejected("initial_password")
+        if response.status_code in (401, 403):
+            raise SupabaseConfigError("auth create permission denied")
+        if response.status_code not in (200, 201):
+            raise SupabaseUnavailable(f"auth create status {response.status_code}")
+        try:
+            return str(uuid.UUID(str(response.json()["id"])))
+        except (ValueError, KeyError, TypeError):
+            raise SupabaseUnavailable("malformed auth create response") from None
+
+    def create_member_profile(self, user_id: str, display_name: str) -> None:
+        response = self._request(
+            "POST", "/rest/v1/profiles",
+            headers={**self._headers(), "Prefer": "return=minimal"},
+            json={"user_id": str(uuid.UUID(user_id)), "role": "member",
+                  "is_active": True, "display_name": display_name},
+        )
+        if response.status_code != 201:
+            raise SupabaseConfigError(f"profiles insert status {response.status_code}")
+
+    def delete_auth_user(self, user_id: str) -> None:
+        """발급 중 부분 실패를 보상한다. 일반 계정 회수 API로 노출하지 않는다."""
+        response = self._request(
+            "DELETE", f"/auth/v1/admin/users/{uuid.UUID(user_id)}",
+            headers=self._headers(), json={"should_soft_delete": False},
+        )
+        if response.status_code not in (200, 204):
+            raise SupabaseUnavailable(f"auth delete status {response.status_code}")
 
     def get_profile(self, user_id: str) -> Profile | None:
         """profiles 행이 없으면 None이다. user_id는 UUID 형식으로 검증한 값만 받는다."""
