@@ -30,7 +30,8 @@ def setup(monkeypatch, counter=True):
 
 def response(**changes):
     return {"usage": {"inputTokens": 100, "outputTokens": 20},
-            "stopReason": "end_turn", "output": {"message": {"content": [{"text": "fixture"}]}}, **changes}
+            "stopReason": "end_turn", "output": {"message": {"content": [{"text": json.dumps({
+                "summary": ["one", "two", "three"], "explanation": "fixture", "source_ids": []})}]}}, **changes}
 
 
 def test_default_counter_blocks(monkeypatch, tmp_path):

@@ -10,6 +10,7 @@ from botocore.config import Config
 from .dataset import _digest, freeze_dataset
 from .runner import atomic, prepare, private_path, price
 from .schema import DatasetError
+from .live_output import OUTPUT_RULES, validate_output
 
 MODEL = "global.openai.gpt-6-luna"
 SDK_CONFIG = Config(retries={"total_max_attempts": 1, "mode": "standard"},
@@ -33,7 +34,7 @@ class BedrockTransport:
 
 def request_for(case, config):
     data = prepare(case)
-    return {"modelId": MODEL, "system": [{"text": data["system"]}],
+    return {"modelId": MODEL, "system": [{"text": OUTPUT_RULES}],
             "messages": [{"role": "user", "content": [{"text": json.dumps(
                 data["messages"][0]["content"], ensure_ascii=False)}]}],
             "inferenceConfig": {"maxTokens": config.max_output},
@@ -122,7 +123,13 @@ def calibration(cases, manifest, config, directory, case_ids, transport):
                     if not isinstance(content, list):
                         content = []
                     text = "".join(b.get("text", "") for b in content if isinstance(b, dict) and isinstance(b.get("text"), str))
-                    row.update(text=text, status="ok" if text.strip() and row["stop_reason"] == "end_turn" else "error")
+                    row.update(text=text, status="error")
+                    if row["stop_reason"] == "end_turn":
+                        try:
+                            checked = validate_output(text, prepare(lookup[key])["messages"][0]["content"]["sources"])
+                            row.update(text=checked["text"], structured_output=checked, status="ok")
+                        except DatasetError as error:
+                            row["error_code"] = str(error)
                     if inp + read + write > config.max_input or out > config.max_output or cost > reserve:
                         row["status"] = "over_limit"
             atomic(path, state)
