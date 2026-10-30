@@ -142,8 +142,8 @@ def test_run_reads_rows_before_listing(tmp_path):
     assert kinds.index("rest") < kinds.index("list") < kinds.index("download")
 
 
-@pytest.mark.parametrize("status", [400, 404])
-def test_run_skips_files_deleted_after_listing(tmp_path, status):
+def test_run_skips_files_deleted_after_listing(tmp_path):
+    status = 404
     fake = FakeStorage({"a.png": b"1", "gone.png": b"2"}, ["a.png"])
     original = fake.__call__
 
@@ -300,3 +300,37 @@ def test_fetch_sends_secret_key_headers(monkeypatch):
 
     assert seen["Apikey"] == "k"
     assert seen["Authorization"] == "Bearer k"
+
+
+def _http_error(code, body):
+    import io
+
+    return urllib.error.HTTPError("https://example.test/x", code, "err", {}, io.BytesIO(body))
+
+
+@pytest.mark.parametrize(
+    ("code", "body", "expected"),
+    [
+        (400, b'{"statusCode": "404", "error": "not_found", "message": "Object not found"}', 404),
+        (400, b'{"error": "not_found"}', 404),
+        (400, b'{"statusCode": "400", "error": "InvalidKey"}', 400),
+        (400, b"not json", 400),
+        (404, b"", 404),
+        (500, b"", 500),
+    ],
+)
+def test_status_maps_storage_not_found(code, body, expected):
+    assert backup_images._status(_http_error(code, body)) == expected
+
+
+def test_run_fails_on_plain_400(tmp_path):
+    fake = FakeStorage({"a.png": b"1"}, ["a.png"])
+    original = fake.__call__
+
+    def bad_request(method, url, body):
+        if "/authenticated/" in url:
+            raise BackupError("Supabase 응답 400", status=400)
+        return original(method, url, body)
+
+    with pytest.raises(BackupError):
+        run(bad_request, "glossary", "glossary_images", tmp_path)
