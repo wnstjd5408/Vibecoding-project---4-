@@ -2,20 +2,23 @@
 
 본문은 바꾸지 않는다. 위치는 원문 body_markdown의 유니코드 코드포인트이고 시작 포함·끝 제외다.
 찾기 규칙(2026-10-30 김준성 결정, MEG-73):
-- NFC로 맞추고 영문 대소문자를 무시해 terms.key와 비교한다. 공백 여러 개·줄바꿈은 key의 공백 하나와 같다.
+- NFC로 맞추고 영문 대소문자를 무시해 terms.key와 비교한다. 줄 안의 공백 여러 개(탭 포함)는 key의 공백 하나와
+  같다. 줄바꿈은 넘지 않는다(제목과 다음 문단처럼 다른 블록에 걸친 일치를 막는다).
 - 영문·숫자로 시작(끝)하는 용어는 바로 앞(뒤) 글자가 영문·숫자이면 일치로 보지 않는다(SHIP 속 IP).
   한글은 조사가 붙어도 일치한다.
-- note-image: 토큰 안은 찾지 않는다.
+- note-image: 토큰 안은 찾지 않는다. 화면에 글자로 보이지 않는 링크 주소(](...))와 맨 URL 안도 찾지 않는다.
 - 겹치면 긴 쪽을 남긴다. 길이가 같으면 앞에 나온 쪽, 그다음 term_id가 작은 쪽이다.
 """
 
+import functools
 import re
 import unicodedata
 from dataclasses import dataclass
 
-# 본문의 이미지 토큰(note-image:{notion_block_id}). 마크다운 이미지 주소 자리에 들어 있어 ')'나 공백에서 끝난다.
-_IMAGE_TOKEN = re.compile(r"note-image:[^\s)]*")
-_WORD_CHAR = re.compile(r"[A-Za-z0-9]")
+# 글자로 보이지 않는 구간: 이미지 토큰(note-image:{notion_block_id}), 마크다운 링크 주소, 맨 URL.
+# 소문자로 바꾼 본문에 쓴다.
+_HIDDEN = re.compile(r"note-image:[^\s)]*|\]\([^)\s]*|(?:https?|ftp)://[^\s)<>\]]*")
+_LINE_SPACES = re.compile(r"[^\S\n]+")
 _SPACES = re.compile(r"\s+")
 _ASCII_LOWER = {code: code + 32 for code in range(ord("A"), ord("Z") + 1)}
 
@@ -32,34 +35,54 @@ def _ascii_lower(text: str) -> str:
     return text.translate(_ASCII_LOWER)
 
 
+def _is_word_char(char: str) -> bool:
+    return char.isascii() and char.isalnum()
+
+
 def normalize_key(text: str) -> str:
     """용어 key 정규화(공백 정리·NFC·영문 소문자). 기술 검토 5절의 정규화 함수와 같은 규칙이다."""
     return _ascii_lower(_SPACES.sub(" ", unicodedata.normalize("NFC", text)).strip())
 
 
-def _composes_with_previous(char: str) -> bool:
-    """NFC가 앞 글자와 합칠 수 있는 글자. 결합 문자와 한글 중성·종성 자모다."""
-    if unicodedata.combining(char):
-        return True
-    code = ord(char)
-    return 0x1161 <= code <= 0x1175 or 0x11A8 <= code <= 0x11C2
+@functools.cache
+def _composing_starters() -> frozenset[str]:
+    """결합 등급이 0인데 NFC가 앞 글자와 합칠 수 있는 글자(한글 중성·종성 자모, 일부 인도계 모음 기호 등).
+
+    정준 분해가 두 글자인 문자의 두 번째 글자를 모은다. 조합 제외 문자까지 들어가 실제보다 조금 넓지만,
+    넓으면 자를 수 없는 위치가 늘 뿐 결과가 틀리지 않는다. 한글 음절은 분해표에 없어 범위로 넣는다.
+    """
+    found = {chr(code) for code in range(0x1161, 0x1176)} | {chr(code) for code in range(0x11A8, 0x11C3)}
+    for code in range(0x80, 0x30000):
+        parts = unicodedata.decomposition(chr(code)).split()
+        if len(parts) == 2 and not parts[0].startswith("<"):
+            second = chr(int(parts[1], 16))
+            if not unicodedata.combining(second):
+                found.add(second)
+    return frozenset(found)
+
+
+def _joins_previous(char: str) -> bool:
+    """NFC에서 앞 글자와 합쳐질 수 있는 글자. 이 글자 앞은 위치를 자를 수 있는 경계가 아니다."""
+    return not char.isascii() and (unicodedata.combining(char) != 0 or char in _composing_starters())
 
 
 def _nfc_with_offsets(body: str) -> tuple[str, list[int], list[bool]]:
-    """본문을 NFC로 바꾸고 NFC 위치 → 원문 위치 대응을 만든다.
+    """본문을 NFC로 바꾸고 NFC 위치 → 원문 위치 대응과 자를 수 있는 위치 표시를 만든다.
 
-    합쳐질 수 있는 글자 묶음(앞 글자 + 뒤따르는 결합 문자·자모) 단위로 바꾼다. 묶음 안에서는 위치를
-    나눌 수 없으므로 boundary[i]가 False인 NFC 위치에서 시작하거나 끝나는 일치는 버린다.
+    합쳐질 수 있는 글자 묶음(앞 글자 + 뒤따르는 결합 문자·자모) 단위로 바꾼다. 묶음 안은 자를 수 없으므로
+    boundary가 False인 위치에서 시작하거나 끝나는 일치는 버린다. 본문이 이미 NFC여도 같은 규칙을 쓴다.
     offsets와 boundary는 NFC 길이 + 1개다(끝 위치 포함).
     """
     if unicodedata.is_normalized("NFC", body):
-        return body, list(range(len(body) + 1)), [True] * (len(body) + 1)
+        boundary = [not _joins_previous(char) for char in body]
+        boundary.append(True)
+        return body, list(range(len(body) + 1)), boundary
     pieces: list[str] = []
     offsets: list[int] = []
-    boundary: list[bool] = []
+    boundary = []
     start = 0
     for i in range(1, len(body) + 1):
-        if i < len(body) and _composes_with_previous(body[i]):
+        if i < len(body) and _joins_previous(body[i]):
             continue
         cluster = unicodedata.normalize("NFC", body[start:i])
         pieces.append(cluster)
@@ -71,20 +94,34 @@ def _nfc_with_offsets(body: str) -> tuple[str, list[int], list[bool]]:
     return "".join(pieces), offsets, boundary
 
 
-def _key_pattern(key: str) -> re.Pattern[str]:
-    pattern = r"\s+".join(re.escape(part) for part in key.split(" "))
-    if _WORD_CHAR.fullmatch(key[0]):
-        pattern = r"(?<![A-Za-z0-9])" + pattern
-    if _WORD_CHAR.fullmatch(key[-1]):
-        pattern += r"(?![A-Za-z0-9])"
-    return re.compile(pattern)
+def _collapse_line_spaces(text: str) -> tuple[str, list[int]]:
+    """줄 안의 공백 묶음을 공백 하나로 줄인 찾기용 글과, 찾기용 위치 → text 위치 대응(길이 + 1개)."""
+    pieces: list[str] = []
+    positions: list[int] = []
+    cursor = 0
+    for match in _LINE_SPACES.finditer(text):
+        pieces.append(text[cursor : match.start()])
+        positions.extend(range(cursor, match.start()))
+        pieces.append(" ")
+        positions.append(match.start())
+        cursor = match.end()
+    pieces.append(text[cursor:])
+    positions.extend(range(cursor, len(text)))
+    positions.append(len(text))
+    return "".join(pieces), positions
 
 
 def find_spans(body: str, terms: list[tuple[int, str]]) -> list[Span]:
-    """terms는 (term_id, key) 목록이다. 본문 원문의 코드포인트 위치를 시작 순서로 돌려준다."""
-    text, offsets, boundary = _nfc_with_offsets(body)
-    text = _ascii_lower(text)
-    blocked = [(m.start(), m.end()) for m in _IMAGE_TOKEN.finditer(text)]
+    """terms는 (term_id, key) 목록이다. 본문 원문의 코드포인트 위치를 시작 순서로 돌려준다.
+
+    용어마다 str.find로 겹치는 출현까지 모두 후보로 모은 뒤, 긴 후보부터 빈 자리에만 놓는다.
+    비용은 대략 (용어 수 × 본문 길이)의 C 문자열 검색 + 후보 길이의 합이다.
+    """
+    nfc, offsets, boundary = _nfc_with_offsets(body)
+    text, positions = _collapse_line_spaces(_ascii_lower(nfc))
+    hidden = bytearray(len(text))
+    for match in _HIDDEN.finditer(text):
+        hidden[match.start() : match.end()] = b"\x01" * (match.end() - match.start())
 
     # 정규화하면 같은 key가 되는 용어는 term_id가 작은 쪽만 쓴다.
     by_key: dict[str, int] = {}
@@ -95,18 +132,29 @@ def find_spans(body: str, terms: list[tuple[int, str]]) -> list[Span]:
 
     candidates: list[tuple[int, int, int]] = []
     for key, term_id in by_key.items():
-        for match in _key_pattern(key).finditer(text):
-            start, end = match.start(), match.end()
-            if not (boundary[start] and boundary[end]):
-                continue
-            if any(start < b_end and end > b_start for b_start, b_end in blocked):
-                continue
-            candidates.append((start, end, term_id))
+        word_start, word_end = _is_word_char(key[0]), _is_word_char(key[-1])
+        index = text.find(key)
+        while index != -1:
+            end = index + len(key)
+            if (
+                not (word_start and index > 0 and _is_word_char(text[index - 1]))
+                and not (word_end and end < len(text) and _is_word_char(text[end]))
+                and boundary[positions[index]]
+                and boundary[positions[end]]
+                and hidden.find(1, index, end) == -1
+            ):
+                candidates.append((index, end, term_id))
+            index = text.find(key, index + 1)
 
-    candidates.sort(key=lambda c: (-(c[1] - c[0]), c[0], c[2]))
+    candidates.sort(key=lambda c: (c[0] - c[1], c[0], c[2]))
+    taken = bytearray(len(text))
     kept: list[tuple[int, int, int]] = []
     for start, end, term_id in candidates:
-        if all(end <= k_start or start >= k_end for k_start, k_end, _ in kept):
+        if taken.find(1, start, end) == -1:
+            taken[start:end] = b"\x01" * (end - start)
             kept.append((start, end, term_id))
     kept.sort()
-    return [Span(term_id=term_id, start=offsets[start], end=offsets[end]) for start, end, term_id in kept]
+    return [
+        Span(term_id=term_id, start=offsets[positions[start]], end=offsets[positions[end]])
+        for start, end, term_id in kept
+    ]

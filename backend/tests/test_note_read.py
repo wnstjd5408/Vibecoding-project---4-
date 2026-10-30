@@ -272,3 +272,57 @@ def test_response_is_not_cacheable(client):
 
     assert response.headers["Cache-Control"] == "private, no-store"
     assert response.headers["X-Request-Id"]
+
+
+def test_missing_bucket_setting_is_500_internal_error(client, fake):
+    fake.bucket_configured = False
+
+    response = read(client, PUBLIC_NOTE)
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "internal_error"
+    # 이미지가 없는 노트는 버킷 설정과 상관없이 읽힌다.
+    assert read(client, NO_IMAGE_NOTE).status_code == 200
+
+
+def test_visitor_signed_url_limit_uses_the_ip_key(client, fake):
+    read(client, PUBLIC_NOTE)
+
+    assert fake.hits(f"signed_url:{fake.keyed_hash('ip:203.0.113.1')}", SIGNED_URL.window_seconds) == 1
+
+
+def test_signed_url_limit_stops_before_glossary_query_and_signing(client, fake):
+    for _ in range(SIGNED_URL.limit):
+        read(client, PUBLIC_NOTE)
+    reads, signs = fake.glossary_reads, len(fake.sign_calls)
+
+    assert read(client, PUBLIC_NOTE).status_code == 429
+    assert (fake.glossary_reads, len(fake.sign_calls)) == (reads, signs)
+
+
+def test_emoji_body_spans_cut_back_to_terms_over_http(client, fake):
+    # 이모지 뒤 위치도 코드포인트 기준이다. 화면은 이 값을 UTF-16으로 바꾼다(frontend/src/notes/spans.ts).
+    body = "😀👍🏽 해시테이블과 HashTable, TCP/IP 🚀 ExampleTerm"
+    fake.add_note(15, "Emoji", None, [], body_markdown=body)
+    fake.add_glossary_term(9, "해시테이블", "해시테이블")
+    fake.add_glossary_term(10, "hashtable", "HashTable")
+    fake.add_glossary_term(11, "tcp/ip", "TCP/IP")
+
+    result = read(client, 15).json()
+
+    assert [(s["term_id"], body[s["start"] : s["end"]]) for s in result["glossary_spans"]] == [
+        (9, "해시테이블"),
+        (10, "HashTable"),
+        (11, "TCP/IP"),
+        (7, "ExampleTerm"),
+    ]
+    assert [t["term_id"] for t in result["glossary_terms"]] == [7, 9, 10, 11]
+
+
+def test_glossary_at_the_row_cap_is_logged(client, fake, caplog):
+    fake.glossary = [{"id": i, "key": f"k{i}", "label": f"K{i}"} for i in range(1000)]
+
+    with caplog.at_level(logging.WARNING, logger="app.notes"):
+        assert read(client, NO_IMAGE_NOTE).status_code == 200
+
+    assert "stage=db glossary_terms=1000 reached row cap" in caplog.text

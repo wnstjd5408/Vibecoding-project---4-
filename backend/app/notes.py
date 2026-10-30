@@ -28,6 +28,8 @@ _MAX_BIGINT = 2**63 - 1
 _NOTE_ID_SHAPE = re.compile(r"[1-9][0-9]{0,18}")
 # 서명 URL 유효 시간(제안값, 2026-10-30 수락). 읽을 때마다 새로 발급한다.
 SIGNED_URL_SECONDS = 5 * 60
+# PostgREST 최대 행(supabase/config.toml max_rows). 사전 용어가 이만큼이면 잘렸을 수 있다.
+GLOSSARY_ROW_CAP = 1000
 
 
 @router.get("/notes", summary="E04 subjects and notes")
@@ -102,23 +104,32 @@ def read_note(
     """
     if not _NOTE_ID_SHAPE.fullmatch(note_id) or int(note_id) > _MAX_BIGINT:
         raise ApiError("not_found", stage="validate")
-    # 공개 읽기 제한은 E04와 같은 IP 키다. DB를 읽기 전에 세어 없는 id로 DB를 두드리는 요청도 막는다.
-    limiter.check(PUBLIC_READ, f"ip:{ip_bucket(client_ip(request))}")
+    ip_key = f"ip:{ip_bucket(client_ip(request))}"
+    # 공개 읽기 제한은 E04와 같은 IP 키다. 명세 1.2의 순서(404 뒤)와 달리 DB를 읽기 전에 센다. 그래야 없는 id·
+    # 비공개 id를 무제한으로 두드릴 수 없고, 세는 방식이 같아 노트가 있는지도 새지 않는다(429는 어디서든 난다).
+    limiter.check(PUBLIC_READ, ip_key)
     operator = user is not None and user.is_operator
     note = supabase.get_note(int(note_id), include_unpublished=operator)
     if note is None:
         raise ApiError("not_found", stage="db")
 
+    rows = note["note_images"]
+    if rows:
+        # 노트 한 번 열기는 이미지 장수와 상관없이 1회로 센다(1.8). 이미지가 없으면 발급하지 않으니 세지 않는다.
+        # 속도 제한(6번)은 부작용(사전 조회·서명) 앞이다.
+        limiter.check(SIGNED_URL, f"user:{user.user_id}" if user else ip_key)
+
     body = note["body_markdown"]
-    terms = {row["id"]: row for row in supabase.list_glossary_terms()}
+    term_rows = supabase.list_glossary_terms()
+    if len(term_rows) >= GLOSSARY_ROW_CAP:
+        # PostgREST 최대 행에서 잘렸을 수 있다. 뒤쪽 용어가 어느 노트에서도 안 보이므로 남긴다.
+        logger.warning("stage=db glossary_terms=%d reached row cap", len(term_rows))
+    terms = {row["id"]: row for row in term_rows}
     spans = find_spans(body, [(term_id, row["key"]) for term_id, row in terms.items()])
     used = sorted({span.term_id for span in spans})
 
     images = {}
-    rows = note["note_images"]
     if rows:
-        # 노트 한 번 열기는 이미지 장수와 상관없이 1회로 센다(1.8). 이미지가 없으면 발급하지 않으니 세지 않는다.
-        limiter.check(SIGNED_URL, f"user:{user.user_id}" if user else f"ip:{ip_bucket(client_ip(request))}")
         expires_at = _expires_at(SIGNED_URL_SECONDS)
         signed = supabase.sign_note_images(sorted({row["storage_path"] for row in rows}), SIGNED_URL_SECONDS)
         for row in rows:

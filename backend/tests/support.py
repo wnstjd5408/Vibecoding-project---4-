@@ -13,7 +13,7 @@ from app.common import install_common_layer
 from app.config import SESSION_COOKIE
 from app.errors import ApiError
 from app.rate_limit import RateRule, rate_limited
-from app.supabase import AuthSession, Profile, SupabaseUnavailable, get_supabase
+from app.supabase import AuthSession, Profile, SupabaseConfigError, SupabaseUnavailable, get_supabase
 
 ALLOWED_ORIGIN = "http://localhost:5173"
 LIMITED_RULE = RateRule("test_limit", 2, 60)
@@ -50,6 +50,9 @@ class FakeSupabase:
     glossary: list[dict] = field(default_factory=list)
     stored_images: set[str] = field(default_factory=set)
     storage_down: bool = False
+    # False면 NOTE_IMAGE_BUCKET이 없는 것처럼 서명이 설정 오류를 낸다.
+    bucket_configured: bool = True
+    glossary_reads: int = 0
     sign_calls: list[tuple[list[str], int]] = field(default_factory=list)
     # get_note를 부를 때마다 넘긴 (note_id, include_unpublished)
     note_reads: list[tuple[int, bool]] = field(default_factory=list)
@@ -218,10 +221,13 @@ class FakeSupabase:
     def list_glossary_terms(self) -> list[dict]:
         if self.down:
             raise SupabaseUnavailable("down")
+        self.glossary_reads += 1
         return sorted(self.glossary, key=lambda t: t["id"])
 
     def sign_note_images(self, paths: list[str], expires_in: int) -> dict[str, str]:
         """Storage 흉내: 버킷에 없는 경로는 결과에서 빠진다."""
+        if not self.bucket_configured:
+            raise SupabaseConfigError("NOTE_IMAGE_BUCKET is not set or invalid")
         if self.down or self.storage_down:
             raise SupabaseUnavailable("down")
         self.sign_calls.append((paths, expires_in))

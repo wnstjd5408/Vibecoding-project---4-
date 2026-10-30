@@ -453,14 +453,30 @@ def test_sign_note_images_signs_all_paths_in_one_call_and_drops_failed_items():
     signed = signing_client(handler).sign_note_images(["notes/11/a b+(1).png", "notes/11/gone.png"], 300)
 
     assert signed == {
-        "notes/11/a b+(1).png": "https://project.supabase.co/storage/v1/object/sign/note-images/notes/11/a%20b+(1).png?token=fake-token"
+        "notes/11/a b+(1).png": "https://project.supabase.co/storage/v1/object/sign/note-images/notes/11/a%20b%2B%281%29.png?token=fake-token"
     }
     assert seen["path"] == "/storage/v1/object/sign/note-images"
     assert '"expiresIn":300' in seen["body"].replace(" ", "")
     assert seen["authorization"] == "Bearer sb_secret_test"
 
 
-@pytest.mark.parametrize("bucket", [None, "", "../other", "note images"])
+def test_question_mark_in_a_storage_path_is_encoded_not_taken_as_the_query():
+    # Storage 키에는 ?가 들어갈 수 있다(2026-10-30 로컬 업로드 200). 마지막 ? 앞까지만 경로다.
+    body = [{"error": None, "path": "n/q?mark.png", "signedURL": "/object/sign/b.1/n/q?mark.png?token=fake-token"}]
+    client = signing_client(lambda r: httpx.Response(200, json=body), "b.1")
+
+    assert client.sign_note_images(["n/q?mark.png"], 300) == {
+        "n/q?mark.png": "https://project.supabase.co/storage/v1/object/sign/b.1/n/q%3Fmark.png?token=fake-token"
+    }
+
+
+def test_signed_path_without_a_token_is_unavailable():
+    body = [{"error": None, "path": "a.png", "signedURL": "/object/sign/b/a.png"}]
+    with pytest.raises(SupabaseUnavailable):
+        signing_client(lambda r: httpx.Response(200, json=body)).sign_note_images(["a.png"], 300)
+
+
+@pytest.mark.parametrize("bucket", [None, "", "../other", "note images", ".", ".."])
 def test_sign_without_a_valid_bucket_is_a_config_error_and_sends_nothing(bucket):
     def handler(request):
         raise AssertionError("must not call Storage")

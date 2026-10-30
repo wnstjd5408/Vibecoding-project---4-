@@ -3,6 +3,7 @@
 본문은 모두 합성 데이터다. 위치는 파이썬 문자열 인덱스(= 유니코드 코드포인트)로 자른다.
 """
 
+import time
 import unicodedata
 
 import pytest
@@ -54,11 +55,33 @@ def test_english_term_needs_word_boundaries_but_korean_particles_are_fine():
 
 
 def test_case_and_whitespace_are_normalized_on_both_sides():
-    body = "ROUND\nrobin 과 round robin"
+    body = "ROUND \t robin 과 round robin"
 
     spans = find_spans(body, [(6, "  Round   ROBIN ")])
 
-    assert cut(body, spans) == [(6, "ROUND\nrobin"), (6, "round robin")]
+    assert cut(body, spans) == [(6, "ROUND \t robin"), (6, "round robin")]
+
+
+@pytest.mark.parametrize("body", ["## Round\n\nRobin 문단", "round\nrobin", "round \r\n robin"])
+def test_terms_do_not_match_across_line_breaks(body):
+    # 제목과 다음 문단처럼 다른 블록에 걸친 강조를 만들지 않는다.
+    assert find_spans(body, [(6, "round robin")]) == []
+
+
+def test_overlapping_occurrences_of_the_same_term_are_all_candidates():
+    # 앞쪽 "가나가"(2~5)가 더 긴 용어에 밀려도, 겹쳐 있던 뒤쪽 "가나가"(4~7)는 남는다.
+    assert find_spans("다라가나가나가", [(1, "가나가"), (2, "다라가나")]) == [
+        Span(term_id=2, start=0, end=4),
+        Span(term_id=1, start=4, end=7),
+    ]
+
+
+def test_link_addresses_and_bare_urls_are_not_matched():
+    body = "[IP 문서](https://example.test/ip?q=ip) 참고: https://ip.example.test/a 그리고 IP"
+
+    # 링크 글자(IP 문서)와 본문 끝의 IP만 찾는다. 링크 주소·맨 URL 안은 화면에 글자로 보이지 않는다.
+    assert cut(body, find_spans(body, [(4, "ip")])) == [(4, "IP"), (4, "IP")]
+    assert find_spans(body, [(4, "ip")])[-1].end == len(body)
 
 
 def test_image_tokens_are_never_matched():
@@ -78,6 +101,10 @@ def test_nfd_body_positions_point_into_the_original_text():
     spans = find_spans(body, [(2, "해시테이블"), (8, "café")])
 
     assert [unicodedata.normalize("NFC", text) for _, text in cut(body, spans)] == ["해시테이블", "café"]
+    # NFD로 "앞"은 자모 3개(ㅇㅏㅍ) + 공백이라 해시테이블은 원문 4번째 코드포인트부터다.
+    # 해·시·테·이는 자모 2개씩, 블은 3개(ㅂㅡㄹ)라 11칸을 차지한다.
+    assert spans[0] == Span(term_id=2, start=4, end=15)
+    assert spans[1].end == len(body)
 
 
 def test_match_inside_a_composed_character_is_dropped():
@@ -85,6 +112,33 @@ def test_match_inside_a_composed_character_is_dropped():
     body = unicodedata.normalize("NFD", "한글")
 
     assert find_spans(body, [(9, "하")]) == []
+
+
+def test_combining_mark_blocks_a_match_whether_or_not_the_body_is_nfc():
+    # 합쳐지지 않는 결합 문자(밑줄 U+0332) 앞은 자를 수 없다. 본문의 다른 곳이 NFD여도 결과가 같아야 한다.
+    nfc_body = "cafe̲"
+    mixed_body = nfc_body + " " + unicodedata.normalize("NFD", "한")
+
+    assert find_spans(nfc_body, [(1, "cafe")]) == find_spans(mixed_body, [(1, "cafe")]) == []
+
+
+def test_starter_that_composes_under_nfc_is_handled():
+    # 오리야 문자 U+0B47 + U+0B3E는 결합 등급이 둘 다 0이지만 NFC에서 U+0B4B 하나가 된다.
+    body = "ୋ"
+
+    assert find_spans(body, [(1, "ୋ")]) == [Span(term_id=1, start=0, end=2)]
+
+
+def test_long_body_with_many_terms_stays_fast():
+    # 명세의 본문 상한(20만 자, 임시)과 PostgREST 최대 행(1000)에 가까운 경우. O(n^2)였을 때는 90초가 넘었다.
+    terms = [(i, f"용어{i}") for i in range(1000)] + [(5000, "ai"), (5001, "db"), (5002, "큐")]
+    body = ("ai와 db와 큐를 쓰는 노트 " * 15_000)[:200_000]
+
+    started = time.perf_counter()
+    spans = find_spans(body, terms)
+
+    assert len(spans) > 30_000
+    assert time.perf_counter() - started < 5
 
 
 def test_keys_that_normalize_the_same_use_the_smaller_term_id():

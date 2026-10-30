@@ -29,11 +29,8 @@ _MAX_TOKEN_LENGTH = 4096
 # 재시도하면 풀릴 수 있는 응답. 그 밖의 4xx는 키·권한·주소 설정 오류로 본다.
 _TRANSIENT_STATUSES = frozenset({408, 425, 429})
 
-# 버킷 이름은 주소 경로에 그대로 들어간다. 가져오기 스크립트(MEG-85)와 같은 모양만 받는다.
-_BUCKET_SHAPE = re.compile(r"[A-Za-z0-9_-]+")
-# Storage가 돌려주는 서명 경로(/object/sign/...?token=...)에 공백·한글이 그대로 있을 수 있어 주소로 쓸 수
-# 있게 바꾼다. 이미 %로 바뀐 글자와 경로·질의 구분자는 그대로 둔다(supabase-js의 encodeURI와 같은 결과).
-_URL_SAFE = ";,/?:@&=+$-_.!~*'()#%"
+# 버킷 이름은 주소 경로에 그대로 들어간다. 영문·숫자·`.`·`_`·`-`만 받고 `.`·`..`는 막는다.
+_BUCKET_SHAPE = re.compile(r"(?!\.{1,2}$)[A-Za-z0-9._-]+")
 
 
 class SupabaseUnavailable(Exception):
@@ -359,15 +356,24 @@ class SupabaseClient:
             # 버킷 없음·키 권한 거부. 5xx·일시 상태는 _request가 이미 SupabaseUnavailable로 바꿨다.
             raise SupabaseConfigError(f"storage sign status {response.status_code}")
         try:
-            items = response.json()
-            signed = {
-                item["path"]: f"{self._url}/storage/v1{quote(item['signedURL'], safe=_URL_SAFE)}"
-                for item in items
+            return {
+                item["path"]: self._signed_url(item["signedURL"])
+                for item in response.json()
                 if not item.get("error") and item.get("signedURL")
             }
         except (ValueError, KeyError, TypeError, AttributeError):
             raise SupabaseUnavailable("malformed storage response") from None
-        return signed
+
+    def _signed_url(self, signed_path: str) -> str:
+        """Storage의 서명 경로(/object/sign/{버킷}/{경로}?token=...)를 브라우저가 열 수 있는 주소로 만든다.
+
+        Storage는 경로를 인코딩하지 않고 준다(공백·`?`·`&`가 그대로 온다, 2026-10-30 로컬 확인). 토큰 앞의
+        마지막 `?`에서 나눠 경로만 인코딩한다. 토큰은 base64url이라 그대로 둔다.
+        """
+        path, separator, query = signed_path.rpartition("?")
+        if not separator or not query.startswith("token="):
+            raise ValueError("signed path without token")
+        return f"{self._url}/storage/v1{quote(path, safe='/')}?{query}"
 
     def keyed_hash(self, value: str) -> str:
         """이메일·IP 같은 원문 대신 저장할 키. secret key로 서명한 해시라 값을 되돌려 추측하기 어렵다."""
