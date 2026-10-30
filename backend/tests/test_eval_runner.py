@@ -95,3 +95,24 @@ def test_live_transport_refused(tmp_path):
     cases, manifest, config = setup()
     with pytest.raises(DatasetError, match="fake_transport_only"):
         run(cases, manifest, config, tmp_path, transport=lambda *args: None)
+
+
+def test_resume_after_durable_completed_slot(tmp_path, monkeypatch):
+    import evals.runner as runner
+    cases, manifest, config = setup()
+    fake = FakeTransport()
+    save = runner.atomic
+
+    def stop_after_save(path, state):
+        save(path, state)
+        if state["slots"]["C20:1"]["status"] == "ok":
+            raise KeyboardInterrupt()
+
+    monkeypatch.setattr(runner, "atomic", stop_after_save)
+    with pytest.raises(KeyboardInterrupt):
+        run(cases, manifest, config, tmp_path, transport=fake)
+    assert fake.calls == 1
+    monkeypatch.setattr(runner, "atomic", save)
+    result = run(cases, manifest, config, tmp_path, transport=fake)
+    assert fake.calls == 120
+    assert all(row["status"] == "ok" for row in result["slots"].values())
