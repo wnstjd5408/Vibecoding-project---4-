@@ -1,4 +1,5 @@
 import type { RouteObject } from 'react-router'
+import GlossaryPage from '../operator/glossary/GlossaryPage.tsx'
 import Placeholder from '../pages/Placeholder.tsx'
 import { operatorPaths } from './paths.ts'
 
@@ -9,10 +10,9 @@ export const operatorRoutes: RouteObject[] = [
     path: operatorPaths.home,
     element: <Placeholder screenId="F5-1a" title="운영자 노트 목록" ticket="운영자 화면 티켓(MEG-78 셸 이후)" />,
   },
-  {
-    path: operatorPaths.glossary,
-    element: <Placeholder screenId="F5-1c" title="용어 사전" ticket="운영자 화면 티켓(MEG-78 셸 이후)" />,
-  },
+  { path: operatorPaths.glossary, element: <GlossaryPage /> },
+  { path: operatorPaths.glossaryNew, element: <GlossaryPage /> },
+  { path: operatorPaths.glossaryTerm, element: <GlossaryPage /> },
   {
     path: operatorPaths.reports,
     element: <Placeholder screenId="F5-2" title="신고" ticket="운영자 화면 티켓(MEG-78 셸 이후)" />,
