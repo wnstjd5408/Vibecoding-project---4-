@@ -2,3 +2,7 @@
 
 # 이메일 @ 앞부분. infra/terraform.tfvars의 owner와 같은 값.
 owner = "OWNER"
+
+# 백업을 읽고 지울 수 있는 사람. `aws sts get-caller-identity --query Arn --output text`로 확인한다.
+# 결과가 assumed-role/<역할>/<세션>이면 arn:aws:iam::<계정 ID>:role/<역할> 형식으로 바꿔 넣는다.
+backup_admin_arns = ["arn:aws:iam::123456789012:user/OWNER"]

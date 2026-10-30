@@ -29,6 +29,21 @@ variable "retention_count" {
   }
 }
 
+# 계정 ID와 사용자 이름이 들어 있어 기본값을 두지 않고 terraform.tfvars로만 넘긴다.
+# IAM 사용자면 arn:aws:iam::<계정 ID>:user/<이름>, 역할(SSO 등)로 로그인하면 세션 ARN이 아니라
+# 역할 ARN arn:aws:iam::<계정 ID>:role/<경로/>역할 이름을 넣는다(aws:PrincipalArn은 역할 ARN으로 평가된다).
+variable "backup_admin_arns" {
+  description = "백업을 읽고 지우고 보관 설정을 바꿀 수 있는 IAM 사용자·역할 ARN. 이 밖의 주체는 버킷 정책이 거부한다."
+  type        = list(string)
+
+  validation {
+    condition = length(var.backup_admin_arns) > 0 && alltrue([
+      for arn in var.backup_admin_arns : can(regex("^arn:aws:iam::[0-9]{12}:(user|role)/", arn))
+    ])
+    error_message = "backup_admin_arns에는 IAM 사용자 또는 역할 ARN을 하나 이상 넣는다(assumed-role 세션 ARN은 안 된다)."
+  }
+}
+
 # infra/github-oidc의 같은 이름 변수와 같은 값이다. 숫자 ID는 공개 저장소의 공개 식별자라 커밋해도 된다.
 variable "github_subject_repository" {
   description = "백업 워크플로를 실행할 GitHub 저장소의 sub 클레임 표기(owner@ID/name@ID)"

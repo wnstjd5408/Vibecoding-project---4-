@@ -120,6 +120,70 @@ data "aws_iam_policy_document" "bucket" {
       values   = ["false"]
     }
   }
+
+  # 공용 실습 계정이라 S3 권한이 넓은 다른 사용자도 SSE-S3 객체는 그대로 읽을 수 있다. 덤프에는 비밀번호 해시와
+  # 세션 토큰이 있으므로 backup_admin_arns 밖에서는 백업을 읽거나 지우거나 보관 설정을 바꾸지 못하게 한다
+  # (2026-10-30 김준성 결정, MEG-94). 관리자는 이 정책 자체를 바꿔 우회할 수 있다. 그 변경은 CloudTrail에 남는다.
+  # 버킷 정책 변경(PutBucketPolicy)은 일부러 막지 않는다. ARN을 잘못 넣었을 때 루트 계정 없이도 고칠 수 있게 하려는 것이다.
+  statement {
+    sid    = "DenyOthersReadDelete"
+    effect = "Deny"
+    actions = [
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "s3:GetObjectAttributes",
+      "s3:GetObjectVersionAttributes",
+      "s3:RestoreObject",
+      "s3:DeleteObject",
+      "s3:DeleteObjectVersion",
+    ]
+    resources = ["${aws_s3_bucket.backup.arn}/*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "ArnNotEquals"
+      variable = "aws:PrincipalArn"
+      values   = var.backup_admin_arns
+    }
+  }
+
+  statement {
+    sid    = "DenyOthersRetentionChange"
+    effect = "Deny"
+    actions = [
+      "s3:PutLifecycleConfiguration",
+      "s3:PutBucketVersioning",
+    ]
+    resources = [aws_s3_bucket.backup.arn]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "ArnNotEquals"
+      variable = "aws:PrincipalArn"
+      values   = var.backup_admin_arns
+    }
+  }
+
+  # 백업을 올리는 것은 백업 역할과 관리자뿐이다. 다른 사람이 같은 키에 덮어써 정상 백업을 밀어내지 못하게 한다.
+  statement {
+    sid       = "DenyOthersUpload"
+    effect    = "Deny"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.backup.arn}/*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "ArnNotEquals"
+      variable = "aws:PrincipalArn"
+      values   = concat(var.backup_admin_arns, [aws_iam_role.backup.arn])
+    }
+  }
 }
 
 resource "aws_s3_bucket_policy" "backup" {
