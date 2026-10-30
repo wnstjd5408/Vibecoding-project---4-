@@ -1160,3 +1160,414 @@ test('429 retry_after_seconds가 600초를 넘어도 서버 기한 전에는 다
   await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
   expect(calls).toHaveLength(2)
 })
+
+// ---- MEG-108 오늘의 퀴즈(E11): 여섯 상태, generating 재조회, 오류별 안내. 브라우저의 실제 fetch 경로에 합성 HTTP 응답을 준다. ----
+// 실제 백엔드의 E11(퀴즈 생성·저장, 서버의 08:30 경계, 세션 만료)은 확인하지 못한다.
+
+type QuizReply = { status: number; json: unknown } | { status: number; body: string; contentType: string } | 'abort'
+
+async function setupQuiz(page: Page, options: { member?: boolean; respond: (n: number) => QuizReply | Promise<QuizReply> }) {
+  const calls = { count: 0 }
+  await page.route('**/api/me', (route) => route.fulfill({ json: options.member === false ? { authenticated: false } : { authenticated: true, role: 'member', display_name: '합성 사용자' } }))
+  await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
+  await page.route('**/api/quiz/today', async (route) => {
+    calls.count += 1
+    const reply = await options.respond(calls.count)
+    if (reply === 'abort') return route.abort()
+    return route.fulfill(reply)
+  })
+  return calls
+}
+
+const quizItems = [
+  { id: 41, difficulty: '중', question: '합성 질문 1입니다.', answered: false, followups: [], can_request_followup: false },
+  { id: 42, difficulty: '하', question: '합성 질문 2입니다.', answered: true, your_answer: '합성 답변', correct_answer: '합성 정답', explanation: '합성 해설', followups: [], can_request_followup: false },
+]
+const ok = (body: unknown): QuizReply => ({ status: 200, json: body })
+const quizRetry = (page: Page) => page.getByRole('button', { name: '다시 시도' })
+const quizRecheck = (page: Page) => page.getByRole('button', { name: '다시 확인' })
+
+// AC-1~3: 여섯 상태는 모두 HTTP 200이고 각각 다른 화면으로 보인다.
+const QUIZ_STATES = [
+  ['ready', { status: 'ready', quiz_date: '2026-10-23', items: quizItems }, '합성 질문 1입니다.', false],
+  ['not_open', { status: 'not_open' }, '오늘의 퀴즈는 아침 8시 30분부터 볼 수 있어요', true],
+  ['none', { status: 'none' }, '오늘 풀 퀴즈가 없어요', true],
+  ['generating', { status: 'generating', retry_after_seconds: 30 }, '퀴즈를 만드는 중이에요', false],
+  ['failed', { status: 'failed' }, '오늘의 퀴즈를 만들지 못했어요', false],
+  ['ai_limit_reached', { status: 'ai_limit_reached' }, '지금은 AI 사용 한도가 차서 퀴즈를 만들 수 없어요', true],
+] as const
+
+for (const [name, body, text, canRecheck] of QUIZ_STATES) {
+  test(`E11 ${name}는 HTTP 200의 전용 화면으로 보이고 오류나 로그인 안내가 아니다`, async ({ page }) => {
+    const calls = await setupQuiz(page, { respond: () => ok(body) })
+    await page.goto('/quiz')
+    await expect(page.getByRole('heading', { name: text })).toBeVisible()
+    await expect(page.getByRole('alert')).toHaveCount(0) // 오류 안내가 아니다
+    await expect(page.getByRole('dialog')).toHaveCount(0) // 로그인 안내가 아니다
+    await expect(quizRecheck(page)).toHaveCount(canRecheck ? 1 : 0)
+    await expect(quizRetry(page)).toHaveCount(0)
+    expect(calls.count).toBe(1)
+  })
+}
+
+test('여섯 상태의 안내 문구는 서로 모두 다르다', () => {
+  const titles = QUIZ_STATES.map(([, , text]) => text)
+  expect(new Set(titles).size).toBe(titles.length)
+})
+
+test('ready 응답의 정답·해설·내 답은 화면에 나오지 않는다', async ({ page }) => {
+  await setupQuiz(page, { respond: () => ok({ status: 'ready', quiz_date: '2026-10-23', items: quizItems }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '합성 질문 2입니다.' })).toBeVisible()
+  await expect(page.getByText('답함', { exact: true })).toHaveCount(1)
+  for (const hidden of ['합성 정답', '합성 해설', '합성 답변']) await expect(page.getByText(hidden)).toHaveCount(0)
+})
+
+test('not_open·none에서 다시 확인을 누르면 다시 조회하고 08:30이 되어도 저절로 갱신하지 않는다', async ({ page }) => {
+  await page.clock.install()
+  const calls = await setupQuiz(page, { respond: (n) => n === 1 ? ok({ status: 'not_open' }) : ok({ status: 'ready', quiz_date: '2026-10-23', items: quizItems }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '오늘의 퀴즈는 아침 8시 30분부터 볼 수 있어요' })).toBeVisible()
+  await page.clock.fastForward(60 * 60 * 1000) // 한 시간이 지나도 저절로 다시 부르지 않는다
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(1)
+  await quizRecheck(page).click()
+  await expect(page.getByRole('heading', { name: '합성 질문 1입니다.' })).toBeVisible()
+  expect(calls.count).toBe(2)
+})
+
+test('generating은 서버가 준 retry_after_seconds 뒤에 다시 부르고, 다른 상태가 되면 더 부르지 않는다', async ({ page }) => {
+  await page.clock.install()
+  const calls = await setupQuiz(page, {
+    respond: (n) => n <= 2 ? ok({ status: 'generating', retry_after_seconds: 7 }) : ok({ status: 'ready', quiz_date: '2026-10-23', items: quizItems }),
+  })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '퀴즈를 만드는 중이에요' })).toBeVisible()
+  expect(calls.count).toBe(1)
+  await page.clock.fastForward(6_000)
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(1) // 아직 7초가 안 됐다
+  await page.clock.fastForward(1_500)
+  await expect.poll(() => calls.count).toBe(2)
+  await expect(page.getByRole('heading', { name: '퀴즈를 만드는 중이에요' })).toBeVisible() // 다시 generating이어도 화면이 깜박이지 않는다
+  await page.clock.fastForward(7_500)
+  await expect(page.getByRole('heading', { name: '합성 질문 1입니다.' })).toBeVisible()
+  expect(calls.count).toBe(3)
+  await page.clock.fastForward(5 * 60 * 1000) // ready가 된 뒤에는 반복하지 않는다
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(3)
+})
+
+test('generating 응답에 retry_after_seconds가 없으면 임시로 5초 뒤에 다시 부르고, 너무 짧은 값은 1초로 맞춘다', async ({ page }) => {
+  await page.clock.install()
+  const calls = await setupQuiz(page, {
+    respond: (n) => n === 1 ? ok({ status: 'generating' }) : n === 2 ? ok({ status: 'generating', retry_after_seconds: 0.2 }) : ok({ status: 'none' }),
+  })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '퀴즈를 만드는 중이에요' })).toBeVisible()
+  await page.clock.fastForward(4_500)
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(1)
+  await page.clock.fastForward(1_000)
+  await expect.poll(() => calls.count).toBe(2)
+  await page.clock.fastForward(500)
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(2) // 0.2초는 1초로 맞춰진다
+  await page.clock.fastForward(1_000)
+  await expect.poll(() => calls.count).toBe(3)
+  await expect(page.getByRole('heading', { name: '오늘 풀 퀴즈가 없어요' })).toBeVisible()
+})
+
+test('generating 중 화면을 떠나면 반복 요청이 멈추고 응답을 기다리는 동안에는 요청이 겹치지 않는다', async ({ page }) => {
+  await page.clock.install()
+  const held = gate()
+  const calls = await setupQuiz(page, {
+    respond: async (n) => {
+      if (n === 1) return ok({ status: 'generating', retry_after_seconds: 3 })
+      await held.promise // 두 번째 응답은 붙잡아 둔다
+      return ok({ status: 'generating', retry_after_seconds: 3 })
+    },
+  })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '퀴즈를 만드는 중이에요' })).toBeVisible()
+  await page.clock.fastForward(3_500)
+  await expect.poll(() => calls.count).toBe(2)
+  await page.clock.fastForward(30_000) // 두 번째 응답이 아직이라 세 번째를 겹쳐 보내지 않는다
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(2)
+  await goInAppQuiz(page, '/') // 화면을 떠난다
+  held.release()
+  await page.clock.fastForward(60_000)
+  await page.waitForTimeout(300)
+  expect(calls.count).toBe(2) // 떠난 뒤에는 더 부르지 않는다
+})
+
+test('다시 확인을 누르면 요청이 하나만 나가고 응답 전에는 버튼이 없다', async ({ page }) => {
+  const held = gate()
+  const calls = await setupQuiz(page, {
+    respond: async (n) => {
+      if (n === 1) return ok({ status: 'none' })
+      await held.promise
+      return ok({ status: 'ready', quiz_date: '2026-10-23', items: quizItems })
+    },
+  })
+  await page.goto('/quiz')
+  await quizRecheck(page).click()
+  await expect(page.getByRole('heading', { name: '오늘의 퀴즈를 불러오는 중이에요' })).toBeVisible()
+  await expect(quizRecheck(page)).toHaveCount(0)
+  expect(calls.count).toBe(2)
+  held.release()
+  await expect(page.getByRole('heading', { name: '합성 질문 1입니다.' })).toBeVisible()
+  expect(calls.count).toBe(2)
+})
+
+// AC-4 오류
+test('방문자는 E11 요청 없이 로그인 안내가 열린다', async ({ page }) => {
+  const calls = await setupQuiz(page, { member: false, respond: () => ok({ status: 'none' }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('dialog', { name: '로그인이 필요해요' }).getByText('오늘의 퀴즈는 로그인한 뒤에 볼 수 있어요. 계정은 운영자가 만들어 줘요.')).toBeVisible()
+  await page.waitForTimeout(300)
+  expect(calls.count).toBe(0)
+})
+
+test('E11 로그인 사용자의 401 login_required는 공통 로그인 안내를 연다', async ({ page }) => {
+  await setupQuiz(page, { respond: () => ({ status: 401, json: aiError('login_required') }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('dialog', { name: '로그인이 필요해요' })).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+})
+
+test('E11 401이어도 code가 login_required가 아니면 로그인 안내를 열지 않는다', async ({ page }) => {
+  await setupQuiz(page, { respond: () => ({ status: 401, json: aiError('invalid_credentials') }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('alert')).toContainText('퀴즈를 불러오지 못했어요')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+})
+
+const QUIZ_ERRORS = [
+  ['429 rate_limited', { status: 429, json: aiError('rate_limited') }, '요청이 많아요. 잠시 뒤에 다시 시도해 주세요.'],
+  ['502 ai_unavailable', { status: 502, json: aiError('ai_unavailable') }, '퀴즈를 만드는 중 AI에 문제가 생겼어요. 다시 시도해 주세요.'],
+  ['500 internal_error', { status: 500, json: aiError('internal_error') }, '퀴즈를 불러오지 못했어요'],
+  ['네트워크 오류', 'abort', '퀴즈를 불러오지 못했어요'],
+] as const
+
+for (const [name, reply, message] of QUIZ_ERRORS) {
+  test(`E11 ${name}는 전용 안내와 다시 시도를 보이고 저절로 다시 부르지 않으며 로그인 안내가 아니다`, async ({ page }) => {
+    await page.clock.install()
+    const calls = await setupQuiz(page, { respond: (n) => n === 1 ? reply : ok({ status: 'none' }) })
+    await page.goto('/quiz')
+    await expect(page.getByRole('alert')).toContainText(message)
+    await expect(page.getByText('synthetic english message')).toHaveCount(0) // 영어 message 글자는 보이지 않는다
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await page.clock.fastForward(10 * 60 * 1000)
+    await page.waitForTimeout(200)
+    expect(calls.count).toBe(1) // 저절로 다시 부르지 않는다
+    await quizRetry(page).click() // 사용자가 누르면 다시 보낸다
+    await expect(page.getByRole('heading', { name: '오늘 풀 퀴즈가 없어요' })).toBeVisible()
+    expect(calls.count).toBe(2)
+  })
+}
+
+test('429의 retry_after_seconds 동안은 다시 시도해도 요청이 늘지 않고, 화면을 나갔다 돌아와도 같으며, 기한 뒤에 보낸다', async ({ page }) => {
+  await page.clock.install()
+  const calls = await setupQuiz(page, {
+    respond: (n) => n === 1 ? { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 60 } } } : ok({ status: 'none' }),
+  })
+  await page.goto('/quiz')
+  await expect(page.getByText('60초 뒤에 다시 시도할 수 있어요')).toBeVisible()
+  await expect(quizRetry(page)).toHaveAttribute('aria-disabled', 'true')
+  await quizRetry(page).click({ force: true }) // aria-disabled라 Playwright는 기본으로 누르지 않는다. 눌러도 요청이 나가지 않는지 본다
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(1)
+  await goInAppQuiz(page, '/')
+  await goInAppQuiz(page, '/quiz') // 나갔다 돌아와도 서버 기한 전에는 요청하지 않는다
+  await expect(page.getByRole('alert')).toContainText('요청이 많아요')
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(1)
+  await page.clock.fastForward(61_000)
+  await expect(quizRetry(page)).not.toHaveAttribute('aria-disabled', 'true')
+  await quizRetry(page).click()
+  await expect(page.getByRole('heading', { name: '오늘 풀 퀴즈가 없어요' })).toBeVisible()
+  expect(calls.count).toBe(2)
+})
+
+// 앱 안에서 경로를 옮긴다(새로 고치지 않아 모듈의 요청 상태가 이어진다)
+async function goInAppQuiz(page: Page, path: string) {
+  await page.evaluate((to) => {
+    history.pushState({}, '', to)
+    dispatchEvent(new PopStateEvent('popstate'))
+  }, path)
+}
+
+// 자체 점검에서 찾은 빈틈: 서버가 약속하지 않은 status나 모양이 이상한 응답을 줘도 화면이 깨지지 않고 오류 안내와 다시 시도가 보인다.
+for (const [name, body] of [
+  ['모르는 status', { status: 'something_new' }],
+  ['status가 없는 응답', {}],
+  ['ready인데 items가 배열이 아님', { status: 'ready', quiz_date: '2026-10-23', items: null }],
+] as const) {
+  test(`E11 ${name}는 화면을 깨지 않고 불러오지 못했다는 안내와 다시 시도를 보인다`, async ({ page }) => {
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    const calls = await setupQuiz(page, { respond: (n) => n === 1 ? ok(body) : ok({ status: 'none' }) })
+    await page.goto('/quiz')
+    await expect(page.getByRole('alert')).toContainText('퀴즈를 불러오지 못했어요')
+    await expect(page.getByRole('heading', { level: 1, name: '오늘의 퀴즈' })).toBeVisible()
+    await quizRetry(page).click()
+    await expect(page.getByRole('heading', { name: '오늘 풀 퀴즈가 없어요' })).toBeVisible()
+    expect(calls.count).toBe(2)
+    expect(errors).toEqual([])
+  })
+}
+
+test('ready의 문항이 비어 있으면 퀴즈 없음 안내를 보인다', async ({ page }) => {
+  await setupQuiz(page, { respond: () => ok({ status: 'ready', quiz_date: '2026-10-23', items: [] }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '오늘 풀 퀴즈가 없어요' })).toBeVisible()
+})
+
+// 독립 리뷰에서 나온 빈틈: 본문이 null인 응답, 문항 배열 속 이상한 값, 포커스, 세션 만료 뒤 로그인 길, 계정 전환.
+test('E11 본문이 JSON null이어도 로딩에 멈추지 않고 불러오지 못했다는 안내와 다시 시도를 보인다', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const calls = await setupQuiz(page, { respond: (n) => n === 1 ? { status: 200, body: 'null', contentType: 'application/json' } : ok({ status: 'none' }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('alert')).toContainText('퀴즈를 불러오지 못했어요')
+  await quizRetry(page).click()
+  await expect(page.getByRole('heading', { name: '오늘 풀 퀴즈가 없어요' })).toBeVisible()
+  expect(calls.count).toBe(2)
+  expect(errors).toEqual([])
+})
+
+test('ready의 문항 배열에 null·낯선 값이 섞여도 읽을 수 있는 문항만 보이고, 하나도 읽을 수 없으면 오류 안내다', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await setupQuiz(page, {
+    respond: (n) => n === 1
+      ? ok({ status: 'ready', quiz_date: '2026-10-23', items: [null, 7, { id: 'x' }, { ...quizItems[0], difficulty: 'constructor' }] })
+      : ok({ status: 'ready', quiz_date: '2026-10-23', items: [null, {}] }),
+  })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '합성 질문 1입니다.' })).toBeVisible()
+  await expect(page.getByRole('main').getByRole('listitem')).toHaveCount(1)
+  await expect(page.getByText('난이도')).toHaveCount(0) // 모르는 난이도 값은 칩 없이 둔다
+  expect(errors).toEqual([])
+  await page.reload() // 두 번째 응답(읽을 수 있는 문항 없음)을 받는다
+  await expect(page.getByRole('alert')).toContainText('퀴즈를 불러오지 못했어요')
+  expect(errors).toEqual([])
+})
+
+test('다시 확인을 누르면 포커스가 사라지지 않고 결과 영역에 남는다', async ({ page }) => {
+  const held = gate()
+  await setupQuiz(page, { respond: async (n) => { if (n === 1) return ok({ status: 'none' }); await held.promise; return ok({ status: 'not_open' }) } })
+  await page.goto('/quiz')
+  await quizRecheck(page).click()
+  await expect(page.getByRole('heading', { name: '오늘의 퀴즈를 불러오는 중이에요' })).toBeVisible()
+  await expect(page.locator('main > div[tabindex="-1"]')).toBeFocused()
+  held.release()
+  await expect(page.getByRole('heading', { name: '오늘의 퀴즈는 아침 8시 30분부터 볼 수 있어요' })).toBeVisible()
+  await expect(page.locator('main > div[tabindex="-1"]')).toBeFocused()
+})
+
+test('로그인 사용자의 401 login_required 뒤 안내를 닫아도 화면에 로그인으로 가는 길이 있다', async ({ page }) => {
+  await setupQuiz(page, { respond: () => ({ status: 401, json: aiError('login_required') }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('dialog', { name: '로그인이 필요해요' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('main').getByRole('link', { name: '로그인' })).toHaveAttribute('href', '/login')
+})
+
+test('429 대기는 같은 계정에만 적용되고 다른 계정으로 바뀌면 이어받지 않는다', async ({ page }) => {
+  const calls = await setupQuiz(page, {
+    respond: (n) => n === 1 ? { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 60 } } } : ok({ status: 'none' }),
+  })
+  await page.goto('/')
+  const outcomes = await page.evaluate(async () => {
+    const { requestQuizToday } = await import('/src/quiz/quizToday.ts')
+    const result = async (account: string) => requestQuizToday(account).then(() => 'ok', () => 'error')
+    return [await result('member:가'), await result('member:가'), await result('member:나')]
+  })
+  expect(outcomes).toEqual(['error', 'error', 'ok']) // 같은 계정은 서버 기한까지 막히고(요청 안 나감), 다른 계정은 바로 요청한다
+  expect(calls.count).toBe(2)
+})
+
+test('generating 대기 중(타이머 예약 상태)에 화면을 떠나면 이후 요청이 나가지 않는다', async ({ page }) => {
+  await page.clock.install()
+  const calls = await setupQuiz(page, { respond: () => ok({ status: 'generating', retry_after_seconds: 10 }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '퀴즈를 만드는 중이에요' })).toBeVisible()
+  await page.clock.fastForward(3_000)
+  await goInAppQuiz(page, '/')
+  await expect(page.getByRole('heading', { level: 1, name: '과목' })).toBeVisible()
+  await page.clock.fastForward(60_000)
+  await page.waitForTimeout(300)
+  expect(calls.count).toBe(1)
+})
+
+// PR #79 AI 리뷰 P1: 표시 이름·역할이 같은 다른 계정이 이전 계정의 진행 중 E11 요청과 429 대기를 이어받으면 안 된다.
+// 계정 구분은 표시 이름이 아니라 로그인·로그아웃 때마다 올라가는 세션 번호로 한다. 브라우저에서 실제 로그아웃·로그인 흐름으로 시험한다.
+async function setupAccountSwitch(page: Page, respond: (n: number) => QuizReply | Promise<QuizReply>) {
+  const state = { loggedIn: true, calls: 0 }
+  await page.route('**/api/me', (route) => route.fulfill({ json: state.loggedIn ? { authenticated: true, role: 'member', display_name: '같은이름' } : { authenticated: false } }))
+  await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
+  await page.route('**/api/auth/logout', (route) => {
+    state.loggedIn = false
+    return route.fulfill({ status: 204 })
+  })
+  await page.route('**/api/auth/login', (route) => {
+    state.loggedIn = true
+    return route.fulfill({ json: { user: { role: 'member', display_name: '같은이름' } } })
+  })
+  await page.route('**/api/quiz/today', async (route) => {
+    state.calls += 1
+    const reply = await respond(state.calls)
+    if (reply === 'abort') return route.abort()
+    return route.fulfill(reply)
+  })
+  return state
+}
+
+// 로그아웃한 뒤 같은 표시 이름의 다른 계정(B)으로 로그인해 퀴즈 화면으로 온다.
+async function switchToSameNameAccount(page: Page) {
+  await page.getByRole('button', { name: /^내 계정/ }).click()
+  await page.getByRole('menuitem', { name: '로그아웃' }).click()
+  await expect(page).toHaveURL(/\/$/)
+  await goInAppQuiz(page, '/login')
+  await page.getByLabel('이메일').fill('b@example.test')
+  await page.getByLabel('비밀번호').fill('example-password')
+  await page.getByRole('button', { name: '로그인' }).click()
+  await expect(page).toHaveURL(/\/quiz$/)
+}
+
+const quizReady = (title: string): QuizReply => ok({ status: 'ready', quiz_date: '2026-10-23', items: [{ ...quizItems[0], question: title }] })
+
+test('A의 E11 요청이 진행 중일 때 로그아웃하고 같은 표시 이름의 B로 로그인해도 B는 A의 요청·문항을 받지 않는다', async ({ page }) => {
+  const held = gate()
+  const state = await setupAccountSwitch(page, async (n) => {
+    if (n === 1) {
+      await held.promise
+      return quizReady('A의 문항')
+    }
+    return quizReady('B의 문항')
+  })
+  await page.goto('/quiz')
+  await expect.poll(() => state.calls).toBe(1)
+  await switchToSameNameAccount(page)
+  await expect(page.getByRole('heading', { name: 'B의 문항' })).toBeVisible()
+  expect(state.calls).toBe(2) // B는 A의 진행 중 요청을 이어받지 않고 자기 요청을 보낸다
+  held.release() // 늦게 도착한 A의 응답
+  await page.waitForTimeout(300)
+  await expect(page.getByText('A의 문항')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'B의 문항' })).toBeVisible()
+})
+
+test('A가 429 대기 중일 때 같은 표시 이름의 B로 로그인하면 B는 그 대기를 이어받지 않는다', async ({ page }) => {
+  const state = await setupAccountSwitch(page, (n) => n === 1
+    ? { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 600 } } }
+    : ok({ status: 'none' }))
+  await page.goto('/quiz')
+  await expect(page.getByText('600초 뒤에 다시 시도할 수 있어요')).toBeVisible()
+  await switchToSameNameAccount(page)
+  await expect(page.getByRole('heading', { name: '오늘 풀 퀴즈가 없어요' })).toBeVisible()
+  expect(state.calls).toBe(2)
+  await expect(page.getByText('초 뒤에 다시 시도할 수 있어요')).toHaveCount(0)
+})

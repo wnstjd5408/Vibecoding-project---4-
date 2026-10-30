@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
+import { goInApp } from './inApp.ts'
 
 // MEG-90 용어 시트 안 즐겨찾기(F3-2)와 로그인 안내 연결. playwright.config.ts가 VITE_API_MOCK=true로 서버를 띄우므로
 // 가짜 응답(E05 예시 1, E06 예시 2, E08: 방문자 401·로그인 사용자는 저장)으로 실제 노트 화면에서 시험한다.
@@ -21,8 +22,8 @@ async function loginAsMember(page: Page) {
   await page.getByLabel('비밀번호').fill('example-password')
   await page.getByRole('button', { name: '로그인' }).click()
   await expect(page).toHaveURL(/\/quiz$/)
-  // 가짜 로그인 상태는 메모리에만 있어 새로 고치지 않고 임시 화면(/quiz)의 이동 링크로 옮긴다
-  await page.getByRole('link', { name: 'F1-2 노트 읽기(노트 11)' }).click()
+  // 가짜 로그인 상태는 메모리에만 있어 새로 고치지 않고 앱 안에서 경로를 옮긴다
+  await goInApp(page, '/notes/11')
 }
 
 test('AC-2 방문자가 즐겨찾기를 누르면 용어 시트가 닫히고 로그인 안내가 열리며 저장되지 않는다', async ({ page }) => {

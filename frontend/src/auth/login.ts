@@ -2,11 +2,17 @@ import { apiFetch, isApiError } from '../api/client.ts'
 import type { LoginResponse, Role } from '../api/types.ts'
 import { userPaths } from '../routes/paths.ts'
 import type { AuthState } from './authContext.ts'
+import { startNewSession } from './sessionGeneration.ts'
 
 // E01 로그인. 성공하면 서버가 세션 쿠키를 심고 역할과 이름을 준다. 실패하면 ApiError를 던진다.
 // 비밀번호는 요청 본문으로만 보내고 어디에도 남기지 않는다.
 export function login(email: string, password: string): Promise<LoginResponse> {
-  return apiFetch<LoginResponse>('/api/auth/login', { method: 'POST', body: { email, password } })
+  // 새 세션 번호를 올려, 이전 세션의 진행 중 요청·대기가 이 로그인 뒤의 화면으로 넘어오지 않게 한다. 요청 전과 성공 뒤에 모두 올린다.
+  startNewSession()
+  return apiFetch<LoginResponse>('/api/auth/login', { method: 'POST', body: { email, password } }).then((response) => {
+    startNewSession()
+    return response
+  })
 }
 
 // 로그인 뒤 이동할 곳. 로그인 안내 시트(F1-1c·F2-2b) 어디서 왔든 같고, 역할로만 정한다.

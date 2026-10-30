@@ -88,3 +88,25 @@ export type ExplainResponse =
       images: { id: number; url: string; alt: string }[]
       is_favorite?: boolean
     }
+
+// E11 POST /api/quiz/today. 여섯 상태는 모두 HTTP 200이다(6.3). 답하기 전 문항에는 정답·해설이 오지 않는다.
+// 답한 문항에는 your_answer·correct_answer·explanation·followups가 더 온다(재접속 때 진행 상황 복원).
+export type QuizItem = {
+  id: number
+  difficulty: string
+  question: string
+  answered: boolean
+  your_answer?: string
+  correct_answer?: string
+  explanation?: string
+  followups: { seq: number; question: string; answered: boolean }[]
+  can_request_followup: boolean
+}
+
+export type QuizTodayResponse =
+  | { status: 'ready'; quiz_date: string; items: QuizItem[] }
+  | { status: 'not_open' }
+  | { status: 'none' }
+  | { status: 'generating'; retry_after_seconds?: number }
+  | { status: 'failed' }
+  | { status: 'ai_limit_reached' }

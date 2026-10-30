@@ -1,10 +1,13 @@
 import { apiFetch } from '../api/client.ts'
 import type { AuthState } from '../auth/authContext.ts'
 import { loadAuthState } from '../auth/loadAuthState.ts'
+import { startNewSession } from '../auth/sessionGeneration.ts'
 
 // E02 로그아웃. 세션이 없어도 서버는 204로 답한다. 실패하면 ApiError를 던진다.
 export function logout(): Promise<void> {
-  return apiFetch<void>('/api/auth/logout', { method: 'POST' })
+  // 요청 전과 끝난 뒤(성공·실패 모두)에 새 세션 번호를 올려, 로그아웃 뒤 같은 표시 이름의 다른 계정이 이전 계정의 요청·대기를 이어받지 않게 한다.
+  startNewSession()
+  return apiFetch<void>('/api/auth/logout', { method: 'POST' }).finally(startNewSession)
 }
 
 // 로그아웃(E02)이 성공한 뒤 E03으로 읽은 결과.
