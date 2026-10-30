@@ -1719,3 +1719,61 @@ test('AC-3 A의 응답 미확정(network_error) 뒤 B의 첫 요청은 새 Idemp
   expect(state.calls[1].key).toBeTruthy()
   expect(state.calls[1].key).not.toBe(state.calls[0].key)
 })
+
+// 독립 리뷰 보완: 로그인·로그아웃이 실패하면 세션이 바뀐 것이 아니므로 같은 계정의 재시도 키·대기가 끊기지 않는다. 대기 조회는 요청을 시작한 세션 번호로 한다.
+test('로그아웃이 실패하면 같은 계정의 응답 미확정 재시도 키가 이어진다', async ({ page }) => {
+  const state = await setupAiSwitch(page, (_call, n) => n === 1 ? 'abort' : aiText('A의 설명'))
+  await page.route('**/api/auth/logout', (route) => route.fulfill({ status: 500, json: aiError('internal_error') })) // 나중에 등록한 경로가 우선한다
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' }).getByText('AI 설명을 불러오지 못했어요')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: /^내 계정/ }).click()
+  await page.getByRole('menuitem', { name: '로그아웃' }).click()
+  await expect(page.getByRole('alert')).toBeVisible() // 로그아웃 실패 안내. 로그인 상태는 그대로다
+  await page.keyboard.press('Escape')
+  await askAi(page)
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' }).getByText('A의 설명')).toBeVisible()
+  expect(state.calls).toHaveLength(2)
+  expect(state.calls[1].key).toBe(state.calls[0].key) // 같은 세션이라 응답을 받지 못한 요청의 키를 다시 쓴다
+})
+
+test('로그인에 실패해도 세션 번호는 올라가지 않고 성공하면 올라간다', async ({ page }) => {
+  await page.route('**/api/me', (route) => route.fulfill({ json: { authenticated: false } }))
+  let fail = true
+  await page.route('**/api/auth/login', (route) => fail
+    ? route.fulfill({ status: 401, json: aiError('invalid_credentials') })
+    : route.fulfill({ json: { user: { role: 'member', display_name: '같은이름' } } }))
+  await page.goto('/')
+  const result = await page.evaluate(async (shouldFail) => {
+    const { login } = await import('/src/auth/login.ts')
+    const { currentSession } = await import('/src/auth/sessionGeneration.ts')
+    const before = currentSession()
+    await login('a@example.test', 'wrong').catch(() => {})
+    const afterFailure = currentSession()
+    return { before, afterFailure, shouldFail }
+  }, fail)
+  expect(result.afterFailure).toBe(result.before)
+  fail = false
+  const afterSuccess = await page.evaluate(async () => {
+    const { login } = await import('/src/auth/login.ts')
+    const { currentSession } = await import('/src/auth/sessionGeneration.ts')
+    const before = currentSession()
+    await login('a@example.test', 'right')
+    return currentSession() > before
+  })
+  expect(afterSuccess).toBe(true)
+})
+
+test('서버 대기 시각은 요청을 시작한 세션 번호로 조회한다(다른 세션 번호로는 보이지 않는다)', async ({ page }) => {
+  await page.route('**/api/ai/explanations', (route) => route.fulfill({ status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 60 } } }))
+  await page.goto('/')
+  const result = await page.evaluate(async () => {
+    const { requestExplanation, retryAvailableAt } = await import('/src/ai/explain.ts')
+    const target = { noteId: 31, revision: 5, start: 0, end: 4 }
+    await requestExplanation(target, 9001).catch(() => {})
+    return { same: retryAvailableAt(target, 9001) !== null, other: retryAvailableAt(target, 9002) }
+  })
+  expect(result.same).toBe(true)
+  expect(result.other).toBeNull()
+})

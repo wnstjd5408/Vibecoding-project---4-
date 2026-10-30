@@ -59,21 +59,22 @@ const inFlight = new Map<string, Promise<ExplainResponse>>()
 // 서버가 429·409 in_progress에서 준 retry_after_seconds 동안은 같은 선택의 요청을 보내지 않는다. 시트를 닫았다 다시 열어도 이어진다.
 const waits = new Map<string, { until: number; error: unknown }>()
 
-// 진행 중 요청·재시도 키·대기는 로그인 세션(로그인·로그아웃마다 올라가는 번호)과 선택 범위로 가른다. 표시 이름은 고유하지 않아 쓰지 않는다.
-// 번호가 다르면 이전 세션의 요청·응답·오류·대기·키를 이어받지 않고, 이전 세션의 늦은 응답은 그 세션의 항목만 건드려 새 세션의 상태를 덮어쓰지 못한다.
-function idOf(target: ExplainTarget): string {
-  return `${currentSession()}:${target.noteId}:${target.revision}:${target.start}:${target.end}`
+// 진행 중 요청·재시도 키·대기는 로그인 세션(로그인·로그아웃이 성공할 때마다 올라가는 번호)과 선택 범위로 가른다. 표시 이름은 고유하지 않아 쓰지 않는다.
+// 세션 번호는 요청을 시작하는 쪽이 그 시점에 읽어 넘긴다. 번호가 다르면 이전 세션의 요청·응답·오류·대기·키를 이어받지 않고,
+// 이전 세션의 늦은 응답은 그 세션의 항목만 건드려 새 세션의 상태를 덮어쓰지 못한다.
+function idOf(target: ExplainTarget, session: number): string {
+  return `${session}:${target.noteId}:${target.revision}:${target.start}:${target.end}`
 }
 
 // 서버가 지정한 재시도 가능 시각(ms). 기다릴 필요가 없으면 null이다.
-export function retryAvailableAt(target: ExplainTarget): number | null {
-  const wait = waits.get(idOf(target))
+export function retryAvailableAt(target: ExplainTarget, session: number = currentSession()): number | null {
+  const wait = waits.get(idOf(target, session))
   return wait !== undefined && wait.until > Date.now() ? wait.until : null
 }
 
 // 같은 선택의 요청이 진행 중이면 새로 보내지 않고 그 요청을 이어서 본다(시트를 닫았다 다시 열어도 중복 호출·새 키가 생기지 않는다).
-export function requestExplanation(target: ExplainTarget): Promise<ExplainResponse> {
-  const id = idOf(target)
+export function requestExplanation(target: ExplainTarget, session: number = currentSession()): Promise<ExplainResponse> {
+  const id = idOf(target, session)
   const running = inFlight.get(id)
   if (running) return running
   // 서버가 정한 대기 시간 전에는 요청을 보내지 않고 그때의 오류를 그대로 돌려준다.
