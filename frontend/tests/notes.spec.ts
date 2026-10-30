@@ -782,3 +782,237 @@ for (const [name, close] of [
     await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
   })
 }
+
+// ---- MEG-106 AI 설명(E09): 요청 규칙, 오류 코드별 안내, 재시도 키. 브라우저의 실제 fetch 경로에 합성 HTTP 응답을 준다. ----
+// 실제 백엔드의 E09(서버 저장·원장·세션 만료)는 확인하지 못한다.
+
+const aiButton = (page: Page) => page.getByRole('button', { name: 'AI 설명', exact: true })
+const aiLoginSheet = (page: Page) => page.getByRole('dialog', { name: '로그인이 필요해요' })
+const retryButton = (page: Page) => page.getByRole('button', { name: '다시 시도' })
+
+const aiNote = (body: string, revision = 5) => ({
+  id: 31, revision, title: 'AI 설명 시험', studied_on: null, subjects: [], sources: [], body_markdown: body, images: {}, glossary_terms: [], glossary_spans: [],
+})
+const aiSuccess = { source: 'ai', term: { id: 12, key: 'unknownword', label: 'UnknownWord' }, explanation: { id: 31, body: '합성 AI 설명입니다.', review_status: 'pending', cached: false }, reportable: true, is_favorite: false }
+const aiError = (code: string, detail?: string) => ({ error: { code, message: 'synthetic english message', request_id: 'r-test-0001', ...(detail ? { detail } : {}) } })
+
+type AiCall = { key: string | undefined; body: { note_id: number; note_revision: number; selection: { start: number; end: number } } }
+type AiReply = { status: number; json: unknown } | 'abort'
+
+async function setupAi(page: Page, options: { member: boolean; body?: string; revision?: number; respond?: (call: AiCall, n: number) => AiReply | Promise<AiReply> }) {
+  const calls: AiCall[] = []
+  const notes = { count: 0 }
+  await page.route('**/api/me', (route) => route.fulfill({ json: options.member ? { authenticated: true, role: 'member', display_name: '합성 사용자' } : { authenticated: false } }))
+  await page.route('**/api/notes/31', (route) => {
+    notes.count += 1
+    return route.fulfill({ json: aiNote(options.body ?? 'hello UnknownWord 끝', options.revision ?? 5) })
+  })
+  await page.route('**/api/ai/explanations', async (route) => {
+    const request = route.request()
+    const call: AiCall = { key: request.headers()['idempotency-key'], body: request.postDataJSON() }
+    calls.push(call)
+    const reply = await (options.respond?.(call, calls.length) ?? { status: 200, json: aiSuccess })
+    if (reply === 'abort') return route.abort()
+    return route.fulfill(reply)
+  })
+  return { calls, notes }
+}
+
+async function selectAiText(page: Page, needle: string) {
+  await page.locator('[data-note-body]').waitFor()
+  await page.evaluate((text) => {
+    const root = document.querySelector('[data-note-body]')!
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const at = node.textContent?.indexOf(text) ?? -1
+      if (at < 0) continue
+      const range = document.createRange()
+      range.setStart(node, at)
+      range.setEnd(node, at + text.length)
+      const selection = document.getSelection()!
+      selection.removeAllRanges()
+      selection.addRange(range)
+      return
+    }
+    throw new Error(`글자를 찾지 못했어요: ${text}`)
+  }, needle)
+}
+
+async function askAi(page: Page, needle = 'UnknownWord') {
+  await selectAiText(page, needle)
+  await aiButton(page).click()
+}
+
+test('E09 요청은 Idempotency-Key 헤더와 코드포인트 위치의 본문을 보낸다(이모지 뒤 선택)', async ({ page }) => {
+  const { calls } = await setupAi(page, { member: true, body: '😀😀 앞 글자 UnknownWord 뒤', revision: 7 })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls).toHaveLength(1)
+  // 😀는 UTF-16으로 두 칸이지만 코드포인트로는 한 칸이다. 이모지 둘 + " 앞 글자 " 6칸 → 8부터 11글자
+  expect(calls[0].body).toEqual({ note_id: 31, note_revision: 7, selection: { start: 8, end: 19 } })
+  expect(calls[0].key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+})
+
+test('방문자는 E09 요청 없이 로그인 안내가 열린다', async ({ page }) => {
+  const { calls } = await setupAi(page, { member: false })
+  await page.goto('/notes/31')
+  await expect(page.getByText('hello')).toBeVisible()
+  await askAi(page)
+  await expect(aiLoginSheet(page)).toBeVisible()
+  await page.waitForTimeout(300)
+  expect(calls).toHaveLength(0)
+})
+
+test('위치를 계산하지 못하는 선택과 공백만 고른 선택에는 AI 설명 버튼이 없다', async ({ page }) => {
+  const { calls } = await setupAi(page, { member: true, body: '정상 글자\n\n    들여쓴 코드\n\n앞   뒤' })
+  await page.goto('/notes/31')
+  await expect(page.getByText('들여쓴 코드')).toBeVisible()
+  await selectAiText(page, '들여쓴 코드')
+  await page.waitForTimeout(200)
+  await expect(aiButton(page)).toHaveCount(0)
+  await selectAiText(page, '   ')
+  await page.waitForTimeout(200)
+  await expect(aiButton(page)).toHaveCount(0)
+  await selectAiText(page, '정상 글자')
+  await expect(aiButton(page)).toBeVisible()
+  expect(calls).toHaveLength(0)
+})
+
+// AC-3: 오류 코드마다 다른 안내가 보이고, 어느 것도 로그인 안내로 바뀌지 않는다.
+const FAILURES = [
+  ['429 ai_limit_reached', { status: 429, json: aiError('ai_limit_reached') }, '오늘 쓸 수 있는 AI 설명을 모두 썼어요. 나중에 다시 시도해 주세요.', false],
+  ['502 ai_unavailable', { status: 502, json: aiError('ai_unavailable') }, 'AI가 설명을 만들지 못했어요. 다시 시도해 주세요.', true],
+  ['409 in_progress', { status: 409, json: aiError('conflict', 'in_progress') }, '같은 설명을 만드는 중이에요. 잠시 뒤에 다시 확인해 주세요.', true],
+  ['409 result_unavailable', { status: 409, json: aiError('conflict', 'result_unavailable') }, '이전 요청의 설명을 다시 가져올 수 없어요. 새로 요청해 주세요.', true],
+  ['409 stale_revision', { status: 409, json: aiError('conflict', 'stale_revision') }, '노트가 바뀌었어요. 노트를 다시 불러온 뒤 단어를 다시 골라 주세요.', false],
+  ['429 rate_limited', { status: 429, json: aiError('rate_limited') }, '요청이 많아요. 잠시 뒤에 다시 시도해 주세요.', true],
+  ['404 not_found', { status: 404, json: aiError('not_found') }, '설명할 수 없는 노트예요', false],
+  ['422 validation_failed', { status: 422, json: { error: { ...aiError('validation_failed').error, fields: [{ name: 'selection.end', reason: 'out_of_range', message: 'Value is out of range' }] } } }, '이 선택으로는 설명을 만들 수 없어요. 다른 단어를 골라 주세요.', false],
+  ['500 internal_error', { status: 500, json: aiError('internal_error') }, 'AI 설명을 불러오지 못했어요', true],
+] as const
+
+for (const [name, reply, message, retryable] of FAILURES) {
+  test(`E09 ${name}는 전용 안내를 보이고 로그인 안내로 바뀌지 않는다`, async ({ page }) => {
+    await setupAi(page, { member: true, respond: () => reply })
+    await page.goto('/notes/31')
+    await askAi(page)
+    const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+    await expect(sheet.getByRole('alert')).toContainText(message)
+    // message(영어 고정 문구) 글자는 화면에 나오지 않는다
+    await expect(page.getByText('synthetic english message')).toHaveCount(0)
+    await expect(aiLoginSheet(page)).toHaveCount(0)
+    await expect(retryButton(page)).toHaveCount(retryable ? 1 : 0)
+  })
+}
+
+test('오류 안내 문구는 서로 모두 다르다', () => {
+  const texts = FAILURES.map(([, , message]) => message)
+  expect(new Set(texts).size).toBe(texts.length)
+})
+
+test('502 뒤 다시 시도하면 새 키, 409 in_progress 뒤 다시 시도하면 같은 키를 쓴다', async ({ page }) => {
+  const { calls } = await setupAi(page, {
+    member: true,
+    respond: (_call, n) => n === 1 ? { status: 502, json: aiError('ai_unavailable') }
+      : n <= 3 ? { status: 409, json: aiError('conflict', 'in_progress') }
+      : { status: 200, json: aiSuccess },
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('AI가 설명을 만들지 못했어요. 다시 시도해 주세요.')).toBeVisible()
+  await retryButton(page).click()
+  await expect(page.getByText('같은 설명을 만드는 중이에요. 잠시 뒤에 다시 확인해 주세요.')).toBeVisible()
+  expect(calls).toHaveLength(2)
+  await retryButton(page).click()
+  await expect.poll(() => calls.length).toBe(3)
+  await expect(retryButton(page)).toBeVisible()
+  await retryButton(page).click()
+  await expect(page.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls).toHaveLength(4)
+  expect(calls[1].key).not.toBe(calls[0].key) // 502(끝난 요청) 뒤: 새 키
+  expect(calls[2].key).toBe(calls[1].key) // in_progress 뒤: 같은 키
+  expect(calls[3].key).toBe(calls[1].key)
+})
+
+test('응답을 받지 못한 요청은 같은 키로, 409 result_unavailable 뒤에는 새 키로 다시 보낸다', async ({ page }) => {
+  const { calls } = await setupAi(page, {
+    member: true,
+    respond: (_call, n) => n === 1 ? 'abort'
+      : n === 2 ? { status: 409, json: aiError('conflict', 'result_unavailable') }
+      : { status: 200, json: aiSuccess },
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('AI 설명을 불러오지 못했어요')).toBeVisible()
+  await retryButton(page).click() // 응답을 못 받았으니 서버가 처리했는지 모른다 → 같은 키
+  await expect(page.getByText('이전 요청의 설명을 다시 가져올 수 없어요. 새로 요청해 주세요.')).toBeVisible()
+  await retryButton(page).click() // result_unavailable 뒤 → 새 키
+  await expect(page.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls).toHaveLength(3)
+  expect(calls[1].key).toBe(calls[0].key)
+  expect(calls[2].key).not.toBe(calls[1].key)
+})
+
+test('응답을 기다리는 중에는 다시 시도 버튼이 없고, 시트를 닫았다 같은 선택을 다시 열어도 요청은 한 번이다', async ({ page }) => {
+  const held = gate()
+  const { calls } = await setupAi(page, { member: true, respond: async () => { await held.promise; return { status: 200, json: aiSuccess } } })
+  await page.goto('/notes/31')
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('AI 설명을 만드는 중이에요')).toBeVisible()
+  await expect(retryButton(page)).toHaveCount(0)
+  await expect.poll(() => calls.length).toBe(1)
+  await page.keyboard.press('Escape')
+  await askAi(page)
+  await expect(sheet.getByText('AI 설명을 만드는 중이에요')).toBeVisible()
+  held.release()
+  await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls).toHaveLength(1)
+})
+
+test('로그인 사용자의 401 login_required만 로그인 안내를 연다', async ({ page }) => {
+  await setupAi(page, { member: true, respond: () => ({ status: 401, json: aiError('login_required') }) })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(aiLoginSheet(page)).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' })).toBeHidden()
+})
+
+test('401이어도 code가 login_required가 아니면 로그인 안내를 열지 않는다', async ({ page }) => {
+  await setupAi(page, { member: true, respond: () => ({ status: 401, json: aiError('invalid_credentials') }) })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('AI 설명을 불러오지 못했어요')).toBeVisible()
+  await expect(aiLoginSheet(page)).toHaveCount(0)
+})
+
+test('시트를 닫은 뒤 늦게 도착한 401은 로그인 안내를 열지 않는다', async ({ page }) => {
+  const held = gate()
+  const { calls } = await setupAi(page, { member: true, respond: async () => { await held.promise; return { status: 401, json: aiError('login_required') } } })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect.poll(() => calls.length).toBe(1)
+  await page.keyboard.press('Escape')
+  held.release()
+  await page.waitForTimeout(300)
+  await expect(aiLoginSheet(page)).toHaveCount(0)
+})
+
+test('409 stale_revision이면 노트를 다시 불러오고 새 개정으로 단어를 다시 고를 수 있다', async ({ page }) => {
+  const { calls, notes } = await setupAi(page, { member: true, respond: (call) => call.body.note_revision === 5 ? { status: 409, json: aiError('conflict', 'stale_revision') } : { status: 200, json: aiSuccess } })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('노트가 바뀌었어요. 노트를 다시 불러온 뒤 단어를 다시 골라 주세요.')).toBeVisible()
+  const before = notes.count
+  // 노트가 개정 6으로 바뀌었다
+  await page.route('**/api/notes/31', (route) => route.fulfill({ json: aiNote('hello UnknownWord 끝', 6) }))
+  await page.getByRole('button', { name: '노트 다시 불러오기' }).click()
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' })).toBeHidden()
+  await expect(page.getByText('hello')).toBeVisible()
+  await expect(aiButton(page)).toHaveCount(0) // 이전 선택은 버린다
+  await askAi(page)
+  await expect(page.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls.map((call) => call.body.note_revision)).toEqual([5, 6])
+  expect(before).toBeGreaterThanOrEqual(1)
+})

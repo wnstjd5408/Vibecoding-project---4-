@@ -190,11 +190,41 @@ const routes: Route[] = [
     pattern: /^\/api\/term-views$/,
     handle: () => ({ status: 200, body: { recorded: getMockSession() !== 'visitor' } }),
   },
-  // E09 AI 설명. 방문자는 항상 401 login_required다. 로그인한 사용자 응답은 이 화면들이 쓰지 않아 만들지 않는다(등록 안 된 경로와 같은 404).
+  // E09 AI 설명. 방문자는 항상 401 login_required다. 로그인한 사용자는 예시 노트 11의 선택 위치로 세 갈래 응답을 받는다(3절 예시 3).
+  //  - UnknownWord(27~38): 새로 만든 공유 설명, ExampleTerm(6~17): 사전에 있는 용어, 그 밖: 저장하지 않는 1회용 설명
   {
     method: 'POST',
     pattern: /^\/api\/ai\/explanations$/,
-    handle: () => (getMockSession() === 'visitor' ? loginRequired() : notFound()),
+    handle: ({ body }) => {
+      if (getMockSession() === 'visitor') return loginRequired()
+      const { note_id, selection } = (body ?? {}) as { note_id?: number; selection?: { start?: number; end?: number } }
+      if (note_id !== 11 || !selection) return notFound()
+      if (selection.start === 27 && selection.end === 38) {
+        return {
+          status: 200,
+          body: {
+            source: 'ai',
+            term: { id: 12, key: 'unknownword', label: 'UnknownWord' },
+            explanation: { id: 31, body: '합성 AI 설명입니다.', review_status: 'pending', cached: false },
+            reportable: true,
+            is_favorite: false,
+          },
+        }
+      }
+      if (selection.start === 6 && selection.end === 17) {
+        return {
+          status: 200,
+          body: {
+            source: 'glossary',
+            term: { id: 7, key: 'exampleterm', label: 'ExampleTerm' },
+            body_markdown: '합성 설명 문장입니다.',
+            images: [{ id: 3, url: GLOSSARY_IMAGE, alt: '합성 구조도' }],
+            is_favorite: false,
+          },
+        }
+      }
+      return { status: 200, body: { source: 'ai', term: null, explanation: { id: null, body: '합성 1회용 AI 설명입니다.' }, reportable: false } }
+    },
   },
   // E08 즐겨찾기. 방문자는 항상 401 login_required다.
   {
