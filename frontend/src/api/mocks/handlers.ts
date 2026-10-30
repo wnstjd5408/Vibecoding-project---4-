@@ -1,6 +1,6 @@
 // 가짜 응답을 한곳에 모았다. API spec v0.2 3절 예시와 2.2절 응답 모양을 따르고, 값은 모두 합성이다.
 // 실제 API가 생기면 해당 엔드포인트의 항목만 지우거나 apiSource를 real로 두면 된다.
-import type { ApiErrorBody, NoteListResponse } from '../types.ts'
+import type { ApiErrorBody, FieldError, NoteListResponse } from '../types.ts'
 import { getMockSession, setMockSession } from './session.ts'
 
 export type MockRequest = { method: string; path: string; query: URLSearchParams; body: unknown }
@@ -98,6 +98,18 @@ const RICH_NOTE = {
   images: {},
   glossary_terms: [{ term_id: 7, key: 'exampleterm', label: 'ExampleTerm' }],
   glossary_spans: spansOf(RICH_BODY, 'ExampleTerm', 7),
+}
+
+// E24로 이 세션에서 발급한 이메일. 같은 이메일을 다시 발급하면 409 email_exists를 시험할 수 있게 둔다(새로 고치면 사라진다).
+const issuedEmails = new Set<string>()
+
+// fields[].reason별 고정 문구(API spec 1.4.3, backend/app/errors.py FIELD_MESSAGES와 같다). 화면은 이 문구가 아니라 reason으로 분기한다.
+const FIELD_MESSAGES: Record<string, string> = {
+  required: 'Value is required',
+  too_long: 'Value is too long',
+  out_of_range: 'Value is out of range',
+  invalid_format: 'Value format is invalid',
+  invalid_value: 'Value is not allowed or refers to a missing item',
 }
 
 const routes: Route[] = [
@@ -215,6 +227,35 @@ const routes: Route[] = [
       if (termId !== '7') return notFound()
       favoriteTerm7 = Boolean((body as { favorited?: boolean } | undefined)?.favorited)
       return { status: 200, body: { term_id: 7, is_favorite: favoriteTerm7 } }
+    },
+  },
+  // E24 계정 발급(POST /api/admin/users, 운영자만). 요청 본문 모양은 명세를 확인하기 전 추정이다: { email, display_name, password }.
+  // 이미 있는 이메일은 409 conflict(detail email_exists), 값이 잘못되면 422 validation_failed와 fields[]다. 새로 만든 계정은 일반 사용자(member)다.
+  {
+    method: 'POST',
+    pattern: /^\/api\/admin\/users$/,
+    handle: ({ body }) => {
+      const denied = operatorOnly()
+      if (denied) return denied
+      const { email, display_name: displayName, password } = (body ?? {}) as { email?: unknown; display_name?: unknown; password?: unknown }
+      const fields: FieldError[] = []
+      const bad = (name: string, reason: string) => fields.push({ name, reason, message: FIELD_MESSAGES[reason] })
+      if (typeof email !== 'string' || email.trim() === '') bad('email', 'required')
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) bad('email', 'invalid_format')
+      if (typeof displayName !== 'string' || displayName.trim() === '') bad('display_name', 'required')
+      else if (displayName.trim().length > 80) bad('display_name', 'too_long')
+      if (typeof password !== 'string' || password === '') bad('password', 'required')
+      else if (password.length < 8) bad('password', 'out_of_range')
+      if (fields.length > 0) {
+        const error: ApiErrorBody = { error: { code: 'validation_failed', message: 'One or more fields are invalid', request_id: 'r-mock-0001', fields } }
+        return { status: 422, body: error }
+      }
+      const normalized = (email as string).trim().toLowerCase()
+      if (normalized in ACCOUNTS || issuedEmails.has(normalized)) {
+        return mockError(409, 'conflict', 'An account with this email already exists', 'email_exists')
+      }
+      issuedEmails.add(normalized)
+      return { status: 201, body: { user: { email: normalized, display_name: (displayName as string).trim(), role: 'member' } } }
     },
   },
 ]
