@@ -1571,3 +1571,151 @@ test('A가 429 대기 중일 때 같은 표시 이름의 B로 로그인하면 B�
   expect(state.calls).toBe(2)
   await expect(page.getByText('초 뒤에 다시 시도할 수 있어요')).toHaveCount(0)
 })
+
+// ---- MEG-137 AI 설명(E09) 요청·재시도 키·대기를 로그인 세션별로 분리. 실제 로그아웃·로그인 흐름과 합성 HTTP 응답으로 시험한다. ----
+// 같은 노트·개정·선택을 다른 계정(표시 이름이 같아도 된다)이 요청해도 이전 세션의 진행 중 요청·응답·오류·대기·재시도 키를 이어받으면 안 된다.
+// 실제 백엔드의 E09·세션 만료·권한/열람 기록은 확인하지 못한다.
+
+async function setupAiSwitch(page: Page, respond: (call: AiCall, n: number) => AiReply | Promise<AiReply>) {
+  const state = { loggedIn: true, calls: [] as AiCall[] }
+  await page.route('**/api/me', (route) => route.fulfill({ json: state.loggedIn ? { authenticated: true, role: 'member', display_name: '같은이름' } : { authenticated: false } }))
+  await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
+  await page.route('**/api/notes/31', (route) => route.fulfill({ json: aiNote('hello UnknownWord 끝', 5) }))
+  await page.route('**/api/auth/logout', (route) => {
+    state.loggedIn = false
+    return route.fulfill({ status: 204 })
+  })
+  await page.route('**/api/auth/login', (route) => {
+    state.loggedIn = true
+    return route.fulfill({ json: { user: { role: 'member', display_name: '같은이름' } } })
+  })
+  await page.route('**/api/ai/explanations', async (route) => {
+    const request = route.request()
+    const call: AiCall = { key: request.headers()['idempotency-key'], body: request.postDataJSON() }
+    state.calls.push(call)
+    const reply = await respond(call, state.calls.length)
+    if (reply === 'abort') return route.abort()
+    return route.fulfill(reply)
+  })
+  return state
+}
+
+// 열려 있는 시트를 닫고 로그아웃한 뒤 같은 표시 이름의 다른 계정(B)으로 로그인해, 같은 노트로 돌아온다.
+async function switchToAccountB(page: Page) {
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: /^내 계정/ }).click()
+  await page.getByRole('menuitem', { name: '로그아웃' }).click()
+  await expect(page).toHaveURL(/\/$/)
+  await goInAppQuiz(page, '/login')
+  await page.getByLabel('이메일').fill('b@example.test')
+  await page.getByLabel('비밀번호').fill('example-password')
+  await page.getByRole('button', { name: '로그인' }).click()
+  await expect(page).toHaveURL(/\/quiz$/)
+  await goInAppQuiz(page, '/notes/31')
+  await page.locator('[data-note-body]').waitFor()
+}
+
+const aiText = (text: string) => ({ status: 200, json: { ...aiSuccess, explanation: { ...aiSuccess.explanation, body: text } } })
+
+test('AC-1 A의 E09가 진행 중일 때 닫고 로그아웃 → B 로그인 → 같은 선택을 요청하면 B가 별도 요청을 보내 B 응답만 보이고, 늦은 A 성공은 영향이 없다', async ({ page }) => {
+  const held = gate()
+  const state = await setupAiSwitch(page, async (_call, n) => {
+    if (n === 1) {
+      await held.promise
+      return aiText('A의 설명')
+    }
+    return aiText('B의 설명')
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect.poll(() => state.calls.length).toBe(1)
+  await switchToAccountB(page)
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('B의 설명')).toBeVisible()
+  expect(state.calls).toHaveLength(2) // B는 A의 진행 중 요청을 이어받지 않고 자기 요청을 보낸다
+  held.release() // 늦게 도착한 A의 성공
+  await page.waitForTimeout(300)
+  await expect(page.getByText('A의 설명')).toHaveCount(0)
+  await expect(sheet.getByText('B의 설명')).toBeVisible()
+})
+
+test('AC-1 늦게 도착한 A의 오류도 B 화면과 상태에 영향을 주지 않는다', async ({ page }) => {
+  const held = gate()
+  const state = await setupAiSwitch(page, async (_call, n) => {
+    if (n === 1) {
+      await held.promise
+      return { status: 500, json: aiError('internal_error') }
+    }
+    return aiText('B의 설명')
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect.poll(() => state.calls.length).toBe(1)
+  await switchToAccountB(page)
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('B의 설명')).toBeVisible()
+  held.release()
+  await page.waitForTimeout(300)
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await expect(sheet.getByText('B의 설명')).toBeVisible()
+})
+
+for (const [name, reply, wait] of [
+  ['429 rate_limited', { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 600 } } }, '600초 뒤에 다시 시도할 수 있어요'],
+  ['409 in_progress', { status: 409, json: { error: { ...aiError('conflict', 'in_progress').error, retry_after_seconds: 600 } } }, '600초 뒤에 다시 시도할 수 있어요'],
+] as const) {
+  test(`AC-2 A의 ${name} 대기가 B에게 이어지지 않는다`, async ({ page }) => {
+    const state = await setupAiSwitch(page, (_call, n) => n === 1 ? reply : aiText('B의 설명'))
+    await page.goto('/notes/31')
+    await askAi(page)
+    await expect(page.getByRole('dialog', { name: 'UnknownWord' }).getByText(wait)).toBeVisible()
+    await switchToAccountB(page)
+    await askAi(page)
+    const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+    await expect(sheet.getByText('B의 설명')).toBeVisible()
+    expect(state.calls).toHaveLength(2)
+    await expect(sheet.getByText('초 뒤에 다시 시도할 수 있어요')).toHaveCount(0)
+  })
+}
+
+test('AC-2 B의 대기가 있는 중 늦게 온 A의 응답이 B의 대기를 바꾸지 않는다', async ({ page }) => {
+  await page.clock.install()
+  const held = gate()
+  const state = await setupAiSwitch(page, async (_call, n) => {
+    if (n === 1) {
+      await held.promise
+      return { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 5 } } }
+    }
+    return { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 600 } } }
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect.poll(() => state.calls.length).toBe(1)
+  await switchToAccountB(page)
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('600초 뒤에 다시 시도할 수 있어요')).toBeVisible()
+  held.release() // A의 늦은 429(5초 대기)
+  await page.waitForTimeout(300)
+  await page.clock.fastForward(10_000) // A의 5초가 지나도 B는 600초 대기를 유지한다
+  await expect(retryButton(page)).toHaveAttribute('aria-disabled', 'true')
+  await retryButton(page).click({ force: true })
+  await page.waitForTimeout(200)
+  expect(state.calls).toHaveLength(2)
+})
+
+test('AC-3 A의 응답 미확정(network_error) 뒤 B의 첫 요청은 새 Idempotency-Key를 쓴다', async ({ page }) => {
+  const state = await setupAiSwitch(page, (_call, n) => n === 1 ? 'abort' : aiText('B의 설명'))
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' }).getByText('AI 설명을 불러오지 못했어요')).toBeVisible()
+  await switchToAccountB(page)
+  await askAi(page)
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' }).getByText('B의 설명')).toBeVisible()
+  expect(state.calls).toHaveLength(2)
+  expect(state.calls[0].key).toBeTruthy()
+  expect(state.calls[1].key).toBeTruthy()
+  expect(state.calls[1].key).not.toBe(state.calls[0].key)
+})
