@@ -116,8 +116,8 @@ def test_escape_inside_an_nfd_body_maps_back_to_the_original_text():
     [span] = find_spans(body, [(1, "해시*테이블")])
 
     assert unicodedata.normalize("NFC", unescape_markdown(body[span.start : span.end])) == "해시*테이블"
-    # "앞"은 자모 3개 + 공백이라 4번째 코드포인트부터, 끝은 "블"(자모 3개)까지다.
-    assert (span.start, span.end) == (4, len(body) - 2)
+    # "앞"은 자모 3개 + 공백이라 4번째 코드포인트부터다. 끝 뒤에는 공백 + "뒤"(자모 2개) 3칸이 남는다.
+    assert (span.start, span.end) == (4, len(body) - 3)
 
 
 def test_escaped_backslash_and_escaped_bracket():
