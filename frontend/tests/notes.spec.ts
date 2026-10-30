@@ -1,5 +1,51 @@
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
+import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+// Exercise the real importer output, not a hand-written approximation of Markdown.
+function importedBody() {
+  const backend = fileURLToPath(new URL('../../backend/', import.meta.url))
+  const fixture = readFileSync(new URL('../../backend/tests/fixtures/notion_nested_blocks.json', import.meta.url), 'utf8')
+  return execFileSync('uv', ['run', '--no-sync', '--directory', backend, 'python', '-c',
+    'import json,sys; from types import SimpleNamespace; from scripts.notion_content import convert; tree=json.load(sys.stdin); print(convert(SimpleNamespace(children=lambda key: tree[key]), "00000000-0000-4000-8000-000000000001").markdown)'],
+  { input: fixture, encoding: 'utf8' }).trimEnd()
+}
+
+for (const width of [390, 1280]) {
+  test(`가져온 토글 코드·표를 구조와 원문 위치를 유지해 표시한다 (${width}px)`, async ({ page }) => {
+    const body = importedBody()
+    await setup(page)
+    await page.setViewportSize({ width, height: 844 })
+    const start = [...body.slice(0, body.indexOf('ExampleTerm'))].length
+    await page.route('**/api/notes/11', (route) => route.fulfill({ json: {
+      id: 11, revision: 1, title: 'Imported synthetic note', studied_on: null, subjects: [], sources: [],
+      body_markdown: body, images: {}, glossary_terms: [],
+      glossary_spans: [{ start, end: start + 'ExampleTerm'.length, term_id: 1 }],
+    } }))
+    await page.goto('/notes/11')
+    const root = page.locator('[data-note-body]')
+    await expect(root.locator('pre code')).toHaveText(['print(1)\n\nprint(2)', 'nested()'])
+    await expect(root.getByRole('table')).toHaveCount(1)
+    await expect(root.getByRole('columnheader')).toHaveText(['Name', 'Value'])
+    await expect(root.getByRole('cell')).toHaveText(['ExampleTerm', 'A | B', '<script>bad()</script>', 'Reference'])
+    await expect(root.locator('td strong')).toHaveText('ExampleTerm')
+    await expect(root.locator('[data-term-id="1"]')).toHaveText('ExampleTerm')
+    await expect(root.getByRole('link', { name: 'Reference' })).toHaveAttribute('href', 'https://example.test/reference')
+    await expect(root.locator('script')).toHaveCount(0)
+    await expect(root.getByText('Child paragraph', { exact: true })).toBeVisible()
+    const range = await root.evaluate(async (element) => {
+      const { sourceRangeOfSelection } = await import('/src/notes/selection.ts')
+      const term = element.querySelector('[data-term-id="1"]')!
+      const selection = document.createRange()
+      selection.selectNodeContents(term)
+      return sourceRangeOfSelection(element, selection)
+    })
+    expect(range && body.slice(range.start, range.end)).toBe('ExampleTerm')
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  })
+}
 
 const subjects = [{ id: 1, name: '네트워크', note_count: 2 }, { id: 2, name: 'AI', note_count: 1 }]
 const notes = [

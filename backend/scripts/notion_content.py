@@ -51,7 +51,11 @@ def convert(notion, page_id: str) -> Content:
     count = 0
     visited = set()
 
-    def walk(parent: str, depth: int = 0) -> str:
+    def list_item(body: str) -> str:
+        first, *rest = body.split("\n")
+        return "  - " + first + "".join("\n    " + line if line else "\n" for line in rest)
+
+    def walk(parent: str, depth: int = 0, as_list: bool = False) -> str:
         nonlocal count
         if depth > 32 or parent in visited:
             raise ValueError("block_limit")
@@ -66,6 +70,7 @@ def convert(notion, page_id: str) -> Content:
             kind = block["type"]
             data = block.get(kind, {})
             block_id = canonical_id(block["id"])
+            block_start = len(lines)
             text = rich_text(data.get("rich_text", []))
             # Never traverse child pages/databases, synced content, attachments,
             # bookmarks, mentions or link-to-page blocks.
@@ -99,7 +104,8 @@ def convert(notion, page_id: str) -> Content:
                         cells.insert(0, [""] * width)
                     if cells:
                         cells.insert(1, ["---"] * width)
-                        lines.append("\n".join("| " + " | ".join(row) + " |" for row in cells))
+                        table = "\n".join("| " + " | ".join(row) + " |" for row in cells)
+                        lines.append(list_item(table) if as_list else table)
                     continue
                 prefix = {"heading_1": "# ", "heading_2": "## ", "heading_3": "### ",
                           "bulleted_list_item": "- ", "numbered_list_item": "1. ",
@@ -110,14 +116,16 @@ def convert(notion, page_id: str) -> Content:
                     text = f"**{text}**"
                 lines.append(prefix + text)
                 if block.get("has_children"):
-                    child = walk(block_id, depth + 1)
-                    if kind == "toggle":
-                        child = "\n".join("  - " + line if line else "" for line in child.splitlines())
-                    elif kind in {"bulleted_list_item", "numbered_list_item", "to_do"}:
+                    child = walk(block_id, depth + 1, as_list=kind == "toggle")
+                    if kind in {"bulleted_list_item", "numbered_list_item", "to_do"}:
                         child = "\n".join("    " + line for line in child.splitlines())
                     lines.append(child)
             else:
                 result.skipped += 1
+            if as_list and len(lines) > block_start:
+                # One list item per Notion block, not per source line. Fences,
+                # multiline paragraphs and nested children keep their structure.
+                lines[block_start:] = [list_item("\n\n".join(lines[block_start:]))]
         body = "\n\n".join(lines)
         if len(body) > 200000:
             raise ValueError("body_limit")

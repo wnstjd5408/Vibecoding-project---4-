@@ -1,6 +1,7 @@
 """Synthetic Notion/PostgREST/Storage contracts; never contact real services."""
 
 import json
+from pathlib import Path
 from io import BytesIO
 from unittest.mock import Mock
 
@@ -11,6 +12,19 @@ from PIL import Image, PngImagePlugin
 from scripts import import_notion as importer
 from scripts import notion_images as images
 from scripts.notion_content import convert
+
+
+def test_toggle_preserves_multiline_blocks_and_nested_children():
+    tree = json.loads((Path(__file__).parent / "fixtures/notion_nested_blocks.json").read_text())
+    notion = Mock()
+    notion.children.side_effect = lambda block_id: tree[block_id]
+    body = convert(notion, "00000000-0000-4000-8000-000000000001").markdown
+    assert "  - ```\n    print(1)\n\n    print(2)\n    ```" in body
+    assert "  - First line\n    Second line" in body
+    assert "  - | Name | Value |\n    | --- | --- |" in body
+    assert "      - ```\n        nested()\n        ```" in body
+    assert "      - - Parent item\n\n            Child paragraph" in body
+    assert not any(line.lstrip().startswith(("- print", "- | ---")) for line in body.splitlines())
 
 SOURCE = "00000000-0000-4000-8000-000000000001"
 PAGE = "00000000-0000-4000-8000-000000000002"

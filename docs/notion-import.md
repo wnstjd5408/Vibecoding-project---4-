@@ -82,6 +82,8 @@ uv run --no-sync python -m scripts.import_notion
 문단·제목·목록·체크 항목·인용·콜아웃·코드·수식·표·토글·열·이미지를 변환한다.
 굵게·기울임·취소선·인라인 코드·HTTP(S) 링크를 보존하며 링크는 읽으러 가지 않는다.
 토글은 굵은 제목과 들여쓴 목록, 표는 Markdown 표다. 원본 화면 배치·색·밑줄은 보존하지 않는다.
+토글 안의 여러 줄 코드·문단·표·중첩 블록은 블록 단위 목록 항목으로 보존한다.
+노트 화면은 GFM 표를 파싱해 표 셀과 머리글로 표시하며, 셀 내부의 용어 표시·원문 위치 계산을 유지한다.
 본문이 200,000자를 넘거나 깊이 32·블록 10,000개를 넘으면 페이지를 실패로 센다.
 
 이미지 허용 목록은 공식 문서에서 확인한 `s3.us-west-2.amazonaws.com`의 `/secure.notion-static.com/` 경로로 제한한다.
@@ -105,6 +107,10 @@ Supabase REST·Storage 왕복, 실제 노트 변환 품질은 운영자 실행 �
 ```console
 uv run --no-sync pytest tests/test_import_notion.py -q
 ```
+
+화면 회귀 시험은 `frontend/`에서 `npm run test:e2e:notes`로 실행한다.
+`uv`와 준비된 `backend/.venv`가 필요하며, 합성 블록 fixture를 실제 변환기에 넣어 만든 본문으로
+모바일·데스크톱 코드 블록/표 표시, 용어 선택 위치, HTML 비실행을 확인한다. 실제 서비스에는 접속하지 않는다.
 
 SQL 통합 시험은 운영 DB 접속 문자열을 받지 않는다. 개발자가 `--network none`인 일회용
 `postgres:17` 컨테이너를 준비하고 그 이름을 `NOTION_IMPORT_TEST_CONTAINER` 환경변수에 넣은 뒤
