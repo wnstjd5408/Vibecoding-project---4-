@@ -143,3 +143,17 @@ test('방문자의 로그인 안내에서 로그인 버튼을 누르면 /login�
   await expect(loginSheet(page)).toHaveCount(0)
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
 })
+
+test('버튼을 누른 채 밖으로 끌어 떼도 이후 선택 변화를 버튼이 따라간다', async ({ page }) => {
+  await loginAsMember(page)
+  await selectText(page, 'UnknownWord')
+  const box = (await aiButton(page).boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height + 120)
+  await page.mouse.up()
+  await expect(aiButton(page)).toBeVisible() // 누르기만 하고 클릭이 되지 않았으니 시트는 열리지 않는다
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await page.evaluate(() => document.getSelection()!.removeAllRanges())
+  await expect(aiButton(page)).toHaveCount(0)
+})

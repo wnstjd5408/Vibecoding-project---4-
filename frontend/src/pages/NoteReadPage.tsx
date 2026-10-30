@@ -182,6 +182,7 @@ function NoteRead({ noteId }: { noteId: string }) {
               ? <SelectionAction top={pick.top} left={pick.left}
                   onPointerDown={(event) => { pressing.current = true; event.preventDefault() }}
                   onPointerCancel={() => { pressing.current = false }}
+                  onPointerLeave={() => { pressing.current = false }}
                   onClick={askAi}>AI 설명</SelectionAction>
               : null}
           </article>}
