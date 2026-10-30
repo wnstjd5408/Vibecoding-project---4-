@@ -1,4 +1,4 @@
-"""CLI only validates/freezes files; it has no live model execution command."""
+"""Offline validation, fake execution and human-review aggregation; no live command."""
 
 import argparse
 import json
@@ -8,6 +8,8 @@ from pathlib import Path
 from .dataset import freeze_dataset, load_cases, validate_dataset
 from .schema import DatasetError
 from .runner import RunConfig, run
+from .runner import private_path
+from .scoring import templates, score
 
 
 def main() -> int:
@@ -28,9 +30,28 @@ def main() -> int:
     mode = execute.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--fake", action="store_true")
+    for command in ("review-template", "report"):
+        sub = commands.add_parser(command)
+        sub.add_argument("--dataset", type=Path, required=True)
+        sub.add_argument("--state", type=Path, required=True)
+        sub.add_argument("--output", type=Path, required=True)
+        if command == "report":
+            sub.add_argument("--reviews", type=Path, required=True)
+            sub.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     try:
         cases = load_cases(args.dataset)
+        if args.command in ("review-template", "report"):
+            state = json.loads(args.state.read_text(encoding="utf-8"))
+            version = freeze_dataset(cases, "verify")["dataset_version"]
+            if version != state["identity"]["dataset_version"]:
+                raise DatasetError("score: dataset_mismatch")
+            result = templates(cases, state) if args.command == "review-template" else score(
+                cases, state, json.loads(args.reviews.read_text(encoding="utf-8")), seed=args.seed)
+            with private_path(args.output).open("x", encoding="utf-8") as stream:
+                json.dump(result, stream, ensure_ascii=False, allow_nan=False, indent=2)
+            print("SAVED: offline human-review artifact")
+            return 0
         if args.command == "run":
             result = run(cases, json.loads(args.manifest.read_text(encoding="utf-8")),
                          RunConfig(**json.loads(args.config.read_text(encoding="utf-8"))),

@@ -1,5 +1,20 @@
 # 골든 셋 형식·검증기
 
+## 사람 채점 집계
+
+`python -m evals review-template --dataset CASES --state PRIVATE_STATE --output PRIVATE_REVIEW`
+은 채점 대기 양식을 만든다. `report --dataset CASES --state PRIVATE_STATE --reviews PRIVATE_REVIEW --output PRIVATE_REPORT --seed 0`
+은 사람이 작성한 판단만 집계한다. 모든 출력은 새 파일이며 기존 파일을 덮어쓰지 않는다.
+리뷰는 출력 해시·자료 버전·검수자·근거·고유 주장 ID/판정·필수 항목별 bool·중대 오류 수·5항목 O/X를 포함한다.
+미검수는 null로 남긴다. 합계 4/5와 주장 정확도 95%를 별개로 보고한다.
+각 회차/위험 구간의 응답 평균과 주장 가중값, 분자/분모를 출력한다.
+중대 오류·필수 항목 누락·호출 실패는 평균과 관계없이 FAIL이다.
+적절한 무사실 예외는 정확도 N/A이고 미검수·미합의는 INCOMPLETE이다.
+독립 검수는 중대 오류/불일치 전부와 나머지 20%를 seed로 고정한다.
+두 번째 검수자와 합의 기록이 없으면 PASS하지 않는다.
+현재 제품 통합·사용자 이해도는 검증하지 않으므로 product_status는 INCOMPLETE로 남긴다.
+fake 결과의 PASS는 집계 논리 시험이며 AI 품질 통과가 아니다.
+
 ## 오프라인 실행기
 
 `python -m evals run --dataset CASES --manifest MANIFEST --config CONFIG --output-dir PRIVATE_DIR --dry-run`
@@ -13,7 +28,7 @@ state.json은 비공개 경로에 원자적으로 저장되며 설정·입력 �
 불명 슬롯을 pending으로 바꾸지 않는다. 재시험이 필요하면 별도의 run_id/디렉터리로 실행한다.
 모의 비용은 설정 단가 기반 시뮬레이션이며 실제 과금액이 아니다. usage 불명은 예약액을 유지한다.
 
-이 도구는 **오프라인 자료 검사**만 한다. AI 호출, 의미 자동 채점, 95% 정확도 판정은 하지 않는다. 실제 자료와 검수 결과는 저장소 밖 접근 제한 폴더에 보관한다. 저장소에는 합성 시험만 둔다.
+이 도구는 오프라인 자료 검사·모의 실행·사람 채점 집계를 수행한다. AI 호출이나 의미 자동 채점은 하지 않는다. 정확도 판정은 사람이 기록한 주장 판단을 집계한 결과다. 실제 자료와 검수 결과는 저장소 밖 접근 제한 폴더에 보관한다. 저장소에는 합성 시험만 둔다.
 
 ## 실행 (backend에서 PowerShell)
 
