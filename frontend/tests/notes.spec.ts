@@ -494,6 +494,8 @@ type FavoriteRoutes = {
   initialFavorite?: boolean // E06의 is_favorite(로그인 사용자만 응답에 포함)
   favoriteResponse?: () => { status: number; body?: object } | null // null이면 정상 저장
   delayMs?: number
+  gate?: Promise<void> // 이 약속이 풀릴 때까지 E08 응답을 보류한다(요청 중 시트를 닫는 경우를 시험한다)
+  note?: object // 노트 응답을 바꾼다(같은 용어가 여러 번 나오는 본문 등)
 }
 
 async function setupFavorite(page: Page, options: FavoriteRoutes = {}) {
@@ -502,7 +504,9 @@ async function setupFavorite(page: Page, options: FavoriteRoutes = {}) {
   await page.route('**/api/me', (route) => route.fulfill({
     json: options.member ? { authenticated: true, role: 'member', display_name: '합성 사용자' } : { authenticated: false },
   }))
-  await page.route('**/api/notes/11', (route) => route.fulfill({ json: termNote }))
+  await page.route('**/api/notes/11', (route) => route.fulfill({ json: options.note ?? termNote }))
+  // 노트 목록으로 옮기는 시험이 쓴다(앱 안 링크 이동)
+  await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
   await page.route('**/api/glossary/7', (route) => {
     calls.glossary += 1
     return route.fulfill({ json: options.member ? { ...glossary(), is_favorite: saved } : glossary() })
@@ -513,6 +517,7 @@ async function setupFavorite(page: Page, options: FavoriteRoutes = {}) {
     const body = route.request().postDataJSON() as { favorited: boolean }
     calls.bodies.push(body)
     if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs))
+    if (options.gate) await options.gate
     const failure = options.favoriteResponse?.()
     if (failure) return route.fulfill({ status: failure.status, json: failure.body ?? serverError(failure.status).json })
     saved = body.favorited
@@ -604,3 +609,126 @@ test('즐겨찾기 오류 뒤 다시 누르면 성공하고 오류 안내는 사
   await expect(favoriteAlert(page)).toHaveCount(0)
   expect(calls.favorites).toBe(2)
 })
+
+// PR #61 Codex 리뷰 P2: 요청을 보낸 뒤 시트를 닫거나 화면을 옮겼을 때 늦게 도착한 E08 응답이 현재 화면에 영향을 주면 안 된다.
+// 응답을 약속(gate)으로 붙잡아 두었다가 원하는 때 푼다. 서버 저장이 취소되는 것은 아니고, 화면이 그 결과를 쓰지 않는 것만 확인한다.
+function gate() {
+  let release!: () => void
+  const promise = new Promise<void>((resolve) => { release = resolve })
+  return { promise, release }
+}
+
+const loginRequiredFailure = () => ({ status: 401, body: { error: { code: 'login_required', message: 'Login is required', request_id: 'r-test-0001' } } })
+
+test('E08 응답을 기다리는 중 시트를 닫으면 늦게 온 401이 로그인 안내를 열지 않는다', async ({ page }) => {
+  const held = gate()
+  const calls = await setupFavorite(page, { member: true, gate: held.promise, favoriteResponse: loginRequiredFailure })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await favoriteOff(page).click()
+  await expect.poll(() => calls.favorites).toBe(1)
+  await page.keyboard.press('Escape')
+  await expect(termSheet(page)).toBeHidden()
+  held.release()
+  await page.waitForTimeout(400)
+  await expect(loginPromptSheet(page)).toHaveCount(0)
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(termLink(page)).toBeFocused()
+})
+
+test('E08 응답을 기다리는 중 목록으로 옮겨도 늦게 온 401이 이전 안내·포커스 이동·스크롤 잠금을 남기지 않는다', async ({ page }) => {
+  const held = gate()
+  const calls = await setupFavorite(page, { member: true, gate: held.promise, favoriteResponse: loginRequiredFailure })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await favoriteOff(page).click()
+  await expect.poll(() => calls.favorites).toBe(1)
+  // 시트를 닫고 앱 안 링크로 목록(/)으로 옮긴다(SPA 이동)
+  await page.keyboard.press('Escape')
+  await page.getByRole('link', { name: '목록' }).click()
+  await expect(page).toHaveURL(/\/$/)
+  held.release()
+  await page.waitForTimeout(400)
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(page.locator('body')).not.toHaveCSS('overflow', 'hidden')
+  expect(await page.evaluate(() => document.activeElement?.closest('dialog') ?? null)).toBeNull()
+})
+
+test('E08 응답을 기다리는 중 시트를 닫고 새 시트를 열면 이전 응답(401)이 새 시트를 닫거나 바꾸지 않는다', async ({ page }) => {
+  const held = gate()
+  const calls = await setupFavorite(page, { member: true, gate: held.promise, favoriteResponse: loginRequiredFailure })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await favoriteOff(page).click()
+  await expect.poll(() => calls.favorites).toBe(1)
+  await page.keyboard.press('Escape')
+  await expect(termSheet(page)).toBeHidden()
+  // 같은 용어를 다시 열면 새 시트다
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  held.release()
+  await page.waitForTimeout(400)
+  await expect(termSheet(page)).toBeVisible()
+  await expect(loginPromptSheet(page)).toHaveCount(0)
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+  await expect(favoriteOff(page)).not.toHaveAttribute('aria-disabled', 'true')
+  await expect(favoriteAlert(page)).toHaveCount(0)
+})
+
+for (const [name, failure] of [
+  ['성공', null],
+  ['일반 오류(500)', { status: 500 }],
+] as const) {
+  test(`E08 응답을 기다리는 중 시트를 닫고 새 시트를 연 뒤 ${name} 응답이 와도 새 시트에 이전 상태나 안내가 남지 않는다`, async ({ page }) => {
+    const held = gate()
+    const calls = await setupFavorite(page, { member: true, gate: held.promise, favoriteResponse: () => failure })
+    await page.goto('/notes/11')
+    await termLink(page).click()
+    await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    await favoriteOff(page).click()
+    await expect.poll(() => calls.favorites).toBe(1)
+    await page.keyboard.press('Escape')
+    await expect(termSheet(page)).toBeHidden()
+    await termLink(page).click()
+    await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    held.release()
+    await page.waitForTimeout(400)
+    // 새 시트는 자기 상태 그대로다: 이전 요청의 저장 표시도 오류 안내도 없다
+    await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+    await expect(favoriteAlert(page)).toHaveCount(0)
+    await expect(termSheet(page).getByText('즐겨찾기에 저장했어요')).toHaveCount(0)
+    await expect(loginPromptSheet(page)).toHaveCount(0)
+  })
+}
+
+// 같은 용어가 본문에 여러 번 나올 때 두 번째 링크로 열었다면 포커스는 첫 번째가 아니라 그 링크로 돌아와야 한다.
+const twiceNote = {
+  ...termNote,
+  body_markdown: 'ExampleTerm 그리고 ExampleTerm',
+  glossary_spans: [{ term_id: 7, start: 0, end: 11 }, { term_id: 7, start: 16, end: 27 }],
+}
+
+for (const [name, close] of [
+  ['Esc', (page: Page) => page.keyboard.press('Escape')],
+  ['닫기 버튼', (page: Page) => page.getByRole('button', { name: '닫기' }).click()],
+  ['막(스크림) 누르기', (page: Page) => page.mouse.click(195, 20)],
+] as const) {
+  test(`같은 용어가 두 번 나와도 두 번째 링크로 연 로그인 안내를 ${name}로 닫으면 그 링크로 포커스가 돌아오고 Enter로 다시 열린다`, async ({ page }) => {
+    await setupFavorite(page, { member: false, note: twiceNote, favoriteResponse: loginRequiredFailure })
+    await page.goto('/notes/11')
+    await expect(termLink(page)).toHaveCount(2)
+    await termLink(page).nth(1).click()
+    await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    await favoriteOff(page).click()
+    await expect(loginPromptSheet(page)).toBeVisible()
+    await close(page)
+    await expect(loginPromptSheet(page)).toBeHidden()
+    await expect(termLink(page).nth(1)).toBeFocused()
+    await expect(termLink(page).nth(0)).not.toBeFocused()
+    await termLink(page).nth(1).press('Enter')
+    await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  })
+}

@@ -77,6 +77,15 @@ function TermSheetContent({ termId, onLoginRequired }: { termId: number; onLogin
   // 열람 기록 결과: 아직(null), 기록됨(true), 기록 안 됨(false: 서버가 false를 줬거나 요청이 실패)
   const [recorded, setRecorded] = useState<boolean | null>(null)
   const viewSent = useRef(false)
+  // 이 시트 내용이 아직 화면에 있는지. 시트가 닫히거나 다른 노트·화면으로 옮겨 내용이 사라지면 false가 된다.
+  // 닫힌 뒤 늦게 도착한 즐겨찾기 응답이 새 시트나 현재 화면에 영향을 주지 않게 쓴다(서버 저장이 취소된다는 뜻은 아니다).
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
   // 즐겨찾기: 응답을 받은 뒤에만 상태를 바꾼다(null이면 E06의 is_favorite를 쓴다). 요청 중에는 중복 요청을 막는다.
   const [favoriteSaved, setFavoriteSaved] = useState<boolean | null>(null)
   const [favoritePending, setFavoritePending] = useState(false)
@@ -137,12 +146,14 @@ function TermSheetContent({ termId, onLoginRequired }: { termId: number; onLogin
     setFavoriteFailed(false)
     try {
       const response = await apiFetch<FavoriteResponse>(`/api/favorites/${termId}`, { method: 'PUT', body: { favorited: next } })
-      setFavoriteSaved(response.is_favorite)
+      // 그 사이 시트가 닫혔거나 화면이 바뀌었으면 결과를 쓰지 않는다.
+      if (alive.current) setFavoriteSaved(response.is_favorite)
     } catch (error) {
+      if (!alive.current) return
       // 401 login_required는 로그인 안내가 맡는다. 눌림 상태는 바뀐 적이 없어 되돌릴 것도 없다. 그 밖의 오류는 여기서 안내한다.
       if (!onLoginRequired(error)) setFavoriteFailed(true)
     } finally {
-      setFavoritePending(false)
+      if (alive.current) setFavoritePending(false)
     }
   }
 
