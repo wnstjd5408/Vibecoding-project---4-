@@ -193,7 +193,7 @@
           "note": true,
           "box": true,
           "w": 300,
-          "text": "한계·메모\nPreview 역할은 staging과 PR 미리보기\n둘 다 맡을 수 있다(sub에 브랜치 없음)\nstaging 밖 차단은 MEG-120 예정\n역할마다 Bedrock InvokeModel 정책 1개\nSTS→CloudTrail 기록 선은 생략"
+          "text": "한계·메모\nPreview 역할은 staging과 PR 미리보기\n둘 다 맡을 수 있다(sub에 브랜치 없음)\nstaging 밖 Preview는 앱이 STS 전에 차단\n역할마다 Bedrock InvokeModel 정책 1개\nSTS→CloudTrail 기록 선은 생략"
         }
       ]
     }
