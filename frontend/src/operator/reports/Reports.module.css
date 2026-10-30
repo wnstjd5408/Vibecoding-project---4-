@@ -1,0 +1,290 @@
+/* 목업 F5-2: 제목과 상태 선택, 아래에 신고 표 */
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.title {
+  margin: 0;
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 700;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.filterLabel {
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.filterSelect {
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-200);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.status {
+  margin: 0 0 var(--space-3);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.tableWrap {
+  overflow-x: auto;
+  border: 1px solid var(--surface-300);
+  border-radius: var(--radius-md);
+  background: var(--surface-200);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.table caption {
+  padding: var(--space-3) var(--space-4);
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+  text-align: left;
+}
+
+.table th {
+  background: var(--surface-200);
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.table td,
+.table th {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--surface-300);
+}
+
+.table tr:last-child td {
+  border-bottom: 0;
+}
+
+.table td:last-child {
+  padding-block: var(--space-2);
+}
+
+.kind {
+  margin: var(--space-1) 0 0;
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.reportTitle {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 700;
+}
+
+.reportBody {
+  margin: 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.empty {
+  margin: 0;
+  padding: var(--space-8) var(--space-4);
+}
+
+.dialog {
+  box-sizing: border-box;
+  width: min(480px, calc(100% - 32px));
+  padding: var(--space-6);
+  border: 1px solid var(--surface-300);
+  border-radius: var(--radius-md);
+  background: var(--surface-200);
+  color: var(--ink);
+}
+
+.dialog::backdrop {
+  background: color-mix(in srgb, var(--ink) 40%, transparent);
+}
+
+.dialogTitle {
+  margin: var(--space-2) 0 var(--space-3);
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 700;
+}
+
+.dialogReport {
+  margin: 0 0 var(--space-3);
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 700;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+}
+
+.hint {
+  margin: 0 0 var(--space-4);
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.error {
+  margin: 0 0 var(--space-3);
+  color: var(--red-pen);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+/* F5-3 사전에 바른 설명 넣기: 왼쪽 신고된 AI 설명 + 오른쪽 용어 폼 */
+.link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.pageTitle {
+  margin: 0 0 var(--space-4);
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 700;
+}
+
+.correctLayout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-6);
+}
+
+.card,
+.formCard {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--surface-200);
+  border: 1px solid var(--surface-300);
+  border-radius: var(--radius-lg);
+}
+
+.card {
+  flex: 0 1 416px;
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 17px;
+  line-height: 26px;
+  font-weight: 700;
+}
+
+.formCard {
+  flex: 1 1 480px;
+  min-width: 0;
+  max-width: 680px;
+  gap: var(--space-4);
+  padding: var(--space-6);
+}
+
+.formTitle {
+  margin: 0;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 700;
+}
+
+.description {
+  min-height: 140px;
+  resize: vertical;
+}
+
+.imageField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.label {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+}
+
+.imageRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.image {
+  max-width: 160px;
+  height: 96px;
+  object-fit: contain;
+}
+
+.notice {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+/* "취소"는 목록으로 돌아가는 링크라 버튼과 같은 모양으로 그린다 */
+.cancel {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  text-decoration: none;
+}
