@@ -192,6 +192,23 @@ def test_resume_after_storage_upload_before_image_row():
     assert second.notes == 0 and second.images == 1 and len(service.objects) == 1
 
 
+def test_svg_resume_adds_only_missing_png_and_second_run_adds_zero():
+    service = Service()
+    service.notes = [{"id": 7, "body_markdown": "app edit", "is_published": True}]
+    raw = b'<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="red"/></svg>'
+    fetch = Mock(return_value=raw)
+    first, second = importer.Counts(), importer.Counts()
+    importer.run(*clients(service), first, fetch)
+    assert (first.notes, first.images, first.rejected_images, first.failed_images) == (0, 1, 0, 0)
+    stored = next(iter(service.objects.values()))
+    with Image.open(BytesIO(stored)) as picture:
+        assert picture.format == "PNG" and picture.getpixel((0, 0)) == (255, 0, 0, 255)
+    importer.run(*clients(service), second, fetch)
+    assert (second.notes, second.images, second.skipped_images) == (0, 0, 1)
+    assert service.notes == [{"id": 7, "body_markdown": "app edit", "is_published": True}]
+    assert fetch.call_count == 1
+
+
 @pytest.mark.parametrize("change", ["unchecked", "archived", "foreign_parent"])
 def test_unselected_pages_never_read_or_written(change):
     service = Service()
@@ -274,7 +291,7 @@ def test_numeric_connection_preserves_tls_hostname(monkeypatch):
 
 @pytest.mark.parametrize("status,headers,data", [(302, {"Location": "http://127.0.0.1"}, b""),
     (200, {"Content-Length": str(images.MAX_BYTES + 1)}, b""), (200, {"Content-Encoding": "gzip"}, b""),
-    (200, {"Content-Type": "image/svg+xml"}, b"<svg/>"), (200, {}, b"x" * (images.MAX_BYTES + 1))], ids=["redirect", "length", "encoding", "svg", "stream"])
+    (200, {}, b"x" * (images.MAX_BYTES + 1))], ids=["redirect", "length", "encoding", "stream"])
 @pytest.mark.parametrize("url", [URL, FILE_URL])
 def test_download_rejects_redirect_and_stream_limits(monkeypatch, status, headers, data, url):
     connection, response = Mock(), Mock()
