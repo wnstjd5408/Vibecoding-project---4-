@@ -354,6 +354,8 @@ GitHub Actions `DB Backup`(`.github/workflows/db-backup.yml`)이 매주 월요�
 
 **실패 알림**
 
+덤프 실패 진단은 `backend/scripts/diagnose_backup.py`가 고정 코드만 출력한다. URL·사용자명·비밀번호·호스트·오류 원문은 출력하지 않는다. `DB_URL_*`·`DB_PASSWORD_*`는 접속 문자열 형식, `DB_SESSION_POOLER_REQUIRED`는 Session pooler와 5432 포트 선택, `DB_AUTH_FAILED`는 인증, `DB_USER_OR_PROJECT_INVALID`는 사용자·프로젝트 지정, `DB_PERMISSION_DENIED`는 DB 권한을 확인한다. `DB_DNS_FAILED`·`DB_CONNECTION_*`·`DB_TLS_FAILED`는 네트워크, `DB_VERSION_MISMATCH`는 덤프 도구 버전, `DOCKER_UNAVAILABLE`·`CONTAINER_IMAGE_FAILED`는 컨테이너 실행 환경을 확인한다. 분류할 수 없으면 `DUMP_FAILURE_UNCLASSIFIED`만 출력하며 원문을 공개 로그에 붙이지 않는다. 형식 검사 통과는 비밀번호나 대상 프로젝트가 맞다는 증거가 아니다.
+
 예약 실행이 실패하면 GitHub이 워크플로의 예약(cron)을 마지막으로 바꾼 사람에게 메일을 보낸다. 이미지 행에 파일이 없으면 받은 파일은 올린 뒤 실패로 끝난다. 공개 저장소의 예약 실행은 60일 동안 저장소 활동이 없으면 GitHub이 꺼 버린다. 꺼져 있는 동안 새 백업은 생기지 않지만 마지막 8개는 남는다. **Actions → DB Backup → Enable workflow**로 다시 켠다.
 
 **백업 확인 (AC-2, 사람)**
