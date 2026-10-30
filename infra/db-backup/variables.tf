@@ -17,9 +17,9 @@ variable "home_region" {
 }
 
 # 2026-10-30 Q6 결정: 최근 8개 보관(주 1회 기준 약 2개월). 수동 실행도 1개로 센다.
-# 수명 주기 규칙은 하루 단위로 돌아서 새 백업 직후에는 하루 동안 9개가 있을 수 있다.
+# 밀려난 이전 버전도 14일은 남기므로(main.tf) 평소에는 9~10개가 있다.
 variable "retention_count" {
-  description = "db/latest/와 glossary-images/latest/의 키마다 남기는 백업 수(현재 버전 포함)"
+  description = "db/latest/backup.tar와 glossary-images/latest/images.tar마다 남기는 최소 백업 수(현재 버전 포함)"
   type        = number
   default     = 8
 

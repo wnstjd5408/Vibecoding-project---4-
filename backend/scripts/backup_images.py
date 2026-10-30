@@ -10,7 +10,8 @@ DB 덤프에는 Storage 파일이 들어 있지 않아서 따로 받는다. 백�
 
 종료 코드: 0 = 행마다 파일이 있다, 3 = 파일이 없는 행이 있다(받은 파일은 모두 남는다), 그 밖 = 실행 실패.
 행이 없는 파일은 실패로 보지 않는다. 이미지 행을 지운 뒤 Storage 객체는 storage_delete_jobs가 나중에
-지우므로(기술 검토 4절) 그 사이에는 정상적으로 생긴다. 개수는 manifest.json과 출력에 남긴다.
+지우므로(기술 검토 4절) 그 사이에는 정상적으로 생긴다. 목록을 받은 뒤 지워져 다운로드가 404인 파일은
+건너뛰고 개수만 남긴다. 개수는 manifest.json과 출력에 남긴다.
 공개 로그에는 개수만 찍는다. 경로 목록은 <폴더>/manifest.json에만 쓴다.
 """
 
@@ -30,6 +31,8 @@ TABLES = frozenset({"note_images", "glossary_images"})
 PAGE_SIZE = 1000
 TIMEOUT_SECONDS = 30
 EXIT_MISSING = 3
+# 서버가 offset을 무시해 같은 쪽을 계속 돌려줄 때 끝없이 돌지 않게 하는 상한
+MAX_ITEMS = 1_000_000
 # Supabase 대시보드에서 폴더를 만들면 생기는 빈 객체. 이미지가 아니다.
 PLACEHOLDER_NAME = ".emptyFolderPlaceholder"
 
@@ -40,6 +43,10 @@ Fetch = Callable[[str, str, dict | None], bytes]
 class BackupError(Exception):
     """설정 오류나 Supabase 응답 오류. 메시지에 키·객체 경로·응답 본문을 넣지 않는다."""
 
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
 
 @dataclass(frozen=True)
 class Comparison:
@@ -47,6 +54,7 @@ class Comparison:
     rows: int
     missing_files: list[str]  # 행은 있는데 파일이 없다 — 백업이 빠진 것이다
     extra_files: list[str]  # 파일은 있는데 행이 없다 — 삭제 대기 중일 수 있다
+    vanished_files: int = 0  # 목록에는 있었는데 다운로드 때 404 — 그 사이 지워졌다
 
     @property
     def complete(self) -> bool:
@@ -79,7 +87,7 @@ def make_fetch(base_url: str, secret_key: str) -> Fetch:
             with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
                 return response.read()
         except urllib.error.HTTPError as error:
-            raise BackupError(f"Supabase 응답 {error.code}: {_endpoint_kind(url)}") from None
+            raise BackupError(f"Supabase 응답 {error.code}: {_endpoint_kind(url)}", status=error.code) from None
         except (urllib.error.URLError, OSError) as error:
             # 연결 실패, 본문을 읽다 끊김·시간 초과
             raise BackupError(f"Supabase 연결 실패({type(error).__name__}): {_endpoint_kind(url)}") from None
@@ -111,6 +119,8 @@ def list_objects(fetch: Fetch, bucket: str, prefix: str = "") -> list[str]:
             elif item["name"] != PLACEHOLDER_NAME:
                 paths.append(name)
         offset += len(items)
+        if offset > MAX_ITEMS:
+            raise BackupError("Storage 목록이 끝나지 않는다")
 
 
 def list_row_paths(fetch: Fetch, table: str) -> list[str]:
@@ -126,6 +136,8 @@ def list_row_paths(fetch: Fetch, table: str) -> list[str]:
             return paths
         paths.extend(row["storage_path"] for row in rows)
         offset += len(rows)
+        if offset > MAX_ITEMS:
+            raise BackupError("REST 조회가 끝나지 않는다")
 
 
 def safe_target(out_dir: Path, object_path: str) -> Path:
@@ -140,17 +152,28 @@ def safe_target(out_dir: Path, object_path: str) -> Path:
     return target
 
 
-def download_all(fetch: Fetch, bucket: str, paths: list[str], out_dir: Path) -> None:
+def download_all(fetch: Fetch, bucket: str, paths: list[str], out_dir: Path) -> list[str]:
+    """받은 파일 경로를 돌려준다. 그 사이 지워져 404인 파일은 빠진다."""
     quoted_bucket = urllib.parse.quote(bucket, safe="")
     # 받기 전에 모든 경로를 검사해 나쁜 이름이 하나라도 있으면 아무것도 쓰지 않는다.
     targets = [(path, safe_target(out_dir, path)) for path in paths]
+    downloaded: list[str] = []
     for path, target in targets:
+        try:
+            content = fetch("GET", f"/storage/v1/object/authenticated/{quoted_bucket}/{_quote_path(path)}", None)
+        except BackupError as error:
+            # Storage는 없는 객체에 400 또는 404를 준다(버전에 따라 다르다).
+            if error.status in (400, 404):
+                continue
+            raise
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(fetch("GET", f"/storage/v1/object/authenticated/{quoted_bucket}/{_quote_path(path)}", None))
+        target.write_bytes(content)
+        downloaded.append(path)
+    return downloaded
 
 
-def compare(file_paths: list[str], row_paths: list[str]) -> Comparison:
-    """파일 목록과 행의 storage_path를 경로 단위로 대조한다. storage_path는 버킷 안 경로다."""
+def compare(file_paths: list[str], row_paths: list[str], vanished_files: int = 0) -> Comparison:
+    """받은 파일과 행의 storage_path를 경로 단위로 대조한다. storage_path는 버킷 안 경로다."""
     files = set(file_paths)
     rows = set(row_paths)
     return Comparison(
@@ -158,17 +181,19 @@ def compare(file_paths: list[str], row_paths: list[str]) -> Comparison:
         rows=len(row_paths),
         missing_files=sorted(rows - files),
         extra_files=sorted(files - rows),
+        vanished_files=vanished_files,
     )
 
 
 def run(fetch: Fetch, bucket: str, table: str, out_dir: Path) -> Comparison:
     files_dir = out_dir / "files"
     files_dir.mkdir(parents=True, exist_ok=True)
-    # 목록 직후에 행을 읽는다. 다운로드가 끝난 뒤에 읽으면 그동안 올라온 이미지가 "파일 없는 행"으로 잡힌다.
-    object_paths = list_objects(fetch, bucket)
+    # 행을 먼저 읽고 바로 목록을 받는다. 그 사이 올라온 이미지는 "행 없는 파일"(경고)로만 잡힌다.
+    # 반대 순서면 "파일 없는 행"(실패)으로 잡힌다.
     row_paths = list_row_paths(fetch, table)
-    download_all(fetch, bucket, object_paths, files_dir)
-    result = compare(object_paths, row_paths)
+    object_paths = list_objects(fetch, bucket)
+    downloaded = download_all(fetch, bucket, object_paths, files_dir)
+    result = compare(downloaded, row_paths, vanished_files=len(object_paths) - len(downloaded))
     manifest = {
         "bucket": bucket,
         "table": table,
@@ -177,6 +202,7 @@ def run(fetch: Fetch, bucket: str, table: str, out_dir: Path) -> Comparison:
         "complete": result.complete,
         "missing_files": result.missing_files,
         "extra_files": result.extra_files,
+        "vanished_files": result.vanished_files,
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return result
@@ -206,7 +232,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"{args.table}: 파일 {result.files}개, 행 {result.rows}개, "
-        f"파일 없는 행 {len(result.missing_files)}개, 행 없는 파일 {len(result.extra_files)}개"
+        f"파일 없는 행 {len(result.missing_files)}개, 행 없는 파일 {len(result.extra_files)}개, "
+        f"받는 중 지워진 파일 {result.vanished_files}개"
     )
     return 0 if result.complete else EXIT_MISSING
 

@@ -133,13 +133,52 @@ def test_run_writes_nothing_when_any_path_is_bad(tmp_path):
     assert not any(c for c in fake.calls if "/authenticated/" in c[1])
 
 
-def test_run_reads_rows_before_downloading(tmp_path):
+def test_run_reads_rows_before_listing(tmp_path):
     fake = FakeStorage({"a.png": b"1"}, ["a.png"])
 
     run(fake, "glossary", "glossary_images", tmp_path)
 
     kinds = [("rest" if "/rest/" in c[1] else "download" if "/authenticated/" in c[1] else "list") for c in fake.calls]
-    assert kinds.index("rest") < kinds.index("download")
+    assert kinds.index("rest") < kinds.index("list") < kinds.index("download")
+
+
+@pytest.mark.parametrize("status", [400, 404])
+def test_run_skips_files_deleted_after_listing(tmp_path, status):
+    fake = FakeStorage({"a.png": b"1", "gone.png": b"2"}, ["a.png"])
+    original = fake.__call__
+
+    def deleted_midway(method, url, body):
+        if url.endswith("/gone.png"):
+            raise BackupError("Supabase 응답", status=status)
+        return original(method, url, body)
+
+    result = run(deleted_midway, "glossary", "glossary_images", tmp_path)
+
+    assert result.complete
+    assert (result.files, result.vanished_files, result.extra_files) == (1, 1, [])
+    assert not (tmp_path / "files" / "gone.png").exists()
+
+
+def test_run_fails_on_other_download_errors(tmp_path):
+    fake = FakeStorage({"a.png": b"1"}, ["a.png"])
+    original = fake.__call__
+
+    def server_error(method, url, body):
+        if "/authenticated/" in url:
+            raise BackupError("Supabase 응답 500", status=500)
+        return original(method, url, body)
+
+    with pytest.raises(BackupError):
+        run(server_error, "glossary", "glossary_images", tmp_path)
+
+
+def test_paging_stops_when_server_ignores_offset(monkeypatch):
+    monkeypatch.setattr(backup_images, "MAX_ITEMS", 10)
+    fake = FakeStorage({}, [])
+    fake._list = lambda prefix, offset, limit: [{"name": "same.png", "id": "x"}]
+
+    with pytest.raises(BackupError):
+        list_objects(fake, "glossary")
 
 
 def test_run_downloads_and_writes_manifest(tmp_path):
@@ -168,7 +207,7 @@ def test_main_exit_code_when_rows_have_no_file(tmp_path, monkeypatch, capsys):
 
     out = capsys.readouterr()
     assert code == backup_images.EXIT_MISSING
-    assert "파일 1개, 행 2개, 파일 없는 행 1개, 행 없는 파일 0개" in out.out
+    assert "파일 1개, 행 2개, 파일 없는 행 1개, 행 없는 파일 0개, 받는 중 지워진 파일 0개" in out.out
     # 공개 로그에 경로가 찍히지 않는다.
     assert "b.png" not in out.out + out.err
 

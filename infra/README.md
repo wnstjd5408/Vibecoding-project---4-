@@ -296,13 +296,14 @@ GitHub Actions `DB Backup`(`.github/workflows/db-backup.yml`)이 매주 월요�
 **구성**
 
 - 버킷 `<owner>-cs-learning-db-backup`(ap-northeast-2): 공개 차단, 기본 암호화 SSE-S3, TLS가 아닌 요청 거부, 버전 관리.
-  - `db/latest/`: `roles.sql.gz`, `schema.sql.gz`, `data.sql.gz`, `counts.txt`(표별 행 수), `backup-info.json`(백업 ID·커밋). 데이터 덤프에는 `auth` 스키마(계정·비밀번호 해시·세션)와 `storage` 메타데이터도 들어 있다.
-  - `glossary-images/latest/`: 사전 이미지 `files/`, `manifest.json`(파일·행 대조 결과), `backup-info.json`
-  - `note-images/<백업 ID>/`: 노트 이미지. Notion 가져오기 직후 수동 실행으로 한 번 만든다.
-- 보관 개수: `db/latest/`·`glossary-images/latest/`는 실행마다 같은 키에 덮어쓰고, 버전 관리가 이전 백업을 이전 버전으로 남긴다. 수명 주기가 키마다 최근 `retention_count`(기본 8)개만 남기고 더 오래된 이전 버전을 지운다. 날짜가 아니라 개수로 세므로 예약 실행이 멈춰도 마지막 백업은 지워지지 않는다. 규칙이 하루 단위로 돌아서 새 백업 직후 하루 동안은 9개가 있을 수 있다. 수동 실행도 1개로 센다. `note-images/`는 지우지 않는다.
-- 역할 `<owner>-db-backup`: GitHub Environment `db-backup`에서 온 토큰만 받는다. 권한은 위 세 위치의 `s3:PutObject`뿐이다. 이 역할로는 백업을 읽거나 지울 수 없다. 덮어쓴 백업은 이전 버전으로 남지만, 이 역할로 8번 넘게 덮어쓰면 정상 백업이 밀려난다.
-- 행 수(`counts.txt`)는 데이터 덤프의 `COPY` 블록을 세어 만든다. 덤프와 같은 시점이고 모든 표가 들어간다.
-- 이미지 대조: 행은 있는데 파일이 없으면 백업이 빠진 것이라 실패로 끝낸다. 파일은 있는데 행이 없으면 경고만 한다. 이미지 행을 지운 뒤 Storage 객체는 삭제 작업(`storage_delete_jobs`)이 나중에 지우므로 그 사이에는 정상적으로 생긴다. 대시보드가 폴더를 만들 때 생기는 `.emptyFolderPlaceholder`는 이미지로 세지 않는다. 사전 이미지와 노트 이미지가 한 버킷을 나눠 쓰면 서로의 파일이 "행 없는 파일"로 잡힌다.
+  - `db/latest/backup.tar`: `roles.sql.gz`, `schema.sql.gz`, `data.sql.gz`, `counts.txt`(표별 행 수), `backup-info.json`(백업 ID·커밋)을 묶은 파일. 데이터 덤프에는 `auth` 스키마(계정·비밀번호 해시·세션)와 `storage` 메타데이터도 들어 있다.
+  - `glossary-images/latest/images.tar`: 사전 이미지 `files/`, `manifest.json`(파일·행 대조 결과), `backup-info.json`을 묶은 파일
+  - `note-images/<백업 ID>/images.tar`: 노트 이미지. Notion 가져오기 직후 수동 실행으로 한 번 만든다.
+- 백업 하나는 tar 파일 하나다. 그래서 S3 버전 하나가 백업 하나이고, 이전 백업을 고를 때 파일끼리 버전을 맞출 필요가 없다. 이미지 tar는 그 시점의 스냅숏이라 Storage에서 지운 이미지는 다음 백업에서 빠진다.
+- 보관 개수: 두 `latest` 키는 실행마다 덮어쓰고, 버전 관리가 이전 백업을 이전 버전으로 남긴다. 수명 주기는 최근 `retention_count`(기본 8)개보다 오래되고 이전 버전이 된 지 14일이 지난 버전만 지운다. 그래서 평소에는 9~10개가 있다. 날짜가 아니라 개수로 세므로 예약 실행이 멈춰도 백업은 남는다. 수동 실행도 1개로 센다. `note-images/`는 지우지 않는다.
+- 역할 `<owner>-db-backup`: GitHub Environment `db-backup`에서 온 토큰만 받는다. 권한은 위 세 위치의 `s3:PutObject`뿐이다. 이 역할로는 백업을 읽거나 지울 수 없다. 덮어쓴 백업은 이전 버전으로 남고, 짧은 시간에 8번 넘게 덮어써도 밀려난 백업은 14일 동안 남는다.
+- 행 수(`counts.txt`)는 데이터 덤프의 `COPY` 블록을 세어 만든다. 덤프와 같은 시점이고 모든 표가 들어간다. 그래서 복원 시험은 "덤프를 빠짐없이 되돌릴 수 있다"를 확인하고, "덤프가 운영 DB와 같다"는 확인하지 않는다.
+- 이미지 대조: 행을 먼저 읽고 파일 목록을 받는다. 행은 있는데 파일이 없으면 백업이 빠진 것이라 실패로 끝낸다. 파일은 있는데 행이 없으면 경고만 한다. 이미지 행을 지운 뒤 Storage 객체는 삭제 작업(`storage_delete_jobs`)이 나중에 지우므로 그 사이에는 정상적으로 생긴다. 목록을 받은 뒤 지워져 다운로드가 404인 파일은 건너뛰고 개수만 남긴다. 대시보드가 폴더를 만들 때 생기는 `.emptyFolderPlaceholder`는 이미지로 세지 않는다. 사전 이미지와 노트 이미지가 한 버킷을 나눠 쓰면 서로의 파일이 "행 없는 파일"로 잡힌다.
 - 이미지 버킷은 아직 없다. 이미지 버킷 이름을 정하는 이슈(MEG-81·MEG-85)가 끝나면 Environment 변수를 넣는다. 사전 이미지 변수가 없으면 이미지 단계는 건너뛴다. 노트 이미지를 요청했는데 변수가 없으면 실패한다.
 - 공개 로그에는 파일 이름·크기·백업 ID와 이미지 대조 개수만 찍는다. 행 수(사용자 수 포함), CLI·AWS 오류 원문(계정 ID가 들어 있다)은 찍지 않는다.
 
@@ -320,6 +321,7 @@ GitHub Actions `DB Backup`(`.github/workflows/db-backup.yml`)이 매주 월요�
    ```powershell
    terraform apply plan.tfplan
    Remove-Item plan.tfplan
+   terraform plan    # No changes.여야 한다. 수명 주기 규칙에 계속 차이가 잡히면 알린다
    terraform output
    ```
 3. Supabase 대시보드 **Project Settings → API Keys**에서 백업 전용 secret key를 새로 만든다. 백엔드 키를 같이 쓰면 이 Environment에서 키가 샐 때 백엔드 키도 바꿔야 한다(용도별 키, `docs/architecture.md` 8절·D-070). 이미지 버킷이 생기기 전에는 이 단계를 미뤄도 된다.
@@ -354,16 +356,19 @@ GitHub Actions `DB Backup`(`.github/workflows/db-backup.yml`)이 매주 월요�
 
 ```powershell
 $bucket = terraform output -raw bucket_name
-aws s3api list-object-versions --bucket $bucket --prefix db/latest/data.sql.gz --query "Versions[].[LastModified,Size,VersionId]" --output table
+aws s3api list-object-versions --bucket $bucket --prefix db/latest/backup.tar --query "Versions[].[LastModified,Size,VersionId]" --output table
 ```
 
 **복원 시험 (AC-4, 사람, 로컬)**
 
 운영 DB에 복원하지 않는다. 로컬 Supabase에 데이터 덤프를 넣어 `counts.txt`와 비교한다. 2026-10-30 합성 데이터(표 58개, 이미지 행 1007개)로 이 절차를 시험해 모든 표의 행 수가 같음을 확인했다.
 
-1. 백업을 내려받는다. 실제 사용자 데이터라 저장소 폴더 밖에 받고 시험 뒤 지운다. 최신 백업이 아니라 이전 백업을 쓰려면 위 버전 목록의 `VersionId`로 `aws s3api get-object --version-id`를 쓴다. 같은 백업의 파일인지는 `backup-info.json`의 백업 ID로 확인한다.
+1. 백업을 내려받아 tar를 푼다. 실제 사용자 데이터라 저장소 폴더 밖에 받고 시험 뒤 지운다. 이전 백업을 쓰려면 위 버전 목록의 `VersionId`를 `get-object`에 넘긴다.
    ```powershell
-   aws s3 cp "s3://$bucket/db/latest/" $env:TEMP\restore --recursive
+   New-Item -ItemType Directory -Force $env:TEMP\restore | Out-Null
+   aws s3 cp "s3://$bucket/db/latest/backup.tar" $env:TEMP\restore\backup.tar
+   # 이전 백업: aws s3api get-object --bucket $bucket --key db/latest/backup.tar --version-id <VersionId> $env:TEMP\restore\backup.tar
+   tar -xf $env:TEMP\restore\backup.tar -C $env:TEMP\restore
    ```
 2. `backup-info.json`의 커밋에서 로컬 DB를 마이그레이션만 적용한 빈 상태로 만든다. 시드를 넣으면 행 수가 달라지므로 `--no-seed`를 쓴다.
    ```powershell
@@ -387,7 +392,7 @@ aws s3api list-object-versions --bucket $bucket --prefix db/latest/data.sql.gz -
    ```
 5. 내려받은 파일을 지우고 `npx supabase db reset`으로 로컬 DB를 되돌린다.
 
-새 Supabase 프로젝트로 옮겨야 할 때는 Supabase 문서 "Backup and restore using CLI"의 순서(roles → schema → data)를 따른다. 이미지 파일은 `files/` 폴더를 같은 경로로 다시 올린다.
+새 Supabase 프로젝트로 옮겨야 할 때는 Supabase 문서 "Backup and restore using CLI"의 순서(roles → schema → data)를 따른다. 이미지는 `images.tar`를 풀어 `files/` 폴더를 같은 경로로 다시 올린다.
 
 ## 정리(삭제) 방법
 

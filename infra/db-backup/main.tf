@@ -2,9 +2,10 @@
 # 버킷 정책과 IAM 역할은 Infra CD apply 역할의 권한 밖이라 이 폴더는 사람이 로컬에서만 apply한다.
 #
 # 버킷 안 위치:
-# - db/latest/                주 1회 DB 덤프(roles·schema·data)와 표별 행 수. 같은 키에 덮어쓴다.
-# - glossary-images/latest/   주 1회 사전 이미지. 같은 키에 덮어쓴다.
-# - note-images/<시각>/         Notion 가져오기 직후 1회 노트 이미지. 지우지 않는다(Q11 결정).
+# - db/latest/backup.tar               주 1회 DB 덤프(roles·schema·data)와 표별 행 수. 같은 키에 덮어쓴다.
+# - glossary-images/latest/images.tar  주 1회 사전 이미지. 같은 키에 덮어쓴다.
+# - note-images/<백업 ID>/images.tar    Notion 가져오기 직후 1회 노트 이미지. 지우지 않는다(Q11 결정).
+# 백업 하나를 tar 하나로 묶어 버전 하나가 백업 하나가 되게 한다.
 #
 # 보관 개수(2026-10-30 Q6 결정, 최근 8개)는 날짜가 아니라 버전 수로 센다. 버전 관리를 켜고 같은 키에
 # 덮어쓰면 이전 백업이 이전 버전으로 남고, 수명 주기가 retention_count개를 넘는 이전 버전만 지운다.
@@ -58,7 +59,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "backup" {
   bucket = aws_s3_bucket.backup.id
 
   # 현재 버전 1개 + 이전 버전 retention_count - 1개를 남긴다. 그보다 오래된 이전 버전은 이전 버전이 된 지
-  # 하루 뒤 지운다. 현재 버전은 만료시키지 않으므로 실행이 멈춰도 마지막 백업은 남는다.
+  # 14일이 지나야 지운다(두 조건을 모두 만족해야 지운다). 짧은 시간에 여러 번 덮어써도 2주 동안은
+  # 정상 백업이 남는다. 그래서 평소에는 9~10개가 있다. 현재 버전은 만료시키지 않으므로 실행이 멈춰도
+  # 마지막 백업은 남는다.
   dynamic "rule" {
     for_each = local.versioned_prefixes
     content {
@@ -68,7 +71,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "backup" {
         prefix = rule.value
       }
       noncurrent_version_expiration {
-        noncurrent_days           = 1
+        noncurrent_days           = 14
         newer_noncurrent_versions = var.retention_count - 1
       }
     }
@@ -167,8 +170,8 @@ resource "aws_iam_role" "backup" {
 }
 
 # 올리기만 한다. 읽기·지우기·목록 권한이 없어 이 역할이 새도 기존 백업을 받거나 지울 수 없다.
-# 덮어쓴 백업은 이전 버전으로 남는다. 다만 이 역할로 retention_count번 넘게 덮어쓰면 정상 백업이
-# 수명 주기로 밀려난다. 역할은 main 전용 Environment에서만 받을 수 있다.
+# 덮어쓴 백업은 이전 버전으로 남는다. 이 역할로 retention_count번 넘게 덮어써도 밀려난 백업은 14일 동안
+# 남는다. 역할은 main 전용 Environment에서만 받을 수 있다.
 data "aws_iam_policy_document" "backup" {
   statement {
     sid       = "UploadBackups"
