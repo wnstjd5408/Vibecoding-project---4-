@@ -103,6 +103,23 @@ def test_markdown_escaped_terms_match_and_cut_includes_the_backslashes():
     assert [unescape_markdown(text) for _, text in cut(body, spans)] == ["A*", "__init__", "std::vector<T>"]
 
 
+def test_escaped_and_plain_forms_in_one_body_are_both_found():
+    body = "직접 쓴 A* 와 가져온 A\\* 둘 다"
+
+    assert cut(body, find_spans(body, [(21, "A*")])) == [(21, "A*"), (21, "A\\*")]
+
+
+def test_escape_inside_an_nfd_body_maps_back_to_the_original_text():
+    # NFC 위치 대응과 이스케이프 위치 대응이 겹치는 경우. "해시"와 "테이블"은 NFD(자모 분리)다.
+    body = unicodedata.normalize("NFD", "앞 해시") + "\\*" + unicodedata.normalize("NFD", "테이블 뒤")
+
+    [span] = find_spans(body, [(1, "해시*테이블")])
+
+    assert unicodedata.normalize("NFC", unescape_markdown(body[span.start : span.end])) == "해시*테이블"
+    # "앞"은 자모 3개 + 공백이라 4번째 코드포인트부터, 끝은 "블"(자모 3개)까지다.
+    assert (span.start, span.end) == (4, len(body) - 2)
+
+
 def test_escaped_backslash_and_escaped_bracket():
     # "\\"는 백슬래시 한 글자다. "\](" 는 이스케이프된 ] 라서 링크 주소가 아니다.
     assert cut("a\\\\b", find_spans("a\\\\b", [(1, "a\\b")])) == [(1, "a\\\\b")]
