@@ -30,8 +30,10 @@ variable "retention_count" {
 }
 
 # 계정 ID와 사용자 이름이 들어 있어 기본값을 두지 않고 terraform.tfvars로만 넘긴다.
-# IAM 사용자면 arn:aws:iam::<계정 ID>:user/<이름>, 역할(SSO 등)로 로그인하면 세션 ARN이 아니라
-# 역할 ARN arn:aws:iam::<계정 ID>:role/<경로/>역할 이름을 넣는다(aws:PrincipalArn은 역할 ARN으로 평가된다).
+# IAM 사용자면 arn:aws:iam::<계정 ID>:user/<이름>을 넣는다. 역할(SSO 등)로 로그인하면 세션 ARN이 아니라
+# 경로까지 들어간 역할 ARN을 넣는다(aws:PrincipalArn은 경로를 포함한 역할 ARN으로 평가된다).
+# get-caller-identity의 assumed-role ARN에는 경로가 없으므로 `aws iam get-role --role-name <역할> --query Role.Arn`으로 확인한다.
+# SSO 역할은 예: arn:aws:iam::<계정 ID>:role/aws-reserved/sso.amazonaws.com/<리전>/AWSReservedSSO_<이름>_<ID>
 variable "backup_admin_arns" {
   description = "백업을 읽고 지우고 보관 설정을 바꿀 수 있는 IAM 사용자·역할 ARN. 이 밖의 주체는 버킷 정책이 거부한다."
   type        = list(string)

@@ -128,11 +128,9 @@ data "aws_iam_policy_document" "bucket" {
   statement {
     sid    = "DenyOthersReadDelete"
     effect = "Deny"
+    # GetObject*는 복제가 쓰는 GetObjectVersionForReplication과 태그·ACL 읽기도 포함한다.
     actions = [
-      "s3:GetObject",
-      "s3:GetObjectVersion",
-      "s3:GetObjectAttributes",
-      "s3:GetObjectVersionAttributes",
+      "s3:GetObject*",
       "s3:RestoreObject",
       "s3:DeleteObject",
       "s3:DeleteObjectVersion",
@@ -152,9 +150,12 @@ data "aws_iam_policy_document" "bucket" {
   statement {
     sid    = "DenyOthersRetentionChange"
     effect = "Deny"
+    # 복제 설정은 다음 백업을 다른 버킷으로 빼 가는 길이고, Object Lock 기본 보존은 관리자도 못 지우게 만든다.
     actions = [
       "s3:PutLifecycleConfiguration",
       "s3:PutBucketVersioning",
+      "s3:PutReplicationConfiguration",
+      "s3:PutBucketObjectLockConfiguration",
     ]
     resources = [aws_s3_bucket.backup.arn]
     principals {

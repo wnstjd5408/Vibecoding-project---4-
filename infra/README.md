@@ -301,7 +301,7 @@ GitHub Actions `DB Backup`(`.github/workflows/db-backup.yml`)이 매주 월요�
   - `note-images/<백업 ID>/images.tar`: 노트 이미지. Notion 가져오기 직후 수동 실행으로 한 번 만든다.
 - 백업 하나는 tar 파일 하나다. 그래서 S3 버전 하나가 백업 하나이고, 이전 백업을 고를 때 파일끼리 버전을 맞출 필요가 없다. 이미지 tar는 그 시점의 스냅숏이라 Storage에서 지운 이미지는 다음 백업에서 빠진다.
 - 보관 개수: 두 `latest` 키는 실행마다 덮어쓰고, 버전 관리가 이전 백업을 이전 버전으로 남긴다. 수명 주기는 최근 `retention_count`(기본 8)개보다 오래되고 이전 버전이 된 지 14일이 지난 버전만 지운다. 그래서 평소에는 9~10개가 있다. 날짜가 아니라 개수로 세므로 예약 실행이 멈춰도 백업은 남는다. 수동 실행도 1개로 센다. `note-images/`는 지우지 않는다.
-- 접근 제한(2026-10-30 결정): 덤프에 비밀번호 해시와 세션 토큰이 있다. 공용 실습 계정이라 S3 권한이 넓은 다른 사용자도 SSE-S3 객체는 읽을 수 있어서, 버킷 정책이 `backup_admin_arns`(김준성) 밖의 주체를 거부한다. 거부하는 것은 객체 읽기·지우기, 수명 주기·버전 관리 설정 변경, 업로드(백업 역할은 허용)다. 계정 관리자가 버킷 정책을 바꾸면 우회할 수 있고, 그 변경은 CloudTrail에 남는다. ARN을 잘못 넣어도 고칠 수 있게 버킷 정책 변경은 막지 않는다.
+- 접근 제한(2026-10-30 결정): 덤프에 비밀번호 해시와 세션 토큰이 있다. 공용 실습 계정이라 S3 권한이 넓은 다른 사용자도 SSE-S3 객체는 읽을 수 있어서, 버킷 정책이 `backup_admin_arns`(김준성) 밖의 주체를 거부한다. 거부하는 것은 객체 읽기(복제용 읽기 포함)·지우기, 수명 주기·버전 관리·복제·Object Lock 설정 변경, 업로드(백업 역할은 허용)다. 계정 관리자가 버킷 정책을 바꾸면 우회할 수 있고, 그 변경은 CloudTrail에 남는다. ARN을 잘못 넣어도 고칠 수 있게 버킷 정책 변경은 막지 않는다.
 - 역할 `<owner>-db-backup`: GitHub Environment `db-backup`에서 온 토큰만 받는다. 권한은 위 세 위치의 `s3:PutObject`뿐이다. 이 역할로는 백업을 읽거나 지울 수 없다. 덮어쓴 백업은 이전 버전으로 남고, 짧은 시간에 8번 넘게 덮어써도 밀려난 백업은 14일 동안 남는다.
 - 행 수(`counts.txt`)는 데이터 덤프의 `COPY` 블록을 세어 만든다. 덤프와 같은 시점이고 모든 표가 들어간다. 그래서 복원 시험은 "덤프를 빠짐없이 되돌릴 수 있다"를 확인하고, "덤프가 운영 DB와 같다"는 확인하지 않는다.
 - 이미지 대조: 행을 먼저 읽고 파일 목록을 받는다. 행은 있는데 파일이 없으면 백업이 빠진 것이라 실패로 끝낸다. 파일은 있는데 행이 없으면 경고만 한다. 이미지 행을 지운 뒤 Storage 객체는 삭제 작업(`storage_delete_jobs`)이 나중에 지우므로 그 사이에는 정상적으로 생긴다. 목록을 받은 뒤 지워져 다운로드가 404인 파일은 건너뛰고 개수만 남긴다. 행을 읽은 뒤 백업 도중 삭제 작업이 파일을 지우면 "파일 없는 행"으로 거짓 실패할 수 있다. 실패하면 한 번 더 실행해 재현되는지 본다. 대시보드가 폴더를 만들 때 생기는 `.emptyFolderPlaceholder`는 이미지로 세지 않는다. 사전 이미지와 노트 이미지가 한 버킷을 나눠 쓰면 서로의 파일이 "행 없는 파일"로 잡힌다.
@@ -318,7 +318,7 @@ GitHub Actions `DB Backup`(`.github/workflows/db-backup.yml`)이 매주 월요�
    terraform init "-backend-config=../backend.hcl"
    terraform plan "-out=plan.tfplan"
    ```
-   `Plan: 9 to add, 0 to change, 0 to destroy.`가 나와야 한다(버킷과 설정 7, 역할 1, 역할 정책 1). `get-caller-identity` 결과가 `assumed-role/<역할>/<세션>`이면 `backup_admin_arns`에는 `arn:aws:iam::<계정 ID>:role/<역할>`을 넣는다. 세션 ARN을 넣으면 검증에서 거부한다.
+   `Plan: 9 to add, 0 to change, 0 to destroy.`가 나와야 한다(버킷과 설정 7, 역할 1, 역할 정책 1). `get-caller-identity` 결과가 `assumed-role/<역할>/<세션>`(SSO 등)이면 `aws iam get-role --role-name <역할> --query Role.Arn --output text`의 결과를 넣는다. SSO 역할 ARN에는 `aws-reserved/sso.amazonaws.com/...` 경로가 들어 있고, 경로가 빠지면 본인도 거부돼 apply가 버전 관리 설정에서 실패한다. 세션 ARN을 넣으면 변수 검증에서 거부한다.
 2. 적용하고 출력값을 확인한다. 역할 ARN에는 계정 ID가 있으므로 이슈나 PR에 옮기지 않는다.
    ```powershell
    terraform apply plan.tfplan
