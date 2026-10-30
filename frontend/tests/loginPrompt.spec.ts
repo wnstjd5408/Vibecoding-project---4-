@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
+import { goInApp } from './inApp.ts'
 
 // MEG-77 로그인 안내 시트(F1-1c·F2-2b). playwright.config.ts가 VITE_API_MOCK=true로 서버를 띄우므로 가짜 응답(E08·E09는 방문자에게 401 login_required)으로 시험한다.
 // 실제 백엔드의 401과 실제 즐겨찾기·AI 설명 화면 연결은 이 시험이 확인하지 못한다(MEG-76·90·106이 맡는다).
@@ -44,8 +45,8 @@ test('로그인한 사용자가 즐겨찾기를 하면 시트 없이 저장된�
   await page.getByLabel('비밀번호').fill('example-password')
   await page.getByRole('button', { name: '로그인' }).click()
   await expect(page).toHaveURL(/\/quiz$/)
-  // 가짜 로그인 상태는 메모리에만 있어 새로 고치지 않고 임시 화면(/quiz)의 이동 링크로 옮긴다
-  await page.getByRole('link', { name: '공통 컴포넌트' }).click()
+  // 가짜 로그인 상태는 메모리에만 있어 새로 고치지 않고 앱 안에서 경로를 옮긴다
+  await goInApp(page, '/dev/components')
   const toggle = demo(page).getByRole('button', { name: '즐겨찾기', exact: true })
   await toggle.click()
   await expect(page.getByTestId('favorite-status')).toHaveText('즐겨찾기에 저장했어요')
@@ -110,7 +111,7 @@ test.describe('F1-1c 노트 목록의 방문자 "오늘의 퀴즈"', () => {
   test('시트를 연 채 뒤로 갔다 앞으로 돌아와도 닫힌 시트가 다시 열리지 않는다', async ({ page }) => {
     await page.goto('/dev/foundation')
     // 새로 고치지 않고 앱 안 링크로 옮겨야 히스토리 이동이 앱 안에서 일어난다
-    await page.getByRole('link', { name: 'F1-1 과목·노트 목록' }).click()
+    await goInApp(page, '/')
     await expect(page).toHaveURL(/\/$/)
     const quiz = page.getByRole('button', { name: '오늘의 퀴즈' })
     await quiz.click()
@@ -136,7 +137,7 @@ test.describe('F1-1c 노트 목록의 방문자 "오늘의 퀴즈"', () => {
     await page.getByLabel('비밀번호').fill('example-password')
     await page.getByRole('button', { name: '로그인' }).click()
     await expect(page).toHaveURL(/\/quiz$/)
-    await page.getByRole('link', { name: 'F1-1 과목·노트 목록' }).click()
+    await goInApp(page, '/')
     await expect(page.getByRole('link', { name: '오늘의 퀴즈' })).toHaveAttribute('href', '/quiz')
     await expect(page.getByRole('button', { name: '오늘의 퀴즈' })).toHaveCount(0)
   })

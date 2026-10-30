@@ -1,0 +1,9 @@
+.page { max-width: 560px; min-height: 100svh; margin-inline: auto; }
+.main { padding: var(--space-6) var(--space-4) var(--space-8); }
+.title { margin: 0 0 var(--space-2); font-size: 24px; line-height: 32px; }
+.subtitle { margin: 0 0 var(--space-4); color: var(--ink-muted); font-size: 14px; line-height: 22px; }
+.list { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+.answered { margin: 0; color: var(--ink-muted); font-size: 14px; line-height: 22px; font-weight: 600; }
+.footer { margin-top: var(--space-4); }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.link { display: inline-flex; align-items: center; min-height: 44px; color: var(--ink); font-size: 14px; line-height: 22px; font-weight: 600; }

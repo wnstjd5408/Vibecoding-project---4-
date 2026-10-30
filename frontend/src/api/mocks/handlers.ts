@@ -236,6 +236,36 @@ const routes: Route[] = [
       return { status: 200, body: { source: 'ai', term: null, explanation: { id: null, body: '합성 1회용 AI 설명입니다.' }, reportable: false } }
     },
   },
+  // E11 오늘의 퀴즈. 방문자는 401 login_required, 로그인한 사용자는 예시 5의 ready(둘째 문항은 이미 답함)를 받는다. 답하기 전 문항에는 정답·해설이 없다.
+  // 그 밖의 다섯 상태(not_open·none·generating·failed·ai_limit_reached)는 가짜 응답이 아니라 시험의 합성 HTTP 응답으로 만든다.
+  {
+    method: 'POST',
+    pattern: /^\/api\/quiz\/today$/,
+    handle: () => {
+      if (getMockSession() === 'visitor') return loginRequired()
+      return {
+        status: 200,
+        body: {
+          status: 'ready',
+          quiz_date: '2026-10-23',
+          items: [
+            { id: 41, difficulty: '중', question: '합성 질문 1입니다.', answered: false, followups: [], can_request_followup: false },
+            {
+              id: 42,
+              difficulty: '하',
+              question: '합성 질문 2입니다.',
+              answered: true,
+              your_answer: '합성 답변',
+              correct_answer: '합성 정답',
+              explanation: '합성 해설',
+              followups: [{ seq: 1, question: '합성 꼬리 질문', answered: false }],
+              can_request_followup: false,
+            },
+          ],
+        },
+      }
+    },
+  },
   // E08 즐겨찾기. 방문자는 항상 401 login_required다.
   {
     method: 'PUT',
