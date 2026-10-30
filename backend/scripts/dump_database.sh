@@ -33,9 +33,16 @@ for name in roles schema data; do
     roles) args=(--role-only) ;;
     data) args=(--use-copy --data-only) ;;
   esac
-  if ! npx --no-install supabase db dump --db-url "$SUPABASE_DB_URL" \
+  if npx --no-install supabase db dump --db-url "$SUPABASE_DB_URL" \
     -f "$out/$name.sql" "${args[@]}" > "${RUNNER_TEMP}/dump-${name}.log" 2>&1; then
+    continue
+  else
+    code=$?
+    echo "Backup diagnostic: CLI_EXIT_${code}"
     python3 backend/scripts/diagnose_backup.py --log "${RUNNER_TEMP}/dump-${name}.log"
+    if [ "$name" = roles ]; then
+      python3 backend/scripts/probe_backup.py || true
+    fi
     echo "::error::${name} dump failed; private log withheld"
     exit 1
   fi
