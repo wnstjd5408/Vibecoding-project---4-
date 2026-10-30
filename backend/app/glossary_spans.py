@@ -2,15 +2,16 @@
 
 본문은 바꾸지 않는다. 위치는 원문 body_markdown의 유니코드 코드포인트이고 시작 포함·끝 제외다.
 찾기 규칙(2026-10-30 김준성 결정, MEG-73):
-- NFC로 맞추고 영문 대소문자를 무시해 terms.key와 비교한다. 줄 안의 공백 여러 개(탭 포함)는 key의 공백 하나와
-  같다. 줄바꿈은 넘지 않는다(제목과 다음 문단처럼 다른 블록에 걸친 일치를 막는다).
+- NFC로 맞추고 영문 대소문자를 무시해 terms.key와 비교한다.
+- (AI 판단, 사람 확인 전) 줄 안의 공백 여러 개(탭 포함)는 key의 공백 하나와 같다. 줄바꿈은 넘지 않는다. 제목 줄과
+  다음 줄처럼 줄바꿈 하나로도 블록이 바뀌므로 다른 블록에 걸친 강조를 막는다. 문단 안 soft break에 걸친 용어는 놓친다.
 - 영문·숫자로 시작(끝)하는 용어는 바로 앞(뒤) 글자가 영문·숫자이면 일치로 보지 않는다(SHIP 속 IP).
   한글은 조사가 붙어도 일치한다.
-- note-image: 토큰 안은 찾지 않는다. 화면에 글자로 보이지 않는 링크 주소(](...))와 맨 URL 안도 찾지 않는다.
+- note-image: 토큰 안은 찾지 않는다. (AI 판단, 사람 확인 전) 화면에 글자로 보이지 않는 링크 주소(](...))와 맨 URL
+  안도 찾지 않는다. 링크가 아닌 `](...)` 모양 글자 안의 용어는 놓친다.
 - 겹치면 긴 쪽을 남긴다. 길이가 같으면 앞에 나온 쪽, 그다음 term_id가 작은 쪽이다.
 """
 
-import functools
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -18,7 +19,8 @@ from dataclasses import dataclass
 # 글자로 보이지 않는 구간: 이미지 토큰(note-image:{notion_block_id}), 마크다운 링크 주소, 맨 URL.
 # 소문자로 바꾼 본문에 쓴다.
 _HIDDEN = re.compile(r"note-image:[^\s)]*|\]\([^)\s]*|(?:https?|ftp)://[^\s)<>\]]*")
-_LINE_SPACES = re.compile(r"[^\S\n]+")
+# 줄 안의 공백. str.splitlines가 줄 끝으로 보는 글자(\n, \r, \v, \f, \x1c~\x1e, \x85, U+2028, U+2029)는 뺀다.
+_LINE_SPACES = re.compile(r"[^\S\n\r\v\f\x1c-\x1e\x85  ]+")
 _SPACES = re.compile(r"\s+")
 _ASCII_LOWER = {code: code + 32 for code in range(ord("A"), ord("Z") + 1)}
 
@@ -44,7 +46,6 @@ def normalize_key(text: str) -> str:
     return _ascii_lower(_SPACES.sub(" ", unicodedata.normalize("NFC", text)).strip())
 
 
-@functools.cache
 def _composing_starters() -> frozenset[str]:
     """결합 등급이 0인데 NFC가 앞 글자와 합칠 수 있는 글자(한글 중성·종성 자모, 일부 인도계 모음 기호 등).
 
@@ -61,9 +62,13 @@ def _composing_starters() -> frozenset[str]:
     return frozenset(found)
 
 
+# 가져올 때 한 번 만든다(약 0.05초, 74자).
+_COMPOSING_STARTERS = _composing_starters()
+
+
 def _joins_previous(char: str) -> bool:
     """NFC에서 앞 글자와 합쳐질 수 있는 글자. 이 글자 앞은 위치를 자를 수 있는 경계가 아니다."""
-    return not char.isascii() and (unicodedata.combining(char) != 0 or char in _composing_starters())
+    return not char.isascii() and (unicodedata.combining(char) != 0 or char in _COMPOSING_STARTERS)
 
 
 def _nfc_with_offsets(body: str) -> tuple[str, list[int], list[bool]]:

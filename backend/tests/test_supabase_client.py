@@ -470,10 +470,16 @@ def test_question_mark_in_a_storage_path_is_encoded_not_taken_as_the_query():
     }
 
 
-def test_signed_path_without_a_token_is_unavailable():
-    body = [{"error": None, "path": "a.png", "signedURL": "/object/sign/b/a.png"}]
-    with pytest.raises(SupabaseUnavailable):
-        signing_client(lambda r: httpx.Response(200, json=body)).sign_note_images(["a.png"], 300)
+@pytest.mark.parametrize("bad", ["/object/sign/b/a.png", 7, None])
+def test_an_odd_signed_item_drops_only_that_image(bad):
+    body = [
+        {"error": None, "path": "a.png", "signedURL": bad},
+        {"error": None, "path": "b.png", "signedURL": "/object/sign/b/b.png?token=fake-token"},
+    ]
+
+    signed = signing_client(lambda r: httpx.Response(200, json=body)).sign_note_images(["a.png", "b.png"], 300)
+
+    assert list(signed) == ["b.png"]
 
 
 @pytest.mark.parametrize("bucket", [None, "", "../other", "note images", ".", ".."])
@@ -490,7 +496,10 @@ def test_sign_rejected_is_a_config_error():
         signing_client(lambda r: httpx.Response(400, json={"error": "Bucket not found"})).sign_note_images(["a.png"], 300)
 
 
-@pytest.mark.parametrize("response", [httpx.Response(503), httpx.Response(200, json={"not": "a list"}), httpx.Response(200, text="oops")])
+@pytest.mark.parametrize(
+    "response",
+    [httpx.Response(503), httpx.Response(200, json={"not": "a list"}), httpx.Response(200, text="oops"), httpx.Response(200, json=[{}])],
+)
 def test_sign_outage_or_malformed_body_is_unavailable(response):
     with pytest.raises(SupabaseUnavailable):
         signing_client(lambda r: response).sign_note_images(["a.png"], 300)

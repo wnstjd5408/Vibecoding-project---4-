@@ -356,15 +356,18 @@ class SupabaseClient:
             # 버킷 없음·키 권한 거부. 5xx·일시 상태는 _request가 이미 SupabaseUnavailable로 바꿨다.
             raise SupabaseConfigError(f"storage sign status {response.status_code}")
         try:
-            return {
-                item["path"]: self._signed_url(item["signedURL"])
-                for item in response.json()
-                if not item.get("error") and item.get("signedURL")
-            }
+            items = [(item["path"], item.get("signedURL"), item.get("error")) for item in response.json()]
         except (ValueError, KeyError, TypeError, AttributeError):
             raise SupabaseUnavailable("malformed storage response") from None
+        signed = {}
+        for path, signed_path, error in items:
+            url = self._signed_url(signed_path) if not error and isinstance(signed_path, str) else None
+            # 발급되지 않았거나 모양이 이상한 항목은 그 이미지만 뺀다. 호출 쪽이 빠진 수를 로그에 남긴다.
+            if url is not None:
+                signed[path] = url
+        return signed
 
-    def _signed_url(self, signed_path: str) -> str:
+    def _signed_url(self, signed_path: str) -> str | None:
         """Storage의 서명 경로(/object/sign/{버킷}/{경로}?token=...)를 브라우저가 열 수 있는 주소로 만든다.
 
         Storage는 경로를 인코딩하지 않고 준다(공백·`?`·`&`가 그대로 온다, 2026-10-30 로컬 확인). 토큰 앞의
@@ -372,7 +375,7 @@ class SupabaseClient:
         """
         path, separator, query = signed_path.rpartition("?")
         if not separator or not query.startswith("token="):
-            raise ValueError("signed path without token")
+            return None
         return f"{self._url}/storage/v1{quote(path, safe='/')}?{query}"
 
     def keyed_hash(self, value: str) -> str:

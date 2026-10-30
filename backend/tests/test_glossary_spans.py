@@ -62,7 +62,9 @@ def test_case_and_whitespace_are_normalized_on_both_sides():
     assert cut(body, spans) == [(6, "ROUND \t robin"), (6, "round robin")]
 
 
-@pytest.mark.parametrize("body", ["## Round\n\nRobin 문단", "round\nrobin", "round \r\n robin"])
+@pytest.mark.parametrize(
+    "body", ["## Round\n\nRobin 문단", "round\nrobin", "round \r\n robin", "round\rrobin", "round robin", "round\x85robin"]
+)
 def test_terms_do_not_match_across_line_breaks(body):
     # 제목과 다음 문단처럼 다른 블록에 걸친 강조를 만들지 않는다.
     assert find_spans(body, [(6, "round robin")]) == []
