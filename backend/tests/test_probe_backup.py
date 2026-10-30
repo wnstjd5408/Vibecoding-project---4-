@@ -9,6 +9,7 @@ from scripts.diagnose_backup import classify_log
 
 @pytest.fixture
 def private_url(monkeypatch):
+    monkeypatch.setattr(probe_backup, "probe_tls", lambda env: None)
     sentinel = "TEST_ONLY_" + "DO_NOT_PRINT"
     url = urlunsplit(("postgresql", f"test-user:{quote(sentinel)}@example.invalid:5432", "/postgres", "sslmode=require", ""))
     monkeypatch.setenv("SUPABASE_DB_URL", url)
@@ -32,8 +33,8 @@ def test_success_uses_environment_and_discards_results(private_url, monkeypatch,
     assert len(calls) == 3
     assert calls[1][1]["env"]["PGPASSWORD"] == private_url[1]
     assert calls[1][1]["env"]["PGSSLMODE"] == "require"
-    assert "default_transaction_read_only=on" in calls[1][1]["env"]["PGOPTIONS"]
-    assert "--command=SELECT 1" in calls[1][0]
+    assert "PGOPTIONS" not in calls[1][0]
+    assert "--command=BEGIN READ ONLY; SELECT 1; ROLLBACK;" in calls[1][0]
     assert "--no-role-passwords" in calls[2][0]
     assert capsys.readouterr().out == (
         "Backup probe CONTAINER_TOOL: OK\nBackup probe CONNECTION: OK\n"

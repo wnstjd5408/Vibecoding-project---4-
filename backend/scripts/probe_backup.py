@@ -2,6 +2,9 @@
 
 import os
 import subprocess
+import socket
+import ssl
+import struct
 from uuid import uuid4
 from urllib.parse import parse_qsl, unquote, urlsplit
 
@@ -33,9 +36,34 @@ def connection_env(value: str) -> dict[str, str]:
         "PGPASSWORD": unquote(url.password),
         "PGDATABASE": unquote(url.path.lstrip("/")),
         "PGCONNECT_TIMEOUT": "10",
-        "PGOPTIONS": "-c default_transaction_read_only=on -c statement_timeout=15000",
         **{QUERY_ENV[key]: value for key, value in options.items()},
     }
+
+
+def probe_tls(pg_env: dict[str, str]) -> None:
+    """PostgreSQL SSLRequest and verified TLS only; never send user/password."""
+    try:
+        with socket.create_connection((pg_env["PGHOST"], int(pg_env["PGPORT"])), timeout=10) as conn:
+            conn.sendall(struct.pack("!II", 8, 80877103))
+            response = conn.recv(1)
+            if response == b"S":
+                with ssl.create_default_context().wrap_socket(conn, server_hostname=pg_env["PGHOST"]):
+                    code = "OK"
+            elif response == b"N":
+                code = "TLS_NOT_SUPPORTED"
+            else:
+                code = "TLS_UNEXPECTED_RESPONSE"
+    except ssl.SSLCertVerificationError:
+        code = "TLS_CERTIFICATE_FAILED"
+    except ssl.SSLError:
+        code = "TLS_HANDSHAKE_FAILED"
+    except socket.gaierror:
+        code = "NETWORK_DNS_FAILED"
+    except TimeoutError:
+        code = "NETWORK_TIMEOUT"
+    except OSError:
+        code = "NETWORK_CONNECT_FAILED"
+    print(f"Backup probe TLS: {code}")
 
 
 def probe(stage: str, command: list[str], pg_env: dict[str, str]) -> bool:
@@ -79,9 +107,12 @@ def main() -> int:
     except ValueError:
         print("Backup probe CONNECTION: PROBE_URL_UNSUPPORTED")
         return 1
+    # This uses the runner's CA store, while psql uses the image's libpq/CA store.
+    # Always run psql too; a TLS probe alone cannot diagnose the password or pooler.
+    probe_tls(pg_env)
     if not probe("CONNECTION", [
         "psql", "-X", "--no-password", "--set=ON_ERROR_STOP=1",
-        "--set=VERBOSITY=verbose", "--command=SELECT 1",
+        "--set=VERBOSITY=verbose", "--command=BEGIN READ ONLY; SELECT 1; ROLLBACK;",
     ], pg_env):
         return 1
     if not probe("ROLES", [
