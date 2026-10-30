@@ -71,35 +71,7 @@ jobs:
       - name: Dump database
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-        run: |
-          out="${RUNNER_TEMP}/backup/db"
-          mkdir -p "${out}"
-          python3 backend/scripts/diagnose_backup.py
-          dump() {
-            name="$1"; shift
-            if ! npx supabase db dump --db-url "${SUPABASE_DB_URL}" -f "${out}/${name}.sql" "$@" \
-              > "${RUNNER_TEMP}/dump-${name}.log" 2>&1; then
-              python3 backend/scripts/diagnose_backup.py --log "${RUNNER_TEMP}/dump-${name}.log"
-              echo "::error::${name} 덤프 실패. 공개 로그라서 출력을 남기지 않는다."
-              exit 1
-            fi
-          }
-          dump roles --role-only
-          dump schema
-          dump data --use-copy --data-only
-          if ! grep -q '^COPY ' "${out}/data.sql"; then
-            echo "::error::data 덤프에 COPY 문이 없다"
-            exit 1
-          fi
-          }
-          dump roles --role-only
-          dump schema
-          dump data --use-copy --data-only
-          if ! grep -q '^COPY ' "${out}/data.sql"; then
-            echo "::error::data 덤프에 COPY 문이 없다"
-            exit 1
-          fi
-
+        run: bash backend/scripts/dump_database.sh
       # 복원 시험(AC-4)에서 비교할 표별 행 수. 데이터 덤프의 COPY 블록을 세므로 덤프와 같은 시점이고
       # 모든 표가 들어간다(COPY 텍스트 형식은 한 행이 한 줄이다). 사용자 수가 있어 로그에 찍지 않는다.
       - name: Count rows
