@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiFetch, isApiError } from '../api/client.ts'
-import type { GlossaryResponse, TermViewResponse } from '../api/types.ts'
+import type { FavoriteResponse, GlossaryResponse, TermViewResponse } from '../api/types.ts'
 import { useAuth } from '../auth/useAuth.ts'
 import { BottomSheet } from '../components/BottomSheet.tsx'
 import { Badge } from '../components/Badge.tsx'
 import { Button } from '../components/Button.tsx'
+import { FavoriteToggle } from '../components/FavoriteToggle.tsx'
 import { StateMessage } from '../components/StateMessage.tsx'
 import { TermLink } from '../components/TermLink.tsx'
 import { NoteBody } from '../notes/NoteBody.tsx'
@@ -20,6 +21,9 @@ const MESSAGES = {
   retry: '다시 시도',
   imageFailed: '이미지를 불러오지 못했어요',
   viewNotRecorded: '열람 기록을 저장하지 못했어요',
+  favoriteOn: '즐겨찾기에 저장했어요',
+  favoriteOff: '즐겨찾기를 해제했어요',
+  favoriteFailed: '즐겨찾기를 저장하지 못했어요',
 }
 
 type TermSheetProps = {
@@ -30,14 +34,17 @@ type TermSheetProps = {
   termId: number | null
   // 시트 제목으로 바로 보이는 용어 이름(노트 응답에 이미 있다)
   label: string
+  // 즐겨찾기 요청이 실패했을 때 부른다. 로그인 안내를 열었으면(401 login_required) true를 돌려주고, 그러면 이 시트는 그 안에서 닫힌다.
+  // false면 이 시트가 짧은 오류 안내를 보인다.
+  onLoginRequired: (error: unknown) => boolean
 }
 
 // 사전 용어 설명 바텀시트(F1-3). 열 때 E06으로 설명·이미지를 받고, 성공하면 E07로 열람을 한 번 기록한다.
 // 시트는 기존 BottomSheet를 그대로 쓴다. 제목 포커스, Esc·닫기·막 누르기, 연 요소로의 포커스 복귀는 BottomSheet가 맡는다.
-export function TermSheet({ open, onClose, openId, termId, label }: TermSheetProps) {
+export function TermSheet({ open, onClose, openId, termId, label, onLoginRequired }: TermSheetProps) {
   return (
     <BottomSheet open={open} onClose={onClose} badge={<Badge tone="dictionary">{MESSAGES.badge}</Badge>} title={<TermLink>{label}</TermLink>}>
-      {open && termId !== null ? <TermSheetContent key={openId} termId={termId} /> : null}
+      {open && termId !== null ? <TermSheetContent key={openId} termId={termId} onLoginRequired={onLoginRequired} /> : null}
     </BottomSheet>
   )
 }
@@ -60,7 +67,7 @@ const NO_BROKEN: ReadonlySet<string> = new Set()
 function noop() {}
 
 // 시트가 열려 있는 동안만 있는 내용. 열 때마다 새로 만들어져 이전 용어의 응답·기록 상태가 남지 않는다.
-function TermSheetContent({ termId }: { termId: number }) {
+function TermSheetContent({ termId, onLoginRequired }: { termId: number; onLoginRequired: (error: unknown) => boolean }) {
   const auth = useAuth()
   const [attempt, setAttempt] = useState(0)
   const [result, setResult] = useState<Result | null>(null)
@@ -70,6 +77,10 @@ function TermSheetContent({ termId }: { termId: number }) {
   // 열람 기록 결과: 아직(null), 기록됨(true), 기록 안 됨(false: 서버가 false를 줬거나 요청이 실패)
   const [recorded, setRecorded] = useState<boolean | null>(null)
   const viewSent = useRef(false)
+  // 즐겨찾기: 응답을 받은 뒤에만 상태를 바꾼다(null이면 E06의 is_favorite를 쓴다). 요청 중에는 중복 요청을 막는다.
+  const [favoriteSaved, setFavoriteSaved] = useState<boolean | null>(null)
+  const [favoritePending, setFavoritePending] = useState(false)
+  const [favoriteFailed, setFavoriteFailed] = useState(false)
   // 이미지마다 E06을 다시 부르는 것은 한 번뿐이다. 새 URL도 실패하거나 URL이 그대로면 대체 글로 둔다.
   const refreshedImages = useRef(new Set<number>())
   const refreshing = useRef<Promise<GlossaryResponse> | null>(null)
@@ -120,6 +131,21 @@ function TermSheetContent({ termId }: { termId: number }) {
     }, fail)
   }, [termId, attempt])
 
+  async function changeFavorite(next: boolean) {
+    if (favoritePending) return
+    setFavoritePending(true)
+    setFavoriteFailed(false)
+    try {
+      const response = await apiFetch<FavoriteResponse>(`/api/favorites/${termId}`, { method: 'PUT', body: { favorited: next } })
+      setFavoriteSaved(response.is_favorite)
+    } catch (error) {
+      // 401 login_required는 로그인 안내가 맡는다. 눌림 상태는 바뀐 적이 없어 되돌릴 것도 없다. 그 밖의 오류는 여기서 안내한다.
+      if (!onLoginRequired(error)) setFavoriteFailed(true)
+    } finally {
+      setFavoritePending(false)
+    }
+  }
+
   if (!current) return <StateMessage kind="loading" title={MESSAGES.loading} />
   if ('error' in current) {
     if (current.error === 'not_found') return <StateMessage kind="empty" title={MESSAGES.notFound} />
@@ -135,6 +161,7 @@ function TermSheetContent({ termId }: { termId: number }) {
   // 로그인 상태인데 기록되지 않았으면 짧게 알린다. 방문자의 recorded: false는 정상이라 아무것도 보이지 않는다.
   const showViewNotice = recorded === false && auth.status !== 'loading' && auth.role !== 'visitor'
   const imagesNow = new Map(current.data.images.map((image) => [image.id, image]))
+  const favorite = favoriteSaved ?? current.data.is_favorite ?? false
   return (
     <>
       <NoteBody compact body={current.data.body_markdown} spans={NO_SPANS} images={NO_IMAGES} brokenImages={NO_BROKEN} onTerm={noop} onImageError={noop} />
@@ -146,6 +173,12 @@ function TermSheetContent({ termId }: { termId: number }) {
           : <img key={seen.id} className={styles.image} src={image.url} alt={image.alt} onError={() => onImageError(image.id, image.url)} />
       })}
       {showViewNotice ? <p className={styles.notice} role="status">{MESSAGES.viewNotRecorded}</p> : null}
+      {favoriteFailed ? <p className={styles.notice} role="alert">{MESSAGES.favoriteFailed}</p> : null}
+      <div className={styles.actions}>
+        <FavoriteToggle pressed={favorite} aria-disabled={favoritePending} onPressedChange={changeFavorite} />
+      </div>
+      {/* 저장 결과를 스크린 리더에 알린다. 실패했을 때는 비워 두어 저장된 것처럼 읽히지 않는다. */}
+      <p className={styles.srOnly} role="status">{favoriteSaved === null || favoriteFailed ? '' : favoriteSaved ? MESSAGES.favoriteOn : MESSAGES.favoriteOff}</p>
     </>
   )
 }

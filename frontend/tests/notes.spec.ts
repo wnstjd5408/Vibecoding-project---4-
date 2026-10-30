@@ -486,3 +486,121 @@ test('AI 설명도 401 login_required만 시트를 열고 다른 오류는 기�
   await demo.getByRole('button', { name: 'AI 설명', exact: true }).click()
   await expect(sheet).toBeVisible()
 })
+
+// MEG-90 용어 시트 안 즐겨찾기(E08)의 요청 규칙과 오류 분기. 브라우저의 실제 fetch 경로로 서버 응답을 합성해 요청 횟수·본문·실패 처리를 시험한다.
+// 실제 백엔드의 E08과 서버 측 "저장되지 않음"은 이 시험이 확인하지 못한다.
+type FavoriteRoutes = {
+  member?: boolean
+  initialFavorite?: boolean // E06의 is_favorite(로그인 사용자만 응답에 포함)
+  favoriteResponse?: () => { status: number; body?: object } | null // null이면 정상 저장
+  delayMs?: number
+}
+
+async function setupFavorite(page: Page, options: FavoriteRoutes = {}) {
+  const calls = { favorites: 0, bodies: [] as unknown[], glossary: 0 }
+  let saved = options.initialFavorite ?? false
+  await page.route('**/api/me', (route) => route.fulfill({
+    json: options.member ? { authenticated: true, role: 'member', display_name: '합성 사용자' } : { authenticated: false },
+  }))
+  await page.route('**/api/notes/11', (route) => route.fulfill({ json: termNote }))
+  await page.route('**/api/glossary/7', (route) => {
+    calls.glossary += 1
+    return route.fulfill({ json: options.member ? { ...glossary(), is_favorite: saved } : glossary() })
+  })
+  await page.route('**/api/term-views', (route) => route.fulfill({ json: { recorded: Boolean(options.member) } }))
+  await page.route('**/api/favorites/7', async (route) => {
+    calls.favorites += 1
+    const body = route.request().postDataJSON() as { favorited: boolean }
+    calls.bodies.push(body)
+    if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs))
+    const failure = options.favoriteResponse?.()
+    if (failure) return route.fulfill({ status: failure.status, json: failure.body ?? serverError(failure.status).json })
+    saved = body.favorited
+    return route.fulfill({ json: { term_id: 7, is_favorite: saved } })
+  })
+  return calls
+}
+
+const favoriteOff = (page: Page) => termSheet(page).getByRole('button', { name: '즐겨찾기', exact: true })
+const favoriteOn = (page: Page) => termSheet(page).getByRole('button', { name: '즐겨찾기함' })
+const favoriteAlert = (page: Page) => termSheet(page).getByRole('alert')
+const loginPromptSheet = (page: Page) => page.getByRole('dialog', { name: '로그인이 필요해요' })
+
+test('즐겨찾기는 응답을 받은 뒤에만 눌림으로 바뀌고, 요청 중 중복 클릭은 한 번만 보낸다', async ({ page }) => {
+  const calls = await setupFavorite(page, { member: true, delayMs: 500 })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await favoriteOff(page).click()
+  // 응답 전에는 눌린 것처럼 보이지 않고, 버튼은 막혀 있다
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+  await expect(favoriteOff(page)).toHaveAttribute('aria-disabled', 'true')
+  await favoriteOff(page).click({ force: true })
+  await expect(favoriteOn(page)).toHaveAttribute('aria-pressed', 'true')
+  expect(calls.favorites).toBe(1)
+  expect(calls.bodies).toEqual([{ favorited: true }])
+})
+
+test('E06의 is_favorite가 true면 눌린 채 열리고, 누르면 해제 요청을 보낸다', async ({ page }) => {
+  const calls = await setupFavorite(page, { member: true, initialFavorite: true })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(favoriteOn(page)).toHaveAttribute('aria-pressed', 'true')
+  await favoriteOn(page).click()
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+  expect(calls.bodies).toEqual([{ favorited: false }])
+})
+
+test('방문자도 E08을 보내 401 login_required를 받고, 용어 시트가 닫히며 로그인 안내가 열린다', async ({ page }) => {
+  const calls = await setupFavorite(page, { member: false, favoriteResponse: () => ({ status: 401, body: { error: { code: 'login_required', message: 'Login is required', request_id: 'r-test-0001' } } }) })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await favoriteOff(page).click()
+  await expect(loginPromptSheet(page)).toBeVisible()
+  await expect(termSheet(page)).toBeHidden()
+  expect(calls.favorites).toBe(1)
+  // 저장된 것처럼 보이지 않는다
+  await expect(page.getByText('즐겨찾기에 저장했어요')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(termLink(page)).toBeFocused()
+})
+
+for (const [name, status, code, message] of [
+  ['403 login_required(상태가 다름)', 403, 'login_required', 'Login is required'],
+  ['401 invalid_credentials(code가 다름)', 401, 'invalid_credentials', 'Invalid email or password'],
+  ['401이어도 message만 같고 code가 다름', 401, 'something_else', 'Login is required'],
+  ['404 not_found', 404, 'not_found', 'Resource not found'],
+  ['422 validation_failed', 422, 'validation_failed', 'Validation failed'],
+  ['429 rate_limited', 429, 'rate_limited', 'Too many requests'],
+  ['500 internal_error', 500, 'internal_error', 'Internal server error'],
+] as const) {
+  test(`즐겨찾기 ${name}는 로그인 안내를 열지 않고 시트 안에 오류를 보이며 눌림 상태를 바꾸지 않는다`, async ({ page }) => {
+    const calls = await setupFavorite(page, { member: true, favoriteResponse: () => ({ status, body: { error: { code, message, request_id: 'r-test-0001' } } }) })
+    await page.goto('/notes/11')
+    await termLink(page).click()
+    await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    await favoriteOff(page).click()
+    await expect(favoriteAlert(page)).toHaveText('즐겨찾기를 저장하지 못했어요')
+    await expect(loginPromptSheet(page)).toHaveCount(0)
+    await expect(termSheet(page)).toBeVisible()
+    await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+    await expect(favoriteOn(page)).toHaveCount(0)
+    expect(calls.favorites).toBe(1)
+  })
+}
+
+test('즐겨찾기 오류 뒤 다시 누르면 성공하고 오류 안내는 사라진다', async ({ page }) => {
+  let failing = true
+  const calls = await setupFavorite(page, { member: true, favoriteResponse: () => (failing ? { status: 500 } : null) })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await favoriteOff(page).click()
+  await expect(favoriteAlert(page)).toBeVisible()
+  failing = false
+  await favoriteOff(page).click()
+  await expect(favoriteOn(page)).toHaveAttribute('aria-pressed', 'true')
+  await expect(favoriteAlert(page)).toHaveCount(0)
+  expect(calls.favorites).toBe(2)
+})

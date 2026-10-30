@@ -1,3 +1,5 @@
 .image { display: block; width: 100%; max-height: 240px; margin: 0 0 var(--space-4); border-radius: var(--radius-md); object-fit: contain; background: var(--surface-100); }
 .imageFallback { margin: 0 0 var(--space-4); padding: var(--space-3); border: 1px dashed var(--line-strong); border-radius: var(--radius-md); color: var(--ink-muted); font-size: 14px; line-height: 22px; }
 .notice { margin: 0 0 var(--space-3); color: var(--ink-muted); font-size: 13px; line-height: 18px; }
+.actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
+.srOnly { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
