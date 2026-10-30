@@ -11,7 +11,7 @@
 .body hr { margin: var(--space-6) 0; border: 0; border-top: 1px solid var(--surface-300); }
 .body a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .body code { padding: 0 var(--space-1); border-radius: var(--radius-sm); background: var(--surface-300); font-family: var(--font-mono); font-size: 14px; }
-.body pre { padding: var(--space-3); overflow-x: auto; border-radius: var(--radius-md); background: var(--surface-300); }
-.body pre code { padding: 0; background: none; }
+.body pre { padding: var(--space-3); overflow-x: auto; border: 1px solid var(--surface-300); border-radius: var(--radius-sm); background: var(--surface-200); }
+.body pre code { padding: 0; background: none; font-size: 14px; line-height: 22px; }
 .image { display: block; max-width: 100%; height: auto; margin: var(--space-3) 0; border-radius: var(--radius-md); }
 .imageFallback { display: inline-block; padding: var(--space-1) var(--space-2); border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); color: var(--ink-muted); font-size: 14px; line-height: 22px; }

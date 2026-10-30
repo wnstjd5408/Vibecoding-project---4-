@@ -39,7 +39,7 @@ function NoteRead({ noteId }: { noteId: string }) {
   const current = valid && result?.key === key ? result : null
   // 이미지 토큰마다 E05를 다시 부르는 것은 한 번뿐이다. 새 URL도 실패하면 대체 글로 둔다(Q-N11).
   const refreshedTokens = useRef(new Set<string>())
-  const refreshing = useRef<Promise<void> | null>(null)
+  const refreshing = useRef<Promise<NoteReadResponse> | null>(null)
 
   useEffect(() => {
     if (!valid) return
@@ -57,14 +57,20 @@ function NoteRead({ noteId }: { noteId: string }) {
   }, [noteId, key, valid])
 
   // 이미지가 안 열리면(서명 URL 만료 등) E05를 다시 불러 새 URL을 받는다. 동시에 여러 이미지가 실패해도 부르는 것은 한 번이다.
-  const onImageError = useCallback((token: string) => {
+  const onImageError = useCallback((token: string, failedUrl: string) => {
     const fail = () => setBrokenImages((previous) => new Set(previous).add(token))
     if (refreshedTokens.current.has(token)) return fail()
     refreshedTokens.current.add(token)
     refreshing.current ??= apiFetch<NoteReadResponse>(`/api/notes/${noteId}`)
-      .then((data) => setResult({ key, data }))
+      .then((data) => {
+        setResult({ key, data })
+        return data
+      })
       .finally(() => { refreshing.current = null })
-    refreshing.current.catch(fail)
+    // 다시 받은 URL이 방금 실패한 URL과 같으면 img의 src가 그대로라 다시 불러오지 않는다. 새 URL이 없는 경우와 함께 실패로 닫는다.
+    refreshing.current.then((data) => {
+      if (data.images[token]?.url === failedUrl || !data.images[token]) fail()
+    }, fail)
   }, [noteId, key])
 
   const note = current && 'data' in current ? current.data : null

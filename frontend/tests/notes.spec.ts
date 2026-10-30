@@ -211,3 +211,64 @@ test('위치를 계산하지 못하는 글자에 걸친 선택은 null이다', a
   expect(await result('뒤 글자', '뒤 글자')).toBeNull() // 지원하지 않는 엔티티가 든 글 덩어리(문단) 전체가 계산 불가다
   expect(await result('정상 글자', '정상 글자')).not.toBeNull() // 다른 문단은 그대로 계산된다
 })
+
+// PR #55 AI 리뷰 P2 ① E05를 다시 불러도 이미지 URL이 같으면 img의 src가 그대로라 다시 불러오지 않는다. 실패로 닫고 대체 글을 보여야 한다.
+test('E05를 다시 불러도 이미지 URL이 같으면 대체 글로 닫는다', async ({ page }) => {
+  await page.route('**/api/me', (route) => route.fulfill({ json: { authenticated: false } }))
+  let calls = 0
+  await page.route('**/api/notes/96', (route) => {
+    calls += 1
+    return route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({
+        id: 96, revision: 1, title: '같은 URL 시험', studied_on: null, subjects: [], sources: [],
+        body_markdown: '앞 ![그림](note-image:blk-1) 뒤',
+        images: { 'blk-1': { url: 'http://127.0.0.1:1/same.png', alt: '그림', expires_at: '2026-10-23T05:35:00Z' } },
+        glossary_terms: [], glossary_spans: [],
+      }),
+    })
+  })
+  await page.goto('/notes/96')
+  await expect(page.getByText('이미지를 불러오지 못했어요')).toBeVisible()
+  await page.waitForTimeout(300)
+  expect(calls).toBeGreaterThanOrEqual(2)
+  expect(calls).toBeLessThanOrEqual(3) // StrictMode의 첫 호출 한 번이 더 있을 수 있다
+})
+
+// PR #55 AI 리뷰 P2 ② 선택이 본문 밖이나 위치 없는 글자(이미지 대체 문구)에 걸치면 본문 부분만 잘라 돌려주지 않고 null이어야 한다.
+test('선택이 본문 밖이나 이미지 대체 문구에 걸치면 null이다', async ({ page }) => {
+  await page.route('**/api/me', (route) => route.fulfill({ json: { authenticated: false } }))
+  await page.route('**/api/notes/95', (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({
+      id: 95, revision: 1, title: '선택 시험', studied_on: null, subjects: [], sources: [],
+      body_markdown: 'abc ![그림](note-image:blk-1)',
+      images: { 'blk-1': { url: 'http://127.0.0.1:1/x.png', alt: '그림', expires_at: '2026-10-23T05:35:00Z' } },
+      glossary_terms: [], glossary_spans: [],
+    }),
+  }))
+  await page.goto('/notes/95')
+  await expect(page.getByText('이미지를 불러오지 못했어요')).toBeVisible()
+  const select = (from: { selector: string; offset: number }, to: { selector: string; offset: number }) => page.evaluate(async ({ from, to }) => {
+    const { sourceRangeOfSelection } = await import('/src/notes/selection.ts')
+    const root = document.querySelector('[data-note-body]')!
+    const textOf = (selector: string) => {
+      const walker = document.createTreeWalker(document.querySelector(selector)!, NodeFilter.SHOW_TEXT)
+      return walker.nextNode() as Text
+    }
+    const a = textOf(from.selector)
+    const b = textOf(to.selector)
+    const range = document.createRange()
+    range.setStart(a, from.offset)
+    range.setEnd(b, to.offset)
+    return sourceRangeOfSelection(root, range)
+  }, { from, to })
+  const bodyText = '[data-note-body] [data-src]'
+  const fallback = '[data-note-body] [role="img"]'
+  // 본문 글자만 고르면 계산된다
+  expect(await select({ selector: bodyText, offset: 1 }, { selector: bodyText, offset: 3 })).toEqual({ start: 1, end: 3 })
+  // 본문에서 이미지 대체 문구까지 걸치면 null
+  expect(await select({ selector: bodyText, offset: 1 }, { selector: fallback, offset: 5 })).toBeNull()
+  // 제목에서 본문까지 걸치면 null
+  expect(await select({ selector: 'h1', offset: 0 }, { selector: bodyText, offset: 3 })).toBeNull()
+})

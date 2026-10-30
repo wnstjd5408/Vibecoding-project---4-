@@ -20,7 +20,7 @@ type Context = {
   // 불러오지 못해 글자로 대신 보이는 이미지 토큰
   brokenImages: ReadonlySet<string>
   onTerm: (termId: number) => void
-  onImageError: (token: string) => void
+  onImageError: (token: string, failedUrl: string) => void
 }
 
 type NoteBodyProps = {
@@ -29,7 +29,7 @@ type NoteBodyProps = {
   images: NoteReadResponse['images']
   brokenImages: ReadonlySet<string>
   onTerm: (termId: number) => void
-  onImageError: (token: string) => void
+  onImageError: (token: string, failedUrl: string) => void
 }
 
 // 노트 본문을 마크다운 구문 트리로 읽어 React 요소로 그린다. 본문은 HTML로 해석하지 않는다.
@@ -143,7 +143,7 @@ function image(url: string, alt: string, context: Context): ReactNode {
   if (!entry || context.brokenImages.has(token)) {
     return <span className={styles.imageFallback} role="img" aria-label={alt || entry?.alt || '이미지'}>이미지를 불러오지 못했어요{alt ? ` (${alt})` : ''}</span>
   }
-  return <img className={styles.image} src={entry.url} alt={alt || entry.alt} loading="lazy" onError={() => context.onImageError(token)} />
+  return <img className={styles.image} src={entry.url} alt={alt || entry.alt} loading="lazy" onError={() => context.onImageError(token, entry.url)} />
 }
 
 function block(node: RootContent, context: Context): ReactNode {
