@@ -1016,3 +1016,78 @@ test('409 stale_revision이면 노트를 다시 불러오고 새 개정으로 �
   expect(calls.map((call) => call.body.note_revision)).toEqual([5, 6])
   expect(before).toBeGreaterThanOrEqual(1)
 })
+
+// PR #67 AI 리뷰 P2 ② 서버가 retry_after_seconds로 정한 대기 시간 전에는 같은 선택의 요청을 다시 보내지 않는다.
+const withRetryAfter = (code: string, seconds: number, detail?: string) => ({ error: { ...aiError(code, detail).error, retry_after_seconds: seconds } })
+
+test('429 rate_limited의 retry_after_seconds 동안은 다시 시도해도 요청이 늘지 않고, 시트를 닫았다 열어도 같다', async ({ page }) => {
+  await page.clock.install()
+  const { calls } = await setupAi(page, {
+    member: true,
+    respond: (_call, n) => n === 1 ? { status: 429, json: withRetryAfter('rate_limited', 60) } : { status: 200, json: aiSuccess },
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('60초 뒤에 다시 시도할 수 있어요')).toBeVisible()
+  await expect(retryButton(page)).toHaveAttribute('aria-disabled', 'true')
+  await retryButton(page).click({ force: true }) // aria-disabled라 Playwright는 기본으로 누르지 않는다. 눌러도 요청이 나가지 않는지 본다
+  await page.waitForTimeout(200)
+  expect(calls).toHaveLength(1) // 대기 시간 전에는 요청이 나가지 않는다
+  // 닫았다 같은 선택을 다시 열어도 대기가 이어진다(서버에 다시 묻지 않는다)
+  await page.keyboard.press('Escape')
+  await askAi(page)
+  await expect(sheet.getByText('요청이 많아요. 잠시 뒤에 다시 시도해 주세요.')).toBeVisible()
+  await expect(retryButton(page)).toHaveAttribute('aria-disabled', 'true')
+  await page.waitForTimeout(200)
+  expect(calls).toHaveLength(1)
+  // 대기 시간이 지나면 다시 시도할 수 있다
+  await page.clock.fastForward(61_000)
+  await expect(retryButton(page)).not.toHaveAttribute('aria-disabled', 'true')
+  await retryButton(page).click()
+  await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls).toHaveLength(2)
+})
+
+test('409 in_progress의 retry_after_seconds도 기다린 뒤 같은 키로 다시 보낸다', async ({ page }) => {
+  await page.clock.install()
+  const { calls } = await setupAi(page, {
+    member: true,
+    respond: (_call, n) => n === 1 ? { status: 409, json: withRetryAfter('conflict', 30, 'in_progress') } : { status: 200, json: aiSuccess },
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('30초 뒤에 다시 시도할 수 있어요')).toBeVisible()
+  await retryButton(page).click({ force: true }) // aria-disabled라 Playwright는 기본으로 누르지 않는다. 눌러도 요청이 나가지 않는지 본다
+  await page.waitForTimeout(200)
+  expect(calls).toHaveLength(1)
+  await page.clock.fastForward(31_000)
+  await expect(retryButton(page)).not.toHaveAttribute('aria-disabled', 'true')
+  await retryButton(page).click()
+  await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls).toHaveLength(2)
+  expect(calls[1].key).toBe(calls[0].key)
+})
+
+// PR #67 AI 리뷰 P2 ① review_status가 없는 1회용 설명에도 "AI 생성·검수 전"을 보인다. 검수가 끝난 값이 오면 "AI 생성"이다.
+test('review_status가 없는 1회용 설명은 "AI 생성·검수 전", 검수 끝난 설명은 "AI 생성"을 보인다', async ({ page }) => {
+  let reviewed = false
+  await setupAi(page, {
+    member: true,
+    respond: () => reviewed
+      ? { status: 200, json: { ...aiSuccess, explanation: { ...aiSuccess.explanation, review_status: 'approved' } } }
+      : { status: 200, json: { source: 'ai', term: null, explanation: { id: null, body: '합성 1회용 AI 설명입니다.' }, reportable: false } },
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('합성 1회용 AI 설명입니다.')).toBeVisible()
+  await expect(sheet.getByText('AI 생성·검수 전')).toBeVisible()
+  await page.keyboard.press('Escape')
+  reviewed = true
+  await askAi(page)
+  await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+  await expect(sheet.getByText('AI 생성', { exact: true })).toBeVisible()
+  await expect(sheet.getByText('AI 생성·검수 전')).toHaveCount(0)
+})

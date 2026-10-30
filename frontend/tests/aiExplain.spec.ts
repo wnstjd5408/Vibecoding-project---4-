@@ -89,6 +89,7 @@ test('저장하지 않는 1회용 설명에는 즐겨찾기·신고 같은 기�
   await aiButton(page).click()
   const sheet = aiSheet(page, '설명합니다')
   await expect(sheet.getByText('합성 1회용 AI 설명입니다.')).toBeVisible()
+  await expect(sheet.getByText('AI 생성·검수 전')).toBeVisible() // 검수 상태가 없는 1회용 설명도 검수 전으로 보인다
   await expect(sheet.getByRole('button', { name: /즐겨찾기|신고/ })).toHaveCount(0)
 })
 

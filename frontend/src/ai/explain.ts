@@ -55,12 +55,33 @@ function keepsKey(error: unknown): boolean {
 
 const keys = new Map<string, string>()
 const inFlight = new Map<string, Promise<ExplainResponse>>()
+// 서버가 429·409 in_progress에서 준 retry_after_seconds 동안은 같은 선택의 요청을 보내지 않는다. 시트를 닫았다 다시 열어도 이어진다.
+const waits = new Map<string, { until: number; error: unknown }>()
+
+// 서버 값이 이상하게 커도 화면이 오래 막히지 않게 하는 상한(초)
+const MAX_WAIT_SECONDS = 600
+
+function idOf(target: ExplainTarget): string {
+  return `${target.noteId}:${target.revision}:${target.start}:${target.end}`
+}
+
+// 서버가 지정한 재시도 가능 시각(ms). 기다릴 필요가 없으면 null이다.
+export function retryAvailableAt(target: ExplainTarget): number | null {
+  const wait = waits.get(idOf(target))
+  return wait !== undefined && wait.until > Date.now() ? wait.until : null
+}
 
 // 같은 선택의 요청이 진행 중이면 새로 보내지 않고 그 요청을 이어서 본다(시트를 닫았다 다시 열어도 중복 호출·새 키가 생기지 않는다).
 export function requestExplanation(target: ExplainTarget): Promise<ExplainResponse> {
-  const id = `${target.noteId}:${target.revision}:${target.start}:${target.end}`
+  const id = idOf(target)
   const running = inFlight.get(id)
   if (running) return running
+  // 서버가 정한 대기 시간 전에는 요청을 보내지 않고 그때의 오류를 그대로 돌려준다.
+  const wait = waits.get(id)
+  if (wait !== undefined) {
+    if (wait.until > Date.now()) return Promise.reject(wait.error)
+    waits.delete(id)
+  }
   const key = keys.get(id) ?? newIdempotencyKey()
   keys.set(id, key)
   const request = apiFetch<ExplainResponse>('/api/ai/explanations', {
@@ -74,6 +95,8 @@ export function requestExplanation(target: ExplainTarget): Promise<ExplainRespon
     },
     (error: unknown) => {
       if (!keepsKey(error)) keys.delete(id)
+      const seconds = isApiError(error) && (error.code === 'rate_limited' || isApiError(error, 'conflict', 'in_progress')) ? error.retryAfterSeconds : undefined
+      if (seconds !== undefined && seconds > 0) waits.set(id, { until: Date.now() + Math.min(seconds, MAX_WAIT_SECONDS) * 1000, error })
       throw error
     },
   )

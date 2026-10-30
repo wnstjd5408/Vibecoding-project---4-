@@ -9,7 +9,7 @@ import { BottomSheet } from '../components/BottomSheet.tsx'
 import { Button } from '../components/Button.tsx'
 import { StateMessage } from '../components/StateMessage.tsx'
 import { NoteBody } from '../notes/NoteBody.tsx'
-import { classifyExplainError, requestExplanation } from './explain.ts'
+import { classifyExplainError, requestExplanation, retryAvailableAt } from './explain.ts'
 import type { ExplainFailure, ExplainTarget } from './explain.ts'
 import styles from './AiExplainSheet.module.css'
 
@@ -22,6 +22,8 @@ const MESSAGES = {
   aiBoxLabel: 'AI 생성 설명',
   imageFailed: '이미지를 불러오지 못했어요',
   retry: '다시 시도',
+  // 서버가 정한 대기 시간(retry_after_seconds)이 남았을 때
+  waitBefore: (seconds: number) => `${seconds}초 뒤에 다시 시도할 수 있어요`,
   reloadNote: '노트 다시 불러오기',
   failures: {
     limit_reached: '오늘 쓸 수 있는 AI 설명을 모두 썼어요. 나중에 다시 시도해 주세요.',
@@ -43,6 +45,11 @@ const RETRYABLE: ReadonlySet<ExplainFailure> = new Set(['rate_limited', 'ai_unav
 function shortTitle(text: string): string {
   const chars = [...text.trim()]
   return chars.length > 40 ? `${chars.slice(0, 40).join('')}…` : chars.join('')
+}
+
+// 검수 전 표시: pending이거나 review_status가 없는 설명(저장하지 않는 1회용 설명은 검수 상태가 없다)
+function reviewPending(status: string | undefined): boolean {
+  return status === undefined || status === 'pending'
 }
 
 const NO_SPANS: never[] = []
@@ -81,7 +88,8 @@ export function AiExplainSheet({ open, onClose, openId, target, text, onLoginReq
   )
 }
 
-type Result = { key: number; data: ExplainResponse } | { key: number; failure: ExplainFailure }
+// until: 서버가 정한 재시도 가능 시각(ms). 기다릴 필요가 없으면 null이다.
+type Result = { key: number; data: ExplainResponse } | { key: number; failure: ExplainFailure; until: number | null; seconds: number }
 
 function AiExplainContent({ target, onBadge, onLoginRequired, onReloadNote }: Pick<AiExplainSheetProps, 'onLoginRequired' | 'onReloadNote'> & { target: ExplainTarget; onBadge: (badge: ReactNode) => void }) {
   const [attempt, setAttempt] = useState(0)
@@ -101,6 +109,13 @@ function AiExplainContent({ target, onBadge, onLoginRequired, onReloadNote }: Pi
     callbacks.current = { onLoginRequired, onBadge }
   })
   const current = result?.key === attempt ? result : null
+  // 서버가 정한 대기 시간이 끝날 때까지 다시 시도 버튼을 막는다(null이면 막지 않는다).
+  const [waitingUntil, setWaitingUntil] = useState<number | null>(null)
+  useEffect(() => {
+    if (waitingUntil === null) return
+    const timer = setTimeout(() => setWaitingUntil(null), Math.max(0, waitingUntil - Date.now()))
+    return () => clearTimeout(timer)
+  }, [waitingUntil])
 
   useEffect(() => {
     requestExplanation(target).then(
@@ -108,14 +123,16 @@ function AiExplainContent({ target, onBadge, onLoginRequired, onReloadNote }: Pi
         if (!alive.current) return
         callbacks.current.onBadge(data.source === 'glossary'
           ? <Badge tone="dictionary">{MESSAGES.dictionary}</Badge>
-          : <AiBadge>{data.explanation.review_status === 'pending' ? MESSAGES.aiPending : MESSAGES.aiGenerated}</AiBadge>)
+          : <AiBadge>{reviewPending(data.explanation.review_status) ? MESSAGES.aiPending : MESSAGES.aiGenerated}</AiBadge>)
         setResult({ key: attempt, data })
       },
       (error: unknown) => {
         if (!alive.current) return
         // 401 login_required는 로그인 안내가 맡는다(로그인 사용자의 세션 만료). 그 밖의 오류는 아래의 오류별 안내다.
         if (callbacks.current.onLoginRequired(error)) return
-        setResult({ key: attempt, failure: isApiError(error) ? classifyExplainError(error) : 'failed' })
+        const until = retryAvailableAt(target)
+        setWaitingUntil(until)
+        setResult({ key: attempt, failure: isApiError(error) ? classifyExplainError(error) : 'failed', until, seconds: until === null ? 0 : Math.ceil((until - Date.now()) / 1000) })
       },
     )
   }, [target, attempt])
@@ -127,9 +144,10 @@ function AiExplainContent({ target, onBadge, onLoginRequired, onReloadNote }: Pi
       <StateMessage
         kind="error"
         title={MESSAGES.failures[failure]}
+        description={waitingUntil !== null && RETRYABLE.has(failure) ? MESSAGES.waitBefore(current.seconds) : undefined}
         action={failure === 'stale_revision'
           ? <Button onClick={onReloadNote}>{MESSAGES.reloadNote}</Button>
-          : RETRYABLE.has(failure) ? <Button onClick={() => setAttempt((value) => value + 1)}>{MESSAGES.retry}</Button> : undefined}
+          : RETRYABLE.has(failure) ? <Button aria-disabled={waitingUntil !== null} onClick={() => setAttempt((value) => value + 1)}>{MESSAGES.retry}</Button> : undefined}
       />
     )
   }
