@@ -493,3 +493,21 @@ aws s3api list-object-versions --bucket $bucket --prefix db/latest/backup.tar --
 진단 코드 `IMAGE_RATE_LIMITED`는 요청 제한, `IMAGE_MANIFEST_MISSING`은 태그/플랫폼
 매니페스트 없음, `IMAGE_ACCESS_DENIED`는 이미지 접근 거부다. 이전
 `CONTAINER_IMAGE_FAILED` 코드만으로는 이 셋을 구분할 수 없다.
+
+### roles 덤프 실패 분리 진단
+
+`roles` 덤프가 실패하면 `CLI_EXIT_<숫자>`와 고정 오류 코드가 출력된다.
+이어 `probe_backup.py`가 준비된 동일 이미지로 세 단계를 검사한다.
+
+- `CONTAINER_TOOL`: pg_dumpall 실행 가능 여부.
+- `CONNECTION`: psql의 읽기 전용 `SELECT 1` 연결 검사.
+- `ROLES`: 동일 역할 옵션의 pg_dumpall 실행. 비밀번호 해시를 제외하고 결과 전체를 버린다.
+
+실패한 단계에서 검사를 멈춘다. 각 검사에는 30초 제한이 있고 타임아웃 컨테이너는
+정리한다. 연결 값은 Docker 명령 인수가 아닌 환경변수로 전달한다. stdout은 버리고
+stderr는 메모리에서 고정 코드로 분류하며, 원문이나 예외를 출력하지 않는다.
+세 단계가 모두 성공하면 `CLI_DUMP_PATH_FAILED`로 CLI 실행 경로와 DB 연결/권한
+문제를 구분한다. probe 성공은 백업 성공을 뜻하지 않으며 원래 워크플로는 실패로 끝난다.
+
+`sslmode`, `channel_binding` 이외 URL 쿼리 옵션은 잘못된 조건으로 검사하지 않도록
+`PROBE_URL_UNSUPPORTED`로 표시한다. 정상 CLI 덤프의 옵션과 동작은 변경하지 않는다.
