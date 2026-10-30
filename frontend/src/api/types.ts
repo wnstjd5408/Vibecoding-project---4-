@@ -30,13 +30,28 @@ export type NoteListResponse = {
   notes: {
     id: number
     title: string
-    studied_on: string
+    studied_on: string | null
     subjects: { id: number; name: string }[]
     parent_note_id: number | null
     is_published?: boolean
     revision?: number
     needs_review?: boolean
   }[]
+}
+
+// E05 GET /api/notes/{id}. glossary_spans의 start·end는 body_markdown 원문의 유니코드 코드포인트 위치이고 끝은 포함하지 않는다(2026-10-30 결정).
+// images의 키는 본문 `note-image:<키>` 토큰이다. url은 서명 URL이라 expires_at 뒤에는 열리지 않을 수 있어 E05를 다시 불러 새로 받는다.
+export type NoteReadResponse = {
+  id: number
+  revision: number
+  title: string
+  studied_on: string | null
+  subjects: { id: number; name: string }[]
+  sources: { url: string; label: string }[]
+  body_markdown: string
+  images: Record<string, { url: string; alt: string; expires_at: string }>
+  glossary_terms: { term_id: number; key: string; label: string }[]
+  glossary_spans: { term_id: number; start: number; end: number }[]
 }
 
 // E08 PUT /api/favorites/{term_id}

@@ -1,0 +1,245 @@
+{
+  "title": "Vercel OIDC → Bedrock (MEG-119)",
+  "layout": "row",
+  "children": [
+    {
+      "id": "g_vercel",
+      "group": "generic",
+      "label": "Vercel 프로젝트 (team issuer)",
+      "layout": "column",
+      "align": "center",
+      "children": [
+        {
+          "id": "sp_v0",
+          "note": true,
+          "text": " \n \n "
+        },
+        {
+          "id": "vercel_fn",
+          "aws": "client",
+          "label": "FastAPI 함수"
+        },
+        {
+          "id": "fn_call",
+          "note": true,
+          "box": true,
+          "w": 170,
+          "text": "같은 함수가\n임시 자격증명으로 호출"
+        },
+        {
+          "id": "sp_v",
+          "note": true,
+          "text": " \n "
+        },
+        {
+          "id": "token_note",
+          "note": true,
+          "box": true,
+          "w": 210,
+          "text": "OIDC 토큰(요청 헤더)\niss: oidc.vercel.com/<team>\naud: vercel.com/<team>\nsub: …:environment:<env>\n(브랜치 정보 없음)"
+        }
+      ]
+    },
+    {
+      "id": "g_aws",
+      "group": "aws_cloud",
+      "label": "AWS 계정 (공용 실습)",
+      "layout": "column",
+      "children": [
+        {
+          "id": "g_top",
+          "group": "generic",
+          "label": " ",
+          "layout": "row",
+          "children": [
+            {
+              "id": "g_region",
+              "group": "region",
+              "label": "Region ap-northeast-1",
+              "layout": "column",
+              "children": [
+                {
+                  "id": "sts",
+                  "aws": "sts",
+                  "label": "AWS STS"
+                },
+                {
+                  "id": "bedrock",
+                  "aws": "bedrock",
+                  "label": "Amazon Bedrock\nglobal 추론 프로필"
+                }
+              ]
+            },
+            {
+              "id": "g_iam",
+              "group": "generic",
+              "label": "IAM (글로벌) — Terraform이 만드는 5개",
+              "layout": "row",
+              "children": [
+                {
+                  "id": "oidc",
+                  "aws": "iam",
+                  "label": "OIDC 공급자"
+                },
+                {
+                  "id": "g_roles",
+                  "group": "generic",
+                  "label": "역할 2개",
+                  "layout": "row",
+                  "children": [
+                    {
+                      "id": "role_prd",
+                      "aws": "iam_role",
+                      "label": "<owner>-vercel-\nbedrock-prd"
+                    },
+                    {
+                      "id": "role_pre",
+                      "aws": "iam_role",
+                      "label": "<owner>-vercel-\nbedrock-preview"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "g_state",
+              "group": "generic",
+              "label": "Terraform 상태",
+              "layout": "column",
+              "children": [
+                {
+                  "id": "s3",
+                  "aws": "s3",
+                  "label": "상태 버킷\nvercel-oidc.tfstate"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "g_bottom",
+          "group": "generic",
+          "label": " ",
+          "layout": "row",
+          "children": [
+            {
+              "id": "g_alert",
+              "group": "generic",
+              "label": "STS 실패 알림 (기존 alerts.tf)",
+              "layout": "row",
+              "children": [
+                {
+                  "id": "trail",
+                  "aws": "cloudtrail",
+                  "label": "CloudTrail"
+                },
+                {
+                  "id": "eb",
+                  "aws": "eventbridge",
+                  "label": "EventBridge 규칙"
+                },
+                {
+                  "id": "sns",
+                  "aws": "sns",
+                  "label": "SNS 이메일"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g_op",
+      "group": "generic",
+      "label": "운영자 로컬",
+      "layout": "column",
+      "align": "center",
+      "children": [
+        {
+          "id": "sp_op",
+          "note": true,
+          "text": " \n \n "
+        },
+        {
+          "id": "op",
+          "aws": "users",
+          "label": "terraform apply\n(사람)"
+        }
+      ]
+    },
+    {
+      "id": "g_legend",
+      "group": "generic",
+      "label": "범례",
+      "layout": "column",
+      "children": [
+        {
+          "id": "lg1",
+          "note": true,
+          "box": true,
+          "w": 300,
+          "text": "따라가는 순서 (실선)\n1 함수가 OIDC 토큰으로 역할 전환 요청\n  (STS AssumeRoleWithWebIdentity)\n2 공급자로 iss·aud 확인\n3 sub의 environment로 역할 1개만 허용\n4 임시 자격증명으로 Bedrock InvokeModel\n  (global.openai.gpt-6-luna)"
+        },
+        {
+          "id": "lg2",
+          "note": true,
+          "box": true,
+          "w": 300,
+          "text": "점선\nB 사람이 로컬 apply → 상태 파일 저장\n   (IAM 5개 생성, Infra CD 아님)\nC 역할 전환 실패 → 이메일 알림"
+        },
+        {
+          "id": "lg3",
+          "note": true,
+          "box": true,
+          "w": 300,
+          "text": "한계·메모\nPreview 역할은 staging과 PR 미리보기\n둘 다 맡을 수 있다(sub에 브랜치 없음)\nstaging 밖 차단은 MEG-120 예정\n역할마다 Bedrock InvokeModel 정책 1개\nSTS→CloudTrail 기록 선은 생략"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "vercel_fn",
+      "to": "sts",
+      "type": "data",
+      "label": "1"
+    },
+    {
+      "from": "sts",
+      "to": "oidc",
+      "type": "data",
+      "label": "2"
+    },
+    {
+      "from": "oidc",
+      "to": "role_prd",
+      "type": "data",
+      "label": "3"
+    },
+    {
+      "from": "fn_call",
+      "to": "bedrock",
+      "type": "data",
+      "label": "4"
+    },
+    {
+      "from": "op",
+      "to": "s3",
+      "type": "control",
+      "label": "B"
+    },
+    {
+      "from": "trail",
+      "to": "eb",
+      "type": "control",
+      "label": "C"
+    },
+    {
+      "from": "eb",
+      "to": "sns",
+      "type": "control",
+      "label": "C"
+    }
+  ]
+}

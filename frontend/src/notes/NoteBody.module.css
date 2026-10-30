@@ -1,0 +1,17 @@
+.body { font-size: 16px; line-height: 26px; overflow-wrap: anywhere; }
+.body > :first-child { margin-top: 0; }
+.body p, .body ul, .body ol, .body blockquote, .body pre { margin: 0 0 var(--space-4); }
+.body h2, .body h3, .body h4, .body h5, .body h6 { margin: var(--space-6) 0 var(--space-2); line-height: 28px; }
+.body h2 { font-size: 20px; }
+.body h3 { font-size: 18px; }
+.body h4, .body h5, .body h6 { font-size: 16px; }
+.body ul, .body ol { padding-left: var(--space-6); }
+.body li > p { margin-bottom: var(--space-2); }
+.body blockquote { padding-left: var(--space-3); border-left: 3px solid var(--surface-300); color: var(--ink-muted); }
+.body hr { margin: var(--space-6) 0; border: 0; border-top: 1px solid var(--surface-300); }
+.body a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.body code { padding: 0 var(--space-1); border-radius: var(--radius-sm); background: var(--surface-300); font-family: var(--font-mono); font-size: 14px; }
+.body pre { padding: var(--space-3); overflow-x: auto; border: 1px solid var(--surface-300); border-radius: var(--radius-sm); background: var(--surface-200); }
+.body pre code { padding: 0; background: none; font-size: 14px; line-height: 22px; }
+.image { display: block; max-width: 100%; height: auto; margin: var(--space-3) 0; border-radius: var(--radius-md); }
+.imageFallback { display: inline-block; padding: var(--space-1) var(--space-2); border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); color: var(--ink-muted); font-size: 14px; line-height: 22px; }

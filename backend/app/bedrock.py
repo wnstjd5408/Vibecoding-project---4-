@@ -5,6 +5,10 @@
 - api_key: 환경변수 AWS_BEARER_TOKEN_BEDROCK의 Bedrock 장기 API 키를 Bearer로 보낸다.
 
 키·토큰·자격증명·역할 ARN은 예외 메시지와 로그에 쓰지 않는다. 실패는 단계와 오류 코드만 남긴다.
+
+Vercel의 PR 미리보기 배포는 AI를 부르지 않는다(MEG-120). Vercel OIDC 토큰의 sub에는 브랜치가 없어
+Preview 역할을 staging과 PR 미리보기가 함께 맡을 수 있기 때문이다. 이 검사는 앱 안의 장치이고,
+PR 코드가 STS를 직접 부르는 경우는 막지 못한다(infra/README.md "Vercel OIDC 역할" 절).
 """
 
 import os
@@ -22,13 +26,16 @@ AUTH_MODES = (AUTH_OIDC, AUTH_API_KEY)
 
 API_KEY_ENV = "AWS_BEARER_TOKEN_BEDROCK"
 
+# AI를 부를 수 있는 Preview 배포의 브랜치. 다른 브랜치의 Preview(PR 미리보기)는 막는다.
+STAGING_BRANCH = "staging"
+
 
 class AiConfigError(ValueError):
     """설정이 잘못됐다. 값은 담지 않고 어떤 설정이 문제인지만 말한다."""
 
 
 class AiCallError(Exception):
-    """AI 호출 실패. step은 sts·bedrock·response, code는 AWS 오류 코드나 중단 사유."""
+    """AI 호출 실패. step은 environment·sts·bedrock·response, code는 AWS 오류 코드나 중단 사유."""
 
     def __init__(self, step: str, code: str) -> None:
         super().__init__(f"{step}: {code}")
@@ -98,8 +105,39 @@ def _assume_role(settings: BedrockSettings, oidc_token: str) -> dict[str, str]:
         raise AiCallError("sts", _error_code(error)) from None
 
 
+def is_staging_preview(environ: Mapping[str, str] | None = None) -> bool:
+    """staging 브랜치의 Preview 배포인지. Vercel 시스템 환경변수로 판단한다.
+
+    사용자 지정 환경도 VERCEL_ENV가 preview이고 이름은 VERCEL_TARGET_ENV에 들어가므로, 그것도 확인한다.
+    """
+    env = os.environ if environ is None else environ
+    return (
+        env.get("VERCEL_ENV") == "preview"
+        and (env.get("VERCEL_TARGET_ENV") or "preview") == "preview"
+        and env.get("VERCEL_GIT_COMMIT_REF") == STAGING_BRANCH
+    )
+
+
+def ai_allowed_in_environment(environ: Mapping[str, str] | None = None) -> bool:
+    """이 배포에서 AI를 불러도 되는지. VERCEL·VERCEL_ENV·VERCEL_GIT_COMMIT_REF는 Vercel이 런타임에 넣는다.
+
+    운영·vercel dev·로컬(Vercel 밖)은 허용하고, Preview는 staging 브랜치만 허용한다.
+    Vercel 위(VERCEL 있음)인데 VERCEL_ENV가 없거나 모르는 값이면 막는다.
+    """
+    env = os.environ if environ is None else environ
+    vercel_env = env.get("VERCEL_ENV") or ""
+    if not vercel_env:
+        return not env.get("VERCEL")
+    if vercel_env in ("production", "development"):
+        return True
+    return is_staging_preview(env)
+
+
 def make_client(settings: BedrockSettings, oidc_token: str | None = None):
     """설정에 맞는 bedrock-runtime 클라이언트를 만든다."""
+    # 두 인증 방식 모두 AWS에 요청하기 전에 막는다.
+    if not ai_allowed_in_environment():
+        raise AiCallError("environment", "BlockedEnvironment")
     if settings.auth_mode == AUTH_API_KEY:
         # boto3가 환경변수의 키를 읽어 Bearer 인증을 고른다.
         return boto3.client("bedrock-runtime", region_name=settings.region)

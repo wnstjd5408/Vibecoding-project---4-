@@ -12,8 +12,11 @@ export type AuthState = {
 }
 
 export type AuthContextValue = AuthState & {
-  // E03을 다시 불러 상태를 갱신한다. 로그인·로그아웃 뒤에 부른다.
-  refresh: () => Promise<void>
+  // E03을 다시 불러 상태를 갱신하고, 방금 읽은 상태를 돌려준다. 로그인·로그아웃 뒤에 부른다.
+  // 읽지 못해도 예외를 던지지 않고 status가 'error'인 상태를 돌려주므로, 완료를 성공으로 보지 말고 상태를 확인한다.
+  refresh: () => Promise<AuthState>
+  // 이미 확인한 상태를 추가 조회 없이 그대로 전역에 반영한다(예: 로그아웃 확인에서 방문자를 읽은 뒤). 진행 중인 조회 결과는 버린다.
+  apply: (state: AuthState) => void
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null)

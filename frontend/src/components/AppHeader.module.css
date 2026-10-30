@@ -1,0 +1,36 @@
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  height: 56px;
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--surface-300);
+}
+
+/* 제목형: 앱 이름. 왼쪽 여백은 화면 좌우 여백 16px에 맞춘다 */
+.title {
+  padding-left: var(--space-2);
+  font-size: 17px;
+  line-height: 26px;
+  font-weight: 700;
+}
+
+/* 뒤로 가기형: 이전 목록으로 가는 글자 링크 */
+.back {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}

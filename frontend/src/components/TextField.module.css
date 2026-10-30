@@ -1,0 +1,61 @@
+.label {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+}
+
+.control {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
+  /* 입력 칸 테두리는 조작 요소 경계라 line-strong(3:1 이상)을 쓴다 */
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-100);
+  color: var(--ink);
+  font: inherit;
+  /* 디자인 시스템 body-sm은 14px이지만 입력 칸은 16px로 둔다. iOS Safari가 16px 미만 입력 칸을 누르면 화면을 확대하기 때문이다(2026-10-29 김준성 결정). */
+  font-size: 16px;
+  line-height: 26px;
+}
+
+.control::placeholder {
+  color: var(--ink-muted);
+}
+
+textarea.control {
+  min-height: 120px;
+  resize: vertical;
+}
+
+/* 비활성: aria-disabled(+readonly)도 같은 모양. 배경과 테두리는 surface-300 */
+.control:disabled,
+.control[aria-disabled='true'] {
+  border-color: var(--surface-300);
+  color: var(--ink-muted);
+  cursor: not-allowed;
+}
+
+/* 오류: 빨간 칠 없이 2px ink 테두리와 "오류:" 글자로 알린다(색만으로 구분하지 않는다) */
+.control[aria-invalid='true'] {
+  border: 2px solid var(--ink);
+}
+
+.hint,
+.error {
+  margin: var(--space-1) 0 0;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.hint {
+  color: var(--ink-muted);
+}
+
+.error {
+  color: var(--ink);
+  font-weight: 600;
+}

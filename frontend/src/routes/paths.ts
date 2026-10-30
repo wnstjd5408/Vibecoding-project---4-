@@ -19,6 +19,7 @@ export const operatorPaths = {
 export const devPaths = {
   mockup: '/dev/mockup', // MEG-113 전체 목업 검토. 제품 경로와 데이터는 분리한다.
   foundationDemo: '/dev/foundation', // 공통 기반 확인용 샘플 화면(MEG-105)
+  componentShowcase: '/dev/components', // 공통 컴포넌트를 한 페이지에 모아 디자인과 비교하는 화면(MEG-70)
 } as const
 
 // noteRead 경로에 노트 id를 채운다.

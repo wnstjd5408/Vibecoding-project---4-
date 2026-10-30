@@ -43,6 +43,49 @@ const NOTES = [
   { id: 14, title: '예시 노트 · 캐시가 오래된 값을 돌려주는 경우', studied_on: '2026-09-27', subjects: [SUBJECTS[0]], parent_note_id: null },
 ].map((note) => ({ ...note, subjects: note.subjects.map(({ id, name }) => ({ id, name })) }))
 
+const EXAMPLE_IMAGE =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120"><rect width="320" height="120" fill="#dde2e9"/><text x="160" y="66" text-anchor="middle" font-size="20" fill="#16202f">EXAMPLE IMAGE</text></svg>')
+
+// 노트 본문 속 label의 모든 위치를 glossary_spans 형식(코드포인트, 끝 제외)으로 만든다. 가짜 응답이 서버 계산을 흉내 낸다.
+function spansOf(body: string, label: string, termId: number) {
+  const spans: { term_id: number; start: number; end: number }[] = []
+  for (let at = body.indexOf(label); at >= 0; at = body.indexOf(label, at + label.length)) {
+    const start = [...body.slice(0, at)].length
+    spans.push({ term_id: termId, start, end: start + [...label].length })
+  }
+  return spans
+}
+
+// 위치 계산 시험용 합성 노트: 제목·굵게·이스케이프·엔티티·목록·인라인 코드·코드 블록·이모지(UTF-16 두 칸)가 섞여 있다.
+const RICH_BODY = [
+  '## 프로세스 **스케줄링**',
+  '',
+  '😀 ExampleTerm 은 \\*별표\\* 와 &amp; 가 있는 글에서도 찾아요.',
+  '',
+  '- 첫째 항목 ExampleTerm',
+  '- 둘째 `code ExampleTerm` 항목',
+  '',
+  '```js',
+  'const a = ExampleTerm',
+  '```',
+  '',
+  '끝 줄입니다.',
+].join('\n')
+
+const RICH_NOTE = {
+  id: 12,
+  revision: 1,
+  title: '예시 노트 · 프로세스가 번갈아 실행되는 이유',
+  studied_on: '2026-10-09',
+  subjects: [{ id: 2, name: '운영체제' }],
+  sources: [],
+  body_markdown: RICH_BODY,
+  images: {},
+  glossary_terms: [{ term_id: 7, key: 'exampleterm', label: 'ExampleTerm' }],
+  glossary_spans: spansOf(RICH_BODY, 'ExampleTerm', 7),
+}
+
 const routes: Route[] = [
   // 백엔드 상태 확인. 개발 서버 프록시가 실제 백엔드의 /health로 이어 주는 경로와 같은 모양이다.
   { method: 'GET', pattern: /^\/api\/health$/, handle: () => ({ status: 200, body: { status: 'ok' } }) },
@@ -95,11 +138,12 @@ const routes: Route[] = [
       return { status: 200, body }
     },
   },
-  // E05 노트 읽기. 예시 1의 노트 11만 있다.
+  // E05 노트 읽기. 예시 1의 노트 11과, 마크다운 문법·이모지가 섞인 시험용 노트 12만 있다.
   {
     method: 'GET',
     pattern: /^\/api\/notes\/(\d+)$/,
     handle: (_request, [noteId]) => {
+      if (noteId === '12') return { status: 200, body: RICH_NOTE }
       if (noteId !== '11') return notFound()
       return {
         status: 200,
@@ -112,11 +156,8 @@ const routes: Route[] = [
           sources: [{ url: 'https://example.test/doc', label: '예시 문서' }],
           body_markdown: '이 노트는 ExampleTerm 을 설명합니다. UnknownWord 는 사전에 없습니다. ![그림](note-image:blk-1)',
           images: {
-            'blk-1': {
-              url: 'https://storage.example.test/signed/EXAMPLE?token=EXAMPLE_ONLY',
-              alt: '그림',
-              expires_at: '2026-10-23T05:35:00Z',
-            },
+            // 예시 1은 https://storage.example.test/... URL이다. 가짜 응답에서도 그림이 보이도록 같은 모양의 data URL을 쓴다.
+            'blk-1': { url: EXAMPLE_IMAGE, alt: '그림', expires_at: '2026-10-23T05:35:00Z' },
           },
           glossary_terms: [{ term_id: 7, key: 'exampleterm', label: 'ExampleTerm' }],
           glossary_spans: [{ term_id: 7, start: 6, end: 17 }],
