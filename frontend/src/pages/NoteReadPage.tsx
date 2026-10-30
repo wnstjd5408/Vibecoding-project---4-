@@ -6,6 +6,8 @@ import { AccountMenu } from '../account/AccountMenu.tsx'
 import { useAuth } from '../auth/useAuth.ts'
 import { AppHeader, Button, LinkButton, StateMessage } from '../components/index.ts'
 import { TermSheet } from '../glossary/TermSheet.tsx'
+import { isLoginRequired } from '../loginPrompt/isLoginRequired.ts'
+import { useLoginPrompt } from '../loginPrompt/useLoginPrompt.ts'
 import { NoteBody } from '../notes/NoteBody.tsx'
 import { userPaths } from '../routes/paths.ts'
 import styles from './NoteReadPage.module.css'
@@ -30,6 +32,7 @@ export default function NoteReadPage() {
 
 function NoteRead({ noteId }: { noteId: string }) {
   const auth = useAuth()
+  const { handleLoginRequired } = useLoginPrompt()
   const [attempt, setAttempt] = useState(0)
   const [result, setResult] = useState<Result | null>(null)
   // 열린 용어 시트. openId는 열 때마다 올라가 같은 용어를 다시 열어도 새로 불러온다.
@@ -77,6 +80,12 @@ function NoteRead({ noteId }: { noteId: string }) {
 
   const note = current && 'data' in current ? current.data : null
   const term = note?.glossary_terms.find((item) => item.term_id === openTerm?.termId)
+  // 시트 안 즐겨찾기가 401 login_required를 받으면 용어 시트를 먼저 닫고 로그인 안내를 연다. 안내를 닫으면 누른 용어 링크로 포커스가 돌아간다.
+  const onFavoriteLoginRequired = (error: unknown) => {
+    if (!isLoginRequired(error)) return false
+    setOpenTerm(null)
+    return handleLoginRequired(error)
+  }
   const showTerm = (termId: number) => {
     openCount.current += 1
     setOpenTerm({ termId, openId: openCount.current })
@@ -102,7 +111,7 @@ function NoteRead({ noteId }: { noteId: string }) {
               brokenImages={brokenImages} onTerm={showTerm} onImageError={onImageError} />
           </article>}
     </main>
-    {/* 용어를 누르면 열리는 시트(F1-3). 즐겨찾기 버튼과 로그인 안내 연결은 PR #56(MEG-77) 병합·MEG-90 구현 뒤에 이 안에 더한다. */}
-    <TermSheet open={term !== undefined} onClose={() => setOpenTerm(null)} openId={openTerm?.openId ?? 0} termId={openTerm?.termId ?? null} label={term?.label ?? ''} />
+    {/* 용어를 누르면 열리는 시트(F1-3). 시트 안 즐겨찾기 버튼(MEG-90)과 로그인 안내 연결(MEG-77)이 이 안에 있다. */}
+    <TermSheet open={term !== undefined} onClose={() => setOpenTerm(null)} openId={openTerm?.openId ?? 0} termId={openTerm?.termId ?? null} label={term?.label ?? ''} onLoginRequired={onFavoriteLoginRequired} />
   </div>
 }
