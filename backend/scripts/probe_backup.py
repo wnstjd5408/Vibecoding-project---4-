@@ -5,6 +5,7 @@ import subprocess
 import socket
 import ssl
 import struct
+from pathlib import Path
 from uuid import uuid4
 from urllib.parse import parse_qsl, unquote, urlsplit
 
@@ -15,10 +16,19 @@ except ImportError:
 
 
 IMAGE = "public.ecr.aws/supabase/postgres:17.11.0.004"
+SUPABASE_CA = Path(__file__).resolve().parent / "certs" / "supabase-prod-ca-2021.crt"
 QUERY_ENV = {
     "sslmode": "PGSSLMODE",
     "channel_binding": "PGCHANNELBINDING",
 }
+
+
+def tls_context() -> ssl.SSLContext:
+    context = ssl.create_default_context()
+    # The managed pooler uses Supabase's CA, which is not a public OS trust root.
+    # Keep certificate verification and hostname validation enabled.
+    context.load_verify_locations(cafile=str(SUPABASE_CA))
+    return context
 
 
 def connection_env(value: str) -> dict[str, str]:
@@ -47,7 +57,7 @@ def probe_tls(pg_env: dict[str, str]) -> None:
             conn.sendall(struct.pack("!II", 8, 80877103))
             response = conn.recv(1)
             if response == b"S":
-                with ssl.create_default_context().wrap_socket(conn, server_hostname=pg_env["PGHOST"]):
+                with tls_context().wrap_socket(conn, server_hostname=pg_env["PGHOST"]):
                     code = "OK"
             elif response == b"N":
                 code = "TLS_NOT_SUPPORTED"
@@ -107,7 +117,7 @@ def main() -> int:
     except ValueError:
         print("Backup probe CONNECTION: PROBE_URL_UNSUPPORTED")
         return 1
-    # This uses the runner's CA store, while psql uses the image's libpq/CA store.
+    # This uses runner roots plus Supabase's CA; psql uses the image's libpq policy.
     # Always run psql too; a TLS probe alone cannot diagnose the password or pooler.
     probe_tls(pg_env)
     if not probe("CONNECTION", [

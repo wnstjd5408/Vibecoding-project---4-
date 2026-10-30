@@ -540,3 +540,15 @@ TLS probe가 실패해도 기존 psql 검사를 수행해 각각의 결과를 �
 [회로 차단 설명](https://github.com/supabase/supavisor/blob/main/lib/supavisor/circuit_breaker.ex)이다.
 원문이나 호스트·사용자명·비밀번호는 출력하지 않는다. 이 진단은 비밀번호 초기화,
 SSL 검증 해제, 풀러/서버 설정 변경을 자동 수행하지 않는다.
+
+### Supabase CA를 사용하는 TLS 진단
+
+2026-10-30 실제 관리형 세션 풀러에서 시스템 CA만 사용한 검증은 실패했지만,
+대시보드가 제공하는 Supabase CA를 로드한 뒤 인증서 체인과 호스트 이름 검증이
+성공했다. `probe_backup.py`는 이제 `scripts/certs/supabase-prod-ca-2021.crt`를
+시스템 신뢰 저장소에 추가한다. `CERT_REQUIRED`와 호스트 이름 검증은 유지한다.
+
+이 변경은 TLS 진단의 누락된 CA를 고친다. DB 비밀번호, CLI 컨테이너의 SSL 정책,
+Supabase Network Restrictions는 변경하지 않는다. 네트워크 제한은 별도 해결이
+필요하며, 표준 GitHub-hosted runner 주소는 고정되어 있지 않으므로 일회성 IP 추가를
+주간 자동 백업의 영구 해결로 취급하지 않는다.

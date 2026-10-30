@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from scripts.diagnose_backup import classify_log
-from scripts.probe_backup import probe_tls
+from scripts.probe_backup import SUPABASE_CA, probe_tls, tls_context
 
 
 # Representative server/client errors, not just a copy of classification rules.
@@ -40,6 +40,7 @@ def test_tls_sends_only_ssl_request_and_checks_hostname(monkeypatch, capsys):
     probe_tls({"PGHOST": "example.invalid", "PGPORT": "5432", "PGPASSWORD": "PRIVATE_SENTINEL"})
     conn.sendall.assert_called_once_with(struct.pack("!II", 8, 80877103))
     context.wrap_socket.assert_called_once_with(conn, server_hostname="example.invalid")
+    context.load_verify_locations.assert_called_once_with(cafile=str(SUPABASE_CA))
     assert capsys.readouterr().out == "Backup probe TLS: OK\n"
 
 
@@ -56,3 +57,11 @@ def test_tls_errors_never_echo_details(monkeypatch, capsys, error, code):
     captured = capsys.readouterr()
     assert captured.out == f"Backup probe TLS: {code}\n"
     assert captured.err == ""
+
+
+def test_official_ca_loads_without_disabling_verification():
+    context = tls_context()
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+    expected = ssl.PEM_cert_to_DER_cert(SUPABASE_CA.read_text(encoding="ascii"))
+    assert expected in context.get_ca_certs(binary_form=True)
