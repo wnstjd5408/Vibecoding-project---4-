@@ -4,7 +4,11 @@ import http.client
 import ipaddress
 import socket
 import ssl
+import os
+import subprocess
+import sys
 from io import BytesIO
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from PIL import Image, UnidentifiedImageError
@@ -12,6 +16,7 @@ from PIL import Image, UnidentifiedImageError
 MAX_BYTES = 10_000_000
 MAX_SIDE = 8_000
 MAX_PIXELS = 25_000_000
+SVG_TIMEOUT = 10
 # Notion's file-object documentation names this host and bucket prefix.
 # Unknown hosts fail closed; changes require documentation and review.
 HOST = "s3.us-west-2.amazonaws.com"
@@ -79,8 +84,6 @@ def download(url: str) -> bytes:
             raise OSError("image_http")
         if response.getheader("Content-Encoding", "identity") != "identity":
             raise ImageRejected("encoding")
-        if response.getheader("Content-Type", "").split(";")[0].lower() == "image/svg+xml":
-            raise ImageRejected("format")
         length = response.getheader("Content-Length")
         if length is not None and (not length.isdecimal() or int(length) > MAX_BYTES):
             raise ImageRejected("size")
@@ -95,6 +98,8 @@ def download(url: str) -> bytes:
 def reencode(data: bytes) -> bytes:
     if len(data) > MAX_BYTES:
         raise ImageRejected("size")
+    if data.removeprefix(b"\xef\xbb\xbf").lstrip().startswith(b"<"):
+        data = rasterize_svg(data)
     try:
         with Image.open(BytesIO(data)) as source:
             if source.format not in {"PNG", "JPEG", "WEBP", "GIF"}:
@@ -116,3 +121,24 @@ def reencode(data: bytes) -> bytes:
         return encoded
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
         raise ImageRejected("format") from None
+
+
+def rasterize_svg(data: bytes) -> bytes:
+    # No tokens, proxy settings or Python path overrides reach the worker.
+    environment = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR") if key in os.environ}
+    try:
+        result = subprocess.run(
+            [sys.executable, "-I", str(Path(__file__).with_name("notion_svg_worker.py"))],
+            input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=SVG_TIMEOUT, env=environment,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except subprocess.TimeoutExpired:
+        raise ImageRejected("svg_timeout") from None
+    except OSError:
+        raise ImageRejected("svg_renderer") from None
+    if result.returncode or not result.stdout.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ImageRejected("svg_policy")
+    if len(result.stdout) > MAX_BYTES:
+        raise ImageRejected("size")
+    return result.stdout
