@@ -7,8 +7,8 @@ import { startNewSession } from './sessionGeneration.ts'
 // E01 로그인. 성공하면 서버가 세션 쿠키를 심고 역할과 이름을 준다. 실패하면 ApiError를 던진다.
 // 비밀번호는 요청 본문으로만 보내고 어디에도 남기지 않는다.
 export function login(email: string, password: string): Promise<LoginResponse> {
-  // 새 세션 번호를 올려, 이전 세션의 진행 중 요청·대기가 이 로그인 뒤의 화면으로 넘어오지 않게 한다. 요청 전과 성공 뒤에 모두 올린다.
-  startNewSession()
+  // 로그인에 성공하면 새 세션 번호를 올려, 이전 세션의 진행 중 요청·대기가 이 로그인 뒤의 화면으로 넘어오지 않게 한다.
+  // 실패하면 세션이 바뀐 것이 아니므로 올리지 않는다(같은 계정의 재시도 키·대기를 잃지 않는다). 로그인 요청 중에 시작된 요청은 이전 번호를 가져 성공 뒤의 번호와 구분된다.
   return apiFetch<LoginResponse>('/api/auth/login', { method: 'POST', body: { email, password } }).then((response) => {
     startNewSession()
     return response
