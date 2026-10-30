@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
+import { goInApp } from './inApp.ts'
 
 // MEG-65 계정 메뉴(F4-4)와 내 정보(F4-5). playwright.config.ts가 VITE_API_MOCK=true로 서버를 띄우므로 가짜 응답과 합성 계정으로 시험한다.
 // 합성 계정은 src/api/mocks/handlers.ts에 있다. 실제 계정·비밀번호가 아니다.
@@ -95,8 +96,7 @@ test('AC-2 로그아웃하면 방문자 상태가 되고 과목·노트 목록�
   await expect(page.getByRole('banner').getByRole('link', { name: '로그인' })).toBeVisible()
   await expect(trigger(page)).toHaveCount(0)
   // useAuth 상태도 방문자다(앱 안 링크로만 옮겨 상태를 이어서 읽는다)
-  await page.getByRole('region', { name: '노트 목록' }).getByRole('link').first().click()
-  await page.getByRole('link', { name: '공통 기반 샘플' }).click()
+  await goInApp(page, '/dev/foundation')
   await expect(page.getByText('현재 상태:')).toContainText('방문자')
 })
 
