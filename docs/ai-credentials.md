@@ -17,7 +17,7 @@ AI는 운영(`VERCEL_ENV=production`), staging 브랜치의 Preview(`VERCEL_ENV=
 
 Vercel OIDC 토큰의 `sub`에는 브랜치가 없어 Preview 역할을 staging과 PR 미리보기가 함께 맡을 수 있기 때문이다. 이 검사는 앱 안의 장치라서, PR 코드가 STS를 직접 부르는 경우는 막지 못한다. 역할·한계는 `infra/README.md`의 "Vercel OIDC 역할" 절에 있다.
 
-**임시 확인 API:** `GET /api/dev/ai-probe`는 staging에서 실제 OIDC 토큰 → STS → Bedrock 경로를 한 번 확인한다. staging Preview에서만 동작하고(그 밖은 404), staging URL의 Vercel 배포 보호와 시간당 5회 상한(로그인한 요청은 사용자별, 아니면 IP별)이 걸려 있다. `AI_AUTH_MODE`가 `oidc`가 아니면 `NotOidcMode`로 실패한다. 응답은 단계·지연·성공 여부·오류 코드(또는 예외 종류)만이고 오류도 200으로 돌려준다. 보호된 staging에는 `vercel curl /api/dev/ai-probe --deployment <staging 주소>`로 부른다. MEG-118 검증이 끝나면 지운다.
+**배포 런타임 확인 기록:** staging에서 실제 OIDC 토큰 → STS → Bedrock 경로는 2026-10-30에 임시 확인 API로 한 번 확인했고(MEG-118), 그 API는 확인 뒤 지웠다(MEG-121). Production은 아직 미검증이며 MEG-21 출시 때 확인한다.
 
 ## 키 규칙
 
