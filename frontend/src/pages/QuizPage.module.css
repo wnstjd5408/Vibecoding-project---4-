@@ -7,3 +7,4 @@
 .footer { margin-top: var(--space-4); }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
 .link { display: inline-flex; align-items: center; min-height: 44px; color: var(--ink); font-size: 14px; line-height: 22px; font-weight: 600; }
+.body:focus { outline: none; }

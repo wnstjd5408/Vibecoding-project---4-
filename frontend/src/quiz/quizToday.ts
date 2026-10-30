@@ -2,31 +2,34 @@
 import { apiFetch, isApiError } from '../api/client.ts'
 import type { QuizTodayResponse } from '../api/types.ts'
 
-let inFlight: Promise<QuizTodayResponse> | null = null
+// account는 로그인한 계정을 가르는 값이다. 로그아웃 뒤 다른 계정으로 들어오면 이전 계정의 진행 중 요청·대기를 이어받지 않는다.
+let inFlight: { account: string; promise: Promise<QuizTodayResponse> } | null = null
 // 429가 준 retry_after_seconds 동안은 요청하지 않는다. 화면을 나갔다 돌아와도 이어진다.
-let wait: { until: number; error: unknown } | null = null
+let wait: { account: string; until: number; error: unknown } | null = null
 
 // 서버가 지정한 재시도 가능 시각(ms). 기다릴 필요가 없으면 null이다.
-export function quizRetryAvailableAt(): number | null {
-  return wait !== null && wait.until > Date.now() ? wait.until : null
+export function quizRetryAvailableAt(account: string): number | null {
+  return wait !== null && wait.account === account && wait.until > Date.now() ? wait.until : null
 }
 
 // 진행 중인 요청이 있으면 새로 보내지 않고 그 요청을 이어서 본다(화면이 다시 만들어져도 중복 요청이 나가지 않는다).
-export function requestQuizToday(): Promise<QuizTodayResponse> {
-  if (inFlight) return inFlight
+export function requestQuizToday(account: string): Promise<QuizTodayResponse> {
+  if (inFlight?.account === account) return inFlight.promise
   if (wait !== null) {
-    if (wait.until > Date.now()) return Promise.reject(wait.error)
-    wait = null
+    if (wait.account !== account) wait = null
+    else if (wait.until > Date.now()) return Promise.reject(wait.error)
+    else wait = null
   }
   const request = apiFetch<QuizTodayResponse>('/api/quiz/today', { method: 'POST' }).catch((error: unknown) => {
     if (isApiError(error, 'rate_limited') && error.retryAfterSeconds !== undefined && error.retryAfterSeconds > 0) {
-      wait = { until: Date.now() + error.retryAfterSeconds * 1000, error }
+      wait = { account, until: Date.now() + error.retryAfterSeconds * 1000, error }
     }
     throw error
   })
-  inFlight = request
+  const entry = { account, promise: request }
+  inFlight = entry
   const clear = () => {
-    if (inFlight === request) inFlight = null
+    if (inFlight === entry) inFlight = null
   }
   request.then(clear, clear)
   return request

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { AccountMenu } from '../account/AccountMenu.tsx'
 import type { QuizItem } from '../api/types.ts'
@@ -51,6 +51,25 @@ type View =
   | { kind: 'login' }
   | { kind: 'error'; reason: QuizFailure; until: number | null; seconds: number }
 
+// 서버가 약속한 여섯 상태가 아니거나 ready인데 문항 목록이 배열이 아니면 화면을 깨지 않고 불러오지 못한 것으로 안내한다.
+const FINAL_STATES = ['not_open', 'none', 'failed', 'ai_limit_reached'] as const
+const BAD_RESPONSE: View = { kind: 'error', reason: 'failed', until: null, seconds: 0 }
+
+function isItem(value: unknown): value is QuizItem {
+  return typeof value === 'object' && value !== null && typeof (value as QuizItem).id === 'number' && typeof (value as QuizItem).question === 'string'
+}
+
+function toView(data: unknown): View {
+  const response = (typeof data === 'object' && data !== null ? data : {}) as { status?: unknown; items?: unknown }
+  if (response.status === 'ready' && Array.isArray(response.items)) {
+    const items = response.items.filter(isItem)
+    // 문항이 왔는데 하나도 읽을 수 없으면 비어 있는 것이 아니라 잘못된 응답이다.
+    return items.length === 0 && response.items.length > 0 ? BAD_RESPONSE : { kind: 'ready', items }
+  }
+  const final = FINAL_STATES.find((state) => state === response.status)
+  return final ? { kind: final } : BAD_RESPONSE
+}
+
 const LEVEL: Record<string, Difficulty> = { 하: 'low', 중: 'mid', 상: 'high' }
 
 export default function QuizPage() {
@@ -65,6 +84,10 @@ export default function QuizPage() {
   const visitor = auth.status !== 'loading' && auth.role === 'visitor'
   const canRequest = auth.status !== 'loading' && !visitor
   const current = result?.key === attempt ? result.view : null
+  // 계정이 바뀌면 이전 계정의 진행 중 요청·429 대기를 이어받지 않는다.
+  const account = `${auth.role}:${auth.displayName ?? ''}`
+  // 다시 확인·다시 시도를 누르면 눌린 버튼이 사라지므로, 결과 영역을 포커스 자리로 잡아 둔다.
+  const bodyRef = useRef<HTMLDivElement>(null)
 
   // 방문자는 E11 요청 없이 공통 로그인 안내(퀴즈 문구)를 연다.
   useEffect(() => {
@@ -76,16 +99,17 @@ export default function QuizPage() {
     // 화면을 떠나거나 다시 확인을 눌러 이 요청이 낡았으면 응답을 쓰지 않고 예약한 재조회도 멈춘다.
     let alive = true
     let timer: ReturnType<typeof setTimeout> | undefined
-    requestQuizToday().then(
-      (data) => {
+    requestQuizToday(account).then(
+      (data: unknown) => {
         if (!alive) return
-        if (data.status === 'generating') {
+        const response = data as { status?: unknown; retry_after_seconds?: unknown } | null
+        if (response?.status === 'generating') {
           // 다른 상태로 바뀌기 전까지만 서버가 준 간격으로 다시 부른다. 요청은 응답을 받은 뒤에만 예약해 겹치지 않는다.
-          timer = setTimeout(() => setPoll((value) => value + 1), pollDelayMs(data.retry_after_seconds))
+          timer = setTimeout(() => setPoll((value) => value + 1), pollDelayMs(response.retry_after_seconds))
           setResult({ key: attempt, view: { kind: 'generating' } })
           return
         }
-        setResult({ key: attempt, view: data.status === 'ready' ? { kind: 'ready', items: data.items } : { kind: data.status } })
+        setResult({ key: attempt, view: toView(data) })
       },
       (error: unknown) => {
         if (!alive) return
@@ -94,7 +118,7 @@ export default function QuizPage() {
           setResult({ key: attempt, view: { kind: 'login' } })
           return
         }
-        const until = quizRetryAvailableAt()
+        const until = quizRetryAvailableAt(account)
         setWaitingUntil(until)
         setResult({ key: attempt, view: { kind: 'error', reason: classifyQuizError(error), until, seconds: until === null ? 0 : Math.ceil((until - Date.now()) / 1000) } })
       },
@@ -103,7 +127,7 @@ export default function QuizPage() {
       alive = false
       clearTimeout(timer)
     }
-  }, [canRequest, attempt, poll, handleLoginRequired])
+  }, [canRequest, attempt, poll, handleLoginRequired, account])
 
   useEffect(() => {
     if (waitingUntil === null) return
@@ -112,14 +136,19 @@ export default function QuizPage() {
     return () => clearTimeout(timer)
   }, [waitingUntil])
 
-  const recheck = () => setAttempt((value) => value + 1)
+  const recheck = () => {
+    bodyRef.current?.focus({ preventScroll: true })
+    setAttempt((value) => value + 1)
+  }
   const toNotes = <Link className={styles.link} to={userPaths.noteList}>{MESSAGES.toNotes}</Link>
 
   let body
   if (auth.status === 'loading' || (canRequest && current === null)) {
     body = <StateMessage kind="loading" title={MESSAGES.loading} headingLevel={2} />
   } else if (visitor || current?.kind === 'login') {
-    body = <StateMessage kind="empty" title={MESSAGES.loginTitle} headingLevel={2} action={toNotes} />
+    // 세션이 만료된 로그인 사용자가 안내를 닫아도 로그인으로 갈 길이 있게 한다(방문자는 헤더에 로그인 버튼이 있다).
+    body = <StateMessage kind="empty" title={MESSAGES.loginTitle} headingLevel={2}
+      action={<div className={styles.actions}>{current?.kind === 'login' ? <LinkButton to={userPaths.login}>로그인</LinkButton> : null}{toNotes}</div>} />
   } else if (current === null) {
     body = null
   } else if (current.kind === 'ready') {
@@ -130,7 +159,7 @@ export default function QuizPage() {
           <ul className={styles.list}>
             {current.items.map((item) => <li key={item.id}>
               <QuizCard headingLevel={2} title={item.question}
-                badges={<><AiBadge />{LEVEL[item.difficulty] ? <DifficultyChip level={LEVEL[item.difficulty]} /> : null}</>}>
+                badges={<><AiBadge />{Object.hasOwn(LEVEL, item.difficulty) ? <DifficultyChip level={LEVEL[item.difficulty]} /> : null}</>}>
                 {item.answered ? <p className={styles.answered}>{MESSAGES.answered}</p> : null}
               </QuizCard>
             </li>)}
@@ -160,7 +189,7 @@ export default function QuizPage() {
     } />
     <main className={styles.main} aria-busy={body !== null && (auth.status === 'loading' || (canRequest && current === null))}>
       <h1 className={styles.title}>{MESSAGES.title}</h1>
-      {body}
+      <div ref={bodyRef} tabIndex={-1} className={styles.body}>{body}</div>
     </main>
   </div>
 }
