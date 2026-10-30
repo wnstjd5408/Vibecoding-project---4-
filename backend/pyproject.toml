@@ -11,7 +11,11 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    {include-group = "importer"},
     "pytest>=9.1.1",
+]
+importer = [
+    "pillow>=13.0.0",
 ]
 
 [tool.pytest.ini_options]
