@@ -13,6 +13,9 @@ export const userPaths = {
 // 운영자(PC) 화면. 운영자 셸(MEG-78)이 이 묶음을 감싸 붙이고, 개별 운영자 화면은 이 아래에 경로를 더한다.
 export const operatorPaths = {
   home: '/admin', // F5-1a 운영자 노트 목록 (F1-1b의 "운영자 메뉴" 링크가 여기로 온다)
+  glossary: '/admin/glossary', // F5-1c 용어 사전
+  reports: '/admin/reports', // F5-2 신고
+  accounts: '/admin/accounts', // F4-3a 계정 발급
 } as const
 
 // 개발 중에만 쓰는 경로. 제품 화면이 아니다.

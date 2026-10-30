@@ -1,0 +1,91 @@
+.shell {
+  min-height: 100svh;
+}
+
+/* 목업 F5 헤더: 56px, 흰 종이 바탕, 좌우 24px */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  height: 56px;
+  padding: 0 var(--space-6);
+  background: var(--surface-200);
+  border-bottom: 1px solid var(--surface-300);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.title {
+  font-size: 17px;
+  line-height: 26px;
+  font-weight: 700;
+}
+
+.body {
+  display: flex;
+  min-height: calc(100svh - 56px);
+}
+
+.sidebar {
+  display: flex;
+  flex: 0 0 200px;
+  flex-direction: column;
+  gap: var(--space-1);
+  box-sizing: border-box;
+  padding: var(--space-4);
+  border-right: 1px solid var(--surface-300);
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.navItem[aria-current] {
+  background: var(--surface-300);
+  font-weight: 700;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-6) var(--space-8);
+}
+
+/* 권한을 확인하는 동안·확인하지 못했을 때의 안내(셸 없이 보인다) */
+.guard {
+  padding: var(--space-6) var(--space-4);
+}
+
+/* 좁은 화면(목업 구현 메모): 메뉴가 위로 올라와 가로로 흐른다 */
+@media (max-width: 700px) {
+  .body {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    flex: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: var(--space-2);
+    border-right: 0;
+    border-bottom: 1px solid var(--surface-300);
+  }
+
+  .content {
+    padding: var(--space-6) var(--space-4);
+  }
+}
