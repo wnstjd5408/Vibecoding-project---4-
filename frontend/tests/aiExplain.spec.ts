@@ -115,3 +115,31 @@ test('제목처럼 본문 밖을 고르면 버튼이 없다', async ({ page }) =
   await page.waitForTimeout(150)
   await expect(aiButton(page)).toHaveCount(0)
 })
+
+for (const [name, close] of [
+  ['Esc', (page: Page) => page.keyboard.press('Escape')],
+  ['닫기 버튼', (page: Page) => page.getByRole('button', { name: '닫기' }).click()],
+  ['막(스크림) 누르기', (page: Page) => page.mouse.click(195, 20)],
+] as const) {
+  test(`방문자의 로그인 안내를 ${name}로 닫으면 포커스가 노트 본문으로 돌아온다`, async ({ page }) => {
+    await page.goto('/notes/11')
+    await expect(page.getByRole('heading', { level: 1, name: 'Example Note' })).toBeVisible()
+    await selectText(page, 'UnknownWord')
+    await aiButton(page).click()
+    await expect(loginSheet(page)).toBeVisible()
+    await close(page)
+    await expect(loginSheet(page)).toBeHidden()
+    await expect(page.locator('article')).toBeFocused()
+  })
+}
+
+test('방문자의 로그인 안내에서 로그인 버튼을 누르면 /login으로 이동하고 안내가 남지 않는다', async ({ page }) => {
+  await page.goto('/notes/11')
+  await expect(page.getByRole('heading', { level: 1, name: 'Example Note' })).toBeVisible()
+  await selectText(page, 'UnknownWord')
+  await aiButton(page).click()
+  await loginSheet(page).getByRole('link', { name: '로그인' }).click()
+  await expect(page).toHaveURL(/\/login$/)
+  await expect(loginSheet(page)).toHaveCount(0)
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+})

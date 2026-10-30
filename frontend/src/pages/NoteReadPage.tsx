@@ -135,6 +135,8 @@ function NoteRead({ noteId }: { noteId: string }) {
     pressing.current = false
     if (!note || !pick) return
     const text = note.body_markdown.slice(pick.start, pick.end)
+    // 버튼은 누르면 사라지므로, 시트·안내를 닫았을 때 포커스가 돌아갈 곳으로 본문을 먼저 잡아 둔다.
+    articleRef.current?.focus({ preventScroll: true })
     document.getSelection()?.removeAllRanges()
     setPick(null)
     if (auth.role === 'visitor') return openLoginPrompt()
@@ -171,7 +173,7 @@ function NoteRead({ noteId }: { noteId: string }) {
         : 'error' in current ? <StateMessage kind="error" headingLevel={2}
             title={current.error === 'rate_limited' ? MESSAGES.rateLimited : MESSAGES.failed}
             action={<Button onClick={() => setAttempt((value) => value + 1)}>{MESSAGES.retry}</Button>} />
-        : <article ref={articleRef} className={styles.article}>
+        : <article ref={articleRef} className={styles.article} tabIndex={-1}>
             <h1 className={styles.title}>{current.data.title}</h1>
             <p className={styles.meta}>{[...current.data.subjects.map((item) => item.name), ...(current.data.studied_on ? [current.data.studied_on] : [])].join(' · ')}</p>
             <NoteBody body={current.data.body_markdown} spans={current.data.glossary_spans} images={current.data.images}
