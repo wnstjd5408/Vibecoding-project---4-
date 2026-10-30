@@ -188,8 +188,8 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 - **배포 증거:** 환경·버전·URL·동작 확인·복구 근거·사람의 출시 수락은 릴리스 티켓(MEG-21)에 남긴다.
 - **AI 장애:** AI 기능만 안내로 바꾸고 노트·사전 읽기는 계속 동작한다.
 - **Supabase 무료 플랜:** 사용이 없으면 프로젝트가 일시 정지될 수 있다(확인 필요). 정지 때 복구 절차는 릴리스 티켓에 적는다.
-- **DB 백업:** 운영자가 주기적으로 `supabase db dump`를 받아 저장소 밖 비공개 위치에 보관한다. 주기는 정하지 않았다. (미정, Q6)
-- **이미지 백업:** DB 덤프와 Supabase 백업에는 Storage 파일이 들어 있지 않다. 노트 이미지는 가져오기 직후 한 번 파일로 백업하고, 사전 이미지는 주기적으로 백업한다. (결정)
+- **DB 백업:** GitHub Actions `DB Backup`이 주 1회 `supabase db dump`를 받아 저장소 밖 비공개·암호화된 S3 버킷에 올린다. 사전을 대량으로 고치기 전에는 운영자가 같은 워크플로를 수동으로 실행한다. RPO는 7일이고 최근 8개(약 2개월) 이상을 버전으로 보관한다. 설정·복원 절차는 [인프라 가이드](../infra/README.md)의 "DB·이미지 백업" 절을 따른다. (결정, Q6, D-072)
+- **이미지 백업:** DB 덤프와 Supabase 백업에는 Storage 파일이 들어 있지 않다. 노트 이미지는 가져오기 직후 한 번 파일로 백업하고, 사전 이미지는 DB 백업과 같은 주기로 백업한다. 받은 파일 수는 이미지 표의 행과 대조한다. (결정)
 - **복구:** 노트·사전·사용자 데이터는 최근 덤프로 되돌린다. Notion은 가져온 뒤로 갱신하지 않으므로 노트 본문의 복구 원본으로 쓰지 않는다. 노트 이미지는 Notion 페이지가 남아 있는 동안 복구 모드 가져오기로 다시 받을 수 있다.
 
 ## 8. 외부 의존성 · 환경변수
@@ -222,6 +222,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 | `VITE_API_MOCK` | 가짜 응답과 실제 API 전환 | `true`일 때만 가짜 응답. 나머지는 같은 출처의 `/api`로 요청한다. `VITE_` 값에는 비밀값을 넣지 않는다 | 프런트엔드(빌드 시) |
 | `VERCEL`·`VERCEL_ENV`·`VERCEL_TARGET_ENV`·`VERCEL_GIT_COMMIT_REF` | Vercel 시스템 환경변수. 직접 넣지 않는다. AI 호출 허용 판정(운영·staging Preview·로컬만)과 운영 판정(`ALLOWED_ORIGINS` 필수)에 쓴다 | Vercel이 런타임에 넣는다. 프로젝트 설정의 시스템 환경변수 노출이 켜져 있어야 한다. Vercel 위인데 `VERCEL_ENV`가 없으면 AI를 막는다(MEG-120, [ai-credentials.md](ai-credentials.md)) | 백엔드(Vercel) |
 
+- 백업 워크플로(`DB Backup`, 7절)는 앱 환경변수가 아니라 GitHub `db-backup` Environment의 비밀값을 쓴다. `SUPABASE_DB_URL`(세션 풀러 연결 문자열, DB 덤프용), `SUPABASE_URL`·`SUPABASE_SECRET_KEY`(이미지 백업용, 백업 전용 키), `AWS_ROLE_ARN`·`BACKUP_BUCKET`(S3 업로드)이고, 변수는 `GLOSSARY_IMAGE_BUCKET`·`NOTE_IMAGE_BUCKET`이다. 앱이 도는 동안 FastAPI 밖에서 DB를 읽는 예외다(D-072). 설정은 [인프라 가이드](../infra/README.md)의 "DB·이미지 백업" 절을 따른다.
 - 가져오기 스크립트가 DB·버킷에 쓸 때 쓰는 가져오기 전용 secret key의 변수 이름은 아직 없다. 가져오기 구현(MEG-85)에서 정한다. (미정, D-070)
 - 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정), `backend/app/config.py`(허용 출처), `backend/app/supabase.py`(Supabase 주소·secret key), `frontend/src/api/source.ts`(가짜/실제 전환)다. `VITE_API_BASE_URL`은 사용하지 않는다. Notion 변수는 가져오기 구현 때 읽는다.
 
@@ -231,5 +232,4 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 |---|---|---|
 | AI 모델 확정과 한도 숫자 | 퀴즈·AI 기능 구현 | gpt-6-luna로 잠정 시작. 모델 시험과 Bedrock 단가 확인 뒤 확정 |
 | 사전 이미지 버킷 공개 여부(Q7) | 아니오 | 공개 읽기 제안 |
-| 백업 주기와 보관 위치(Q6) | 아니오 | 주 1회 + 대량 수정 전 제안 |
 | 프런트가 렌더된 글에서 원문 위치를 계산할 수 있는가 | AI 설명 구현 | 구현 전 확인. 안 되면 요청 형식을 다시 정한다 |

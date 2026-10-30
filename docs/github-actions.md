@@ -1,6 +1,6 @@
 # GitHub Actions와 배포 검사
 
-이 문서는 저장소의 현재 워크플로를 설명한다. 제품 테스트 CI 추가나 브랜치 정책 변경은 포함하지 않는다. 기준은 [PR metadata](../.github/workflows/pr-metadata.yml), [Infra CD](../.github/workflows/infra-cd.yml), [운영 절차](harness/ops.md)다.
+이 문서는 저장소의 현재 워크플로를 설명한다. 제품 테스트 CI 추가나 브랜치 정책 변경은 포함하지 않는다. 기준은 [PR metadata](../.github/workflows/pr-metadata.yml), [Infra CD](../.github/workflows/infra-cd.yml), [DB Backup](../.github/workflows/db-backup.yml), [운영 절차](harness/ops.md)다.
 
 ## 현재 자동화 범위
 
@@ -8,6 +8,7 @@
 |---|---|---|---|
 | GitHub Actions: PR metadata | PR 생성·수정·재오픈·새 커밋·리뷰 준비 전환 | 제목·소스 브랜치·본문 형식 | 제품 테스트, AC 충족, 배포 정상 동작 |
 | GitHub Actions: Infra CD | `main`의 지정된 Terraform 파일 변경 push 또는 수동 실행 | Terraform plan, 변경이 있으면 승인 절차 후 저장된 plan 적용 | 프론트·백엔드 배포 및 API 정상 동작 |
+| GitHub Actions: DB Backup | 매주 월요일 03:00 KST 예약 실행 또는 수동 실행 | 운영 DB 덤프와 이미지 파일을 비공개 S3 버킷에 업로드, 이미지 파일·표 행 대조 | 백업 내용의 복원 가능성(복원 시험은 사람이 따로 한다) |
 | Vercel Git integration | 연결된 브랜치의 배포 이벤트와 프로젝트 설정 | Vercel 빌드·배포 | GitHub Actions 제품 테스트 실행, 런타임 헬스체크 성공 |
 
 Vercel의 PR 배포 상태나 봇 댓글은 Vercel 연동에서 제공한다. 이 저장소에는 Vercel CLI로 앱을 배포하는 GitHub Actions 워크플로가 없다. Production·Staging 구성과 헬스체크 절차는 [배포 가이드](deployment-guide.md)를 따른다.
@@ -46,9 +47,15 @@ Vercel의 PR 배포 상태나 봇 댓글은 Vercel 연동에서 제공한다. �
 
 Environment에서 사용하는 비밀값 이름은 `AWS_ROLE_ARN`, `TF_STATE_BUCKET`, `TF_VARS_JSON`이다. 값·계정 식별자·전체 Terraform 출력·plan 파일을 공개 로그나 PR에 붙이지 않는다. 워크플로는 요약과 리소스 주소를 출력하고 plan을 공개 아티팩트 대신 비공개 버킷에 보관한다. 설정·운영 상세는 [인프라 가이드](../infra/README.md)의 “CD로 적용” 절을 따른다.
 
+## DB Backup
+
+[DB Backup](../.github/workflows/db-backup.yml)은 `schedule`(매주 일요일 18:00 UTC)과 `workflow_dispatch`로만 실행한다. PR·push 트리거는 없다. `db-backup` Environment(배포 브랜치 `main`만)에서 OIDC로 백업 전용 역할을 받아 S3에 올린다. 이 역할은 업로드만 할 수 있고 백업을 읽거나 지울 수 없다.
+
+Environment 비밀값 이름은 `AWS_ROLE_ARN`, `BACKUP_BUCKET`, `SUPABASE_DB_URL`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`이고, 변수 이름은 `GLOSSARY_IMAGE_BUCKET`, `NOTE_IMAGE_BUCKET`이다. 공개 로그에는 파일 이름·크기·시각과 이미지 대조 개수만 남기고 덤프 내용·행 수·CLI 출력은 남기지 않는다. 설정·복원 절차는 [인프라 가이드](../infra/README.md)의 "DB·이미지 백업" 절을 따른다.
+
 ## 제품 테스트의 현재 상태
 
-현재 워크플로 두 개에는 `pytest`, 프론트 lint·build, 배포 후 헬스체크를 수행하는 제품 테스트 CI가 없다. Vercel 빌드 성공이나 metadata 검사 통과를 제품 테스트 통과로 기록하지 않는다.
+현재 워크플로 세 개에는 `pytest`, 프론트 lint·build, 배포 후 헬스체크를 수행하는 제품 테스트 CI가 없다. Vercel 빌드 성공이나 metadata 검사 통과를 제품 테스트 통과로 기록하지 않는다.
 
 변경 범위에 맞는 검증을 로컬에서 실행하고 PR에 결과를 남긴다.
 
