@@ -1,6 +1,7 @@
 // F5-2 신고 목록(MEG-84). 열린 신고를 보고 처리 완료로 바꾼다. 처리할 때 AI 설명을 무효화할지 고른다(Q-N7).
 import { useEffect, useState } from 'react'
 import type { ChangeEvent } from 'react'
+import { useLocation } from 'react-router'
 import { Button, LinkButton, StateMessage } from '../../components/index.ts'
 import { Badge } from '../../components/Badge.tsx'
 import { reportCorrectPath } from '../../routes/paths.ts'
@@ -18,7 +19,14 @@ const MESSAGES = {
 
 type Result = { query: string; reports: Report[] } | { query: string; failed: true }
 
+// 사전에 바른 설명을 저장한 뒤 이 화면으로 올 때 넘겨 준 안내
+function readNotice(state: unknown): string {
+  const value = (state as { notice?: unknown } | null)?.notice
+  return typeof value === 'string' ? value : ''
+}
+
 export default function ReportsPage() {
+  const location = useLocation()
   const { onApiError } = useOperatorGuard()
   const [status, setStatus] = useState<ReportStatus>('open')
   const [attempt, setAttempt] = useState(0)
@@ -26,7 +34,7 @@ export default function ReportsPage() {
   const [target, setTarget] = useState<Report | null>(null)
   const [busy, setBusy] = useState(false)
   const [dialogError, setDialogError] = useState('')
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState(() => readNotice(location.state))
 
   // 필터를 바꾸거나 다시 시도하면 이전 결과는 버린다.
   const query = `${status}:${attempt}`

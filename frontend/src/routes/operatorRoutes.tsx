@@ -1,5 +1,6 @@
 import type { RouteObject } from 'react-router'
 import Placeholder from '../pages/Placeholder.tsx'
+import CorrectReportPage from '../operator/reports/CorrectReportPage.tsx'
 import ReportsPage from '../operator/reports/ReportsPage.tsx'
 import { operatorPaths } from './paths.ts'
 
@@ -20,7 +21,7 @@ export const operatorRoutes: RouteObject[] = [
   },
   {
     path: operatorPaths.reportCorrect,
-    element: <Placeholder screenId="F5-3" title="사전에 바른 설명 넣기" ticket="후속 티켓(MEG-84에서 제외)" />,
+    element: <CorrectReportPage />,
   },
   {
     path: operatorPaths.accounts,
