@@ -1,4 +1,4 @@
-"""CLI only validates/freezes files; it has no live model execution command."""
+"""Offline validation, fake execution and human-review aggregation; no live command."""
 
 import argparse
 import json

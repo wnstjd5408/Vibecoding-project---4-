@@ -149,8 +149,10 @@ def score(cases, state, reviews, *, seed=0):
             "scored_count": len(scored), "expected_count": len(expected_slots),
             "verdict_counts": {v: sum(r["verdict"] == v for r in rows.values()) for v in ("O", "X", "pending")},
             "rubric_o_rates": {k: {
-                "o": sum(r.get("rubric", {}).get(k) == "O" for r in by_review.values()),
-                "reviewed": sum(r.get("rubric", {}).get(k) in ("O", "X") for r in by_review.values())
+                "o": sum(by_review.get(slot, {}).get("rubric", {}).get(k) == "O"
+                         for slot, row in rows.items() if row["score"] is not None
+                         and row.get("reason") != "execution_failure"),
+                "reviewed": len(scored)
             } for k in RUBRIC},
             "second_review_seed": seed, "second_required": sorted(second_required),
             "second_missing": second_missing, "incomplete": incomplete,

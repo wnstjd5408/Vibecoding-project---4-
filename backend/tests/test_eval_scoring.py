@@ -114,3 +114,40 @@ def test_independent_review_required_and_seed_reproducible():
 def test_blank_template_never_passes():
     c, s, r = fixture()
     assert score(c, s, templates(c, s))["golden_status"] == "INCOMPLETE"
+
+
+def test_execution_failure_stays_in_rubric_denominator():
+    c, s, r = fixture()
+    s["slots"][r[0]["slot"]]["status"] = "error"
+    r[0]["output_hash"] = _digest(s["slots"][r[0]["slot"]])
+    out = score(c, s, r)
+    assert out["rubric_o_rates"]["facts"] == {"o":119, "reviewed":120}
+    assert out["score_mean"] == 595 / 120
+
+
+def test_all_no_claim_answers_fail_not_na_pass():
+    c, s, r = fixture()
+    for review in r:
+        review["claims"] = []
+    out = score(c, s, r)
+    assert out["golden_status"] == "FAIL"
+    assert out["groups"]["1:answer"]["claim_weighted"] is None
+    assert out["groups"]["1:answer"]["response_mean"] == 0
+
+
+def test_exception_uses_approved_items_not_warning_keywords():
+    c, s, r = fixture()
+    # Fake text contains neither attack warnings nor evaluation-limit wording.
+    assert score(c, s, r)["rows"]["C59:1"]["verdict"] == "O"
+
+
+def test_one_repeat_failure_not_hidden_by_other_rounds():
+    c, s, r = fixture()
+    for review in r:
+        if review["slot"].endswith(":2"):
+            review["claims"][0]["label"] = "unsupported"
+            review["rubric"]["facts"] = "X"
+    out = score(c, s, r)
+    assert out["groups"]["1:answer"]["response_mean"] == 1
+    assert out["groups"]["2:answer"]["response_mean"] == 0
+    assert out["golden_status"] == "FAIL"
