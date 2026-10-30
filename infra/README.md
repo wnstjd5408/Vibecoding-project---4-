@@ -345,6 +345,10 @@ GitHub Actions `DB Backup`(`.github/workflows/db-backup.yml`)이 매주 월요�
 
 **수동 실행이 필요한 때**
 
+이미지 대조 기준은 같은 실행에서 만든 DB 데이터 덤프다. `backup_images.py`에는 반드시 `--dump <data.sql 또는 data.sql.gz>`를 전달한다. 워크플로는 S3에 올린 DB 백업과 같은 `backup/db/data.sql.gz`를 넘긴다. 현재 DB의 이미지 행은 다시 조회하지 않으므로, 덤프 이후 행과 객체가 삭제돼도 `manifest.json`에 누락이 남고 종료 코드 3으로 실패한다. 대상 표의 COPY 블록이 없거나 불완전한 덤프도 실패한다. 덤프 이후 추가된 파일은 경고(행 없는 파일)이며 실패로 보지 않는다. 이 검사는 누락을 감지하는 장치이며, 삭제된 파일 자체를 복구하지는 않는다.
+
+사람이 PR 브랜치에 올릴 `.github/workflows/db-backup.yml`에도 이 `--dump` 인수가 포함돼야 한다. 이전 호출은 필수 인수가 없어 실패한다.
+
 - 사전을 대량으로 고치기 전: **Run workflow**를 기본값으로 실행한다.
 - Notion 가져오기 직후: `note_images`를 체크하고 실행한다. `note-images/`에 만료 없이 남는다.
 

@@ -1,10 +1,11 @@
+import gzip
 import json
 import urllib.error
 
 import pytest
 
 from scripts import backup_images
-from scripts.backup_images import BackupError, compare, list_objects, list_row_paths, run, safe_target
+from scripts.backup_images import BackupError, compare, list_objects, run, safe_target
 
 
 class FakeStorage:
@@ -73,18 +74,6 @@ def test_list_objects_survives_smaller_server_limit():
     assert len(list_objects(fake, "glossary")) == 5
 
 
-def test_list_row_paths_survives_smaller_server_limit():
-    # 서버 max_rows(2)가 요청 limit(1000)보다 작아도 짧은 쪽에서 멈추지 않는다.
-    fake = FakeStorage({}, ["a", "b", "c", "d", "e"], server_limit=2)
-
-    assert list_row_paths(fake, "note_images") == ["a", "b", "c", "d", "e"]
-
-
-def test_list_row_paths_rejects_other_tables():
-    with pytest.raises(BackupError):
-        list_row_paths(FakeStorage({}, []), "profiles")
-
-
 def test_compare_reports_both_directions():
     result = compare(["a", "b"], ["b", "c"])
 
@@ -127,19 +116,20 @@ def test_run_writes_nothing_when_any_path_is_bad(tmp_path):
     )
 
     with pytest.raises(BackupError):
-        run(fake, "glossary", "glossary_images", tmp_path)
+        run(fake, "glossary", "glossary_images", tmp_path, fake.rows.copy())
 
     assert not (tmp_path / "files" / "ok.png").exists()
     assert not any(c for c in fake.calls if "/authenticated/" in c[1])
 
 
-def test_run_reads_rows_before_listing(tmp_path):
+def test_run_never_reads_live_rows(tmp_path):
     fake = FakeStorage({"a.png": b"1"}, ["a.png"])
 
-    run(fake, "glossary", "glossary_images", tmp_path)
+    run(fake, "glossary", "glossary_images", tmp_path, fake.rows.copy())
 
     kinds = [("rest" if "/rest/" in c[1] else "download" if "/authenticated/" in c[1] else "list") for c in fake.calls]
-    assert kinds.index("rest") < kinds.index("list") < kinds.index("download")
+    assert "rest" not in kinds
+    assert kinds.index("list") < kinds.index("download")
 
 
 def test_run_skips_files_deleted_after_listing(tmp_path):
@@ -152,7 +142,7 @@ def test_run_skips_files_deleted_after_listing(tmp_path):
             raise BackupError("Supabase 응답", status=status)
         return original(method, url, body)
 
-    result = run(deleted_midway, "glossary", "glossary_images", tmp_path)
+    result = run(deleted_midway, "glossary", "glossary_images", tmp_path, fake.rows.copy())
 
     assert result.complete
     assert (result.files, result.vanished_files, result.extra_files) == (1, 1, [])
@@ -169,7 +159,7 @@ def test_run_fails_on_other_download_errors(tmp_path):
         return original(method, url, body)
 
     with pytest.raises(BackupError):
-        run(server_error, "glossary", "glossary_images", tmp_path)
+        run(server_error, "glossary", "glossary_images", tmp_path, fake.rows.copy())
 
 
 def test_paging_stops_when_server_ignores_offset(monkeypatch):
@@ -184,7 +174,7 @@ def test_paging_stops_when_server_ignores_offset(monkeypatch):
 def test_run_downloads_and_writes_manifest(tmp_path):
     fake = FakeStorage({"n1/한글 이름.png": b"img1", "n2/b.png": b"img2"}, ["n1/한글 이름.png", "n2/b.png"])
 
-    result = run(fake, "note-images", "note_images", tmp_path)
+    result = run(fake, "note-images", "note_images", tmp_path, fake.rows.copy())
 
     assert result.complete
     assert (tmp_path / "files" / "n1" / "한글 이름.png").read_bytes() == b"img1"
@@ -195,11 +185,14 @@ def test_run_downloads_and_writes_manifest(tmp_path):
     assert "/storage/v1/object/authenticated/note-images/n1/%ED%95%9C%EA%B8%80%20%EC%9D%B4%EB%A6%84.png" in download_urls
 
 
-def _run_main(tmp_path, monkeypatch, fake):
+def _run_main(tmp_path, monkeypatch, fake, rows=None):
     monkeypatch.setattr(backup_images, "make_fetch", lambda url, key: fake)
     monkeypatch.setenv("SUPABASE_URL", "https://example.test")
     monkeypatch.setenv("SUPABASE_SECRET_KEY", "test-secret-value")
-    return backup_images.main(["--bucket", "g", "--table", "glossary_images", "--out", str(tmp_path)])
+    dump = tmp_path / "data.sql"
+    dump.write_text("COPY public.glossary_images (storage_path) FROM stdin;\n" +
+                    "".join(path + "\n" for path in (fake.rows if rows is None else rows)) + "\\.\n", encoding="utf-8")
+    return backup_images.main(["--bucket", "g", "--table", "glossary_images", "--out", str(tmp_path), "--dump", str(dump)])
 
 
 def test_main_exit_code_when_rows_have_no_file(tmp_path, monkeypatch, capsys):
@@ -228,7 +221,7 @@ def test_main_hides_unexpected_errors(tmp_path, monkeypatch, capsys):
             raise TimeoutError(f"timed out reading {url}")
         return original(method, url, body)
 
-    code = _run_main(tmp_path, monkeypatch, broken)
+    code = _run_main(tmp_path, monkeypatch, broken, fake.rows)
 
     out = capsys.readouterr()
     assert code == 1
@@ -240,7 +233,7 @@ def test_main_requires_env(tmp_path, monkeypatch):
     monkeypatch.delenv("SUPABASE_URL", raising=False)
     monkeypatch.delenv("SUPABASE_SECRET_KEY", raising=False)
 
-    assert backup_images.main(["--bucket", "g", "--table", "glossary_images", "--out", str(tmp_path)]) == 2
+    assert backup_images.main(["--bucket", "g", "--table", "glossary_images", "--out", str(tmp_path), "--dump", str(tmp_path / "data.sql")]) == 2
 
 
 @pytest.mark.parametrize(
@@ -333,4 +326,86 @@ def test_run_fails_on_plain_400(tmp_path):
         return original(method, url, body)
 
     with pytest.raises(BackupError):
-        run(bad_request, "glossary", "glossary_images", tmp_path)
+        run(bad_request, "glossary", "glossary_images", tmp_path, fake.rows.copy())
+
+
+@pytest.mark.parametrize("after_listing", [False, True])
+@pytest.mark.parametrize("compressed", [False, True])
+def test_dump_image_deleted_after_dump_fails_cli(tmp_path, monkeypatch, capsys, after_listing, compressed):
+    # 덤프 당시에는 행과 파일이 있었다. 실행 때는 DB 행이 이미 삭제됐다.
+    dump = tmp_path / "data.sql"
+    dump.write_text("COPY public.glossary_images (id, storage_path) FROM stdin;\n1\tdeleted.png\n\\.\n", encoding="utf-8")
+    if compressed:
+        compressed_dump = dump.with_suffix(".sql.gz")
+        compressed_dump.write_bytes(gzip.compress(dump.read_bytes()))
+        dump = compressed_dump
+    fake = FakeStorage({"deleted.png": b"old"} if after_listing else {}, [])
+    def fetch(method, url, body):
+        assert "/rest/" not in url
+        if "/authenticated/" in url:
+            raise BackupError("gone", status=404)
+        return fake(method, url, body)
+    monkeypatch.setattr(backup_images, "make_fetch", lambda *args: fetch)
+    monkeypatch.setenv("SUPABASE_URL", "https://example.test")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "test")
+    code = backup_images.main(["--bucket", "g", "--table", "glossary_images", "--out", str(tmp_path / "out"), "--dump", str(dump)])
+    assert code == 3
+    manifest = json.loads((tmp_path / "out/manifest.json").read_text(encoding="utf-8"))
+    assert manifest["complete"] is False
+    assert manifest["rows"] == 1
+    assert manifest["missing_files"] == ["deleted.png"]
+    assert manifest["vanished_files"] == int(after_listing)
+    captured = capsys.readouterr()
+    assert "deleted.png" not in captured.out + captured.err
+
+
+def test_dump_paths_decode_copy_escapes_and_select_correct_table(tmp_path):
+    dump = tmp_path / "data.sql"
+    dump.write_bytes(
+        b'COPY public.notes (body) FROM stdin;\n'
+        b'COPY public.glossary_images (storage_path) FROM stdin;\n\\.\n'
+        b'COPY public.note_images (storage_path) FROM stdin;\nother.png\n\\.\n'
+        b'COPY "public"."glossary_images" ("id", "storage_path", "alt") FROM stdin;\n'
+        b'1\tfolder/space name.png\tx\n'
+        b'2\t\xed\x95\x9c.png\tx\n'
+        b'3\t\\355\\225\\234.png\tx\n'
+        b'4\t\\xED\\x95\\x9C.png\tx\n'
+        b'5\ta\\tb\\nc\\\\d\tx\n\\.\n'
+    )
+    assert backup_images.dump_row_paths(dump, "glossary_images") == [
+        "folder/space name.png", "한.png", "한.png", "한.png", "a\tb\nc\\d",
+    ]
+
+
+@pytest.mark.parametrize("body", [
+    "",  # 대상 표 누락은 빈 표가 아니다.
+    "INSERT INTO public.glossary_images VALUES (1, 'private.png');\n",
+    "COPY public.glossary_images (id) FROM stdin;\n1\n\\.\n",
+    "COPY public.glossary_images (storage_path) FROM stdin;\nprivate.png\n",
+    "COPY public.glossary_images (id, storage_path) FROM stdin;\n1\n\\.\n",
+    "COPY public.glossary_images (storage_path) FROM stdin;\n\\N\n\\.\n",
+    "COPY public.glossary_images (storage_path) FROM stdin;\n\\.\n" * 2,
+])
+def test_bad_dump_fails_before_network_without_leaking_data(tmp_path, monkeypatch, capsys, body):
+    dump = tmp_path / "data.sql"
+    dump.write_text(body, encoding="utf-8")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.test")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "test")
+    def no_network(*args):
+        pytest.fail("Invalid dump must fail before accessing Storage")
+    monkeypatch.setattr(backup_images, "make_fetch", no_network)
+    assert backup_images.main([
+        "--bucket", "g", "--table", "glossary_images", "--dump", str(dump), "--out", str(tmp_path / "out"),
+    ]) == 1
+    captured = capsys.readouterr()
+    assert "private.png" not in captured.out + captured.err
+    assert not (tmp_path / "out/manifest.json").exists()
+
+
+def test_empty_dump_table_is_valid_and_new_objects_are_extra(tmp_path, monkeypatch):
+    fake = FakeStorage({"added-after-dump.png": b"new"}, [])
+    assert _run_main(tmp_path, monkeypatch, fake) == 0
+    manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["rows"] == 0
+    assert manifest["row_source"] == "database_dump"
+    assert manifest["extra_files"] == ["added-after-dump.png"]

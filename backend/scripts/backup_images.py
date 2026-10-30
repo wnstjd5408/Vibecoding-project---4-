@@ -1,14 +1,16 @@
-"""Supabase Storage 버킷 하나의 파일을 내려받고, 이미지 표의 행과 대조한다(MEG-94).
+"""Supabase Storage 파일을 내려받고, DB 덤프의 이미지 행과 대조한다(MEG-94).
 
 DB 덤프에는 Storage 파일이 들어 있지 않아서 따로 받는다. 백업 워크플로(.github/workflows/db-backup.yml)가
 부르고, 받은 폴더를 S3 백업 버킷에 올린다. 운영자 PC에서도 같은 명령으로 실행할 수 있다.
 
-    python backend/scripts/backup_images.py --bucket <버킷> --table glossary_images --out <폴더>
+    python backend/scripts/backup_images.py --bucket <버킷> --table glossary_images --dump data.sql.gz --out <폴더>
 
 환경변수: SUPABASE_URL, SUPABASE_SECRET_KEY. 키는 출력하지 않는다.
 표준 라이브러리만 쓴다. 워크플로가 의존성 설치 없이 실행하게 하려는 것이다.
 
-종료 코드: 0 = 행마다 파일이 있다, 3 = 파일이 없는 행이 있다(받은 파일은 모두 남는다), 그 밖 = 실행 실패.
+--dump는 같은 백업의 supabase db dump --data-only --use-copy 결과(.sql 또는 .sql.gz)다.
+현재 DB 행은 조회하지 않는다. 덤프 이후 삭제된 이미지도 누락으로 잡아 복원 실패를 알린다.
+종료 코드: 0 = 덤프 행마다 파일이 있다, 3 = 파일이 없는 행이 있다(받은 파일은 모두 남는다), 그 밖 = 실행 실패.
 행이 없는 파일은 실패로 보지 않는다. 이미지 행을 지운 뒤 Storage 객체는 storage_delete_jobs가 나중에
 지우므로(기술 검토 4절) 그 사이에는 정상적으로 생긴다. 목록을 받은 뒤 지워져 다운로드가 404인 파일은
 건너뛰고 개수만 남긴다. 개수는 manifest.json과 출력에 남긴다.
@@ -16,8 +18,10 @@ DB 덤프에는 Storage 파일이 들어 있지 않아서 따로 받는다. 백�
 """
 
 import argparse
+import gzip
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -26,7 +30,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-# 이미지 경로를 담은 표. 다른 표 이름은 받지 않는다(REST 경로에 그대로 들어가기 때문이다).
+# 덤프에서 경로를 읽을 수 있는 이미지 표.
 TABLES = frozenset({"note_images", "glossary_images"})
 PAGE_SIZE = 1000
 TIMEOUT_SECONDS = 30
@@ -139,21 +143,61 @@ def list_objects(fetch: Fetch, bucket: str, prefix: str = "") -> list[str]:
             raise BackupError("Storage 목록이 끝나지 않는다")
 
 
-def list_row_paths(fetch: Fetch, table: str) -> list[str]:
-    """이미지 표의 storage_path 전부. id 순으로, 빈 쪽이 올 때까지 나눠 받는다."""
+def dump_row_paths(dump: Path, table: str) -> list[str]:
+    """같은 백업의 pg_dump --data-only --use-copy에서 경로를 읽는다. 현재 DB는 조회하지 않는다.
+
+    빈 COPY 블록과 대상 표 누락을 구분한다. SQL은 실행하지 않는다.
+    COPY text의 이스케이프는 바이트로 풀어 UTF-8 다중 바이트 경로도 보존한다.
+    """
     if table not in TABLES:
         raise BackupError(f"허용하지 않는 표: {table}")
     paths: list[str] = []
-    offset = 0
-    while True:
-        query = urllib.parse.urlencode({"select": "storage_path", "order": "id", "limit": PAGE_SIZE, "offset": offset})
-        rows = json.loads(fetch("GET", f"/rest/v1/{table}?{query}", None))
-        if not rows:
-            return paths
-        paths.extend(row["storage_path"] for row in rows)
-        offset += len(rows)
-        if offset > MAX_ITEMS:
-            raise BackupError("REST 조회가 끝나지 않는다")
+    header = re.compile(rf'^COPY (?:public|"public")\.(?:{table}|"{table}") \((.+)\) FROM stdin;$')
+    found = False
+    inside = False
+    columns = None
+    opener = gzip.open if dump.suffix == ".gz" else open
+    with opener(dump, "rb") as source:
+        for raw in source:
+            line = raw.rstrip(b"\r\n")
+            if inside:
+                if line == b"\\.":
+                    inside = False
+                    columns = None
+                    continue
+                if columns is not None:
+                    fields = line.split(b"\t")
+                    if len(fields) != len(columns):
+                        raise BackupError("덤프 이미지 행의 열 수가 다르다")
+                    value = fields[columns.index("storage_path")]
+                    if value == b"\\N":
+                        raise BackupError("덤프 이미지 경로가 NULL이다")
+                    escapes = {b"b": b"\b", b"f": b"\f", b"n": b"\n", b"r": b"\r", b"t": b"\t", b"v": b"\v"}
+
+                    def unescape(match):
+                        token = match[1]
+                        if token[:1] in b"01234567":
+                            return bytes([int(token, 8)])
+                        if token.startswith(b"x") and len(token) > 1:
+                            return bytes([int(token[1:], 16)])
+                        return escapes.get(token, token)
+
+                    value = re.sub(rb"\\([0-7]{1,3}|x[0-9a-fA-F]{1,2}|.)", unescape, value)
+                    paths.append(value.decode("utf-8"))
+                continue
+            if line.startswith(b"COPY "):
+                inside = True
+                match = header.fullmatch(line.decode("utf-8"))
+                if match:
+                    if found:
+                        raise BackupError("덤프에 이미지 표가 중복됐다")
+                    found = True
+                    columns = [column.strip().strip('"') for column in match[1].split(",")]
+                    if columns.count("storage_path") != 1:
+                        raise BackupError("덤프에 storage_path 열이 없다")
+    if inside or not found:
+        raise BackupError("덤프에 완전한 이미지 COPY 블록이 없다")
+    return paths
 
 
 def safe_target(out_dir: Path, object_path: str) -> Path:
@@ -201,18 +245,17 @@ def compare(file_paths: list[str], row_paths: list[str], vanished_files: int = 0
     )
 
 
-def run(fetch: Fetch, bucket: str, table: str, out_dir: Path) -> Comparison:
+def run(fetch: Fetch, bucket: str, table: str, out_dir: Path, row_paths: list[str]) -> Comparison:
     files_dir = out_dir / "files"
     files_dir.mkdir(parents=True, exist_ok=True)
-    # 행을 먼저 읽고 바로 목록을 받는다. 그 사이 올라온 이미지는 "행 없는 파일"(경고)로만 잡힌다.
-    # 반대 순서면 "파일 없는 행"(실패)으로 잡힌다.
-    row_paths = list_row_paths(fetch, table)
+    # 덤프 시점의 경로만 대조 기준으로 쓴다. 이후 삭제된 행도 missing_files에 남아야 한다.
     object_paths = list_objects(fetch, bucket)
     downloaded = download_all(fetch, bucket, object_paths, files_dir)
     result = compare(downloaded, row_paths, vanished_files=len(object_paths) - len(downloaded))
     manifest = {
         "bucket": bucket,
         "table": table,
+        "row_source": "database_dump",
         "files": result.files,
         "rows": result.rows,
         "complete": result.complete,
@@ -229,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--table", required=True, choices=sorted(TABLES))
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--dump", required=True, type=Path, help="같은 백업의 COPY 형식 data.sql 또는 data.sql.gz")
     args = parser.parse_args(argv)
 
     base_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
@@ -238,7 +282,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        result = run(make_fetch(base_url, secret_key), args.bucket, args.table, args.out)
+        rows = dump_row_paths(args.dump, args.table)
+        result = run(make_fetch(base_url, secret_key), args.bucket, args.table, args.out, rows)
     except BackupError as error:
         print(f"이미지 백업 실패: {error}", file=sys.stderr)
         return 1
