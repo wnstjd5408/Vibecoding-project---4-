@@ -273,6 +273,170 @@ test('선택이 본문 밖이나 이미지 대체 문구에 걸치면 null이다
   expect(await select({ selector: 'h1', offset: 0 }, { selector: bodyText, offset: 3 })).toBeNull()
 })
 
+// MEG-76 용어 바텀시트의 E06·E07 호출 규칙. 브라우저의 실제 fetch 경로로 서버 응답을 합성해 호출 횟수와 실패 분기를 시험한다.
+// 실제 백엔드의 E06·E07은 이 시험이 확인하지 못한다.
+const termNote = {
+  id: 11, revision: 1, title: '용어 시험', studied_on: null, subjects: [], sources: [],
+  body_markdown: '앞 ExampleTerm 뒤', images: {},
+  glossary_terms: [{ term_id: 7, key: 'exampleterm', label: 'ExampleTerm' }],
+  glossary_spans: [{ term_id: 7, start: 2, end: 13 }],
+}
+const glossary = (images: { id: number; url: string; alt: string }[] = []) => ({
+  term: { id: 7, key: 'exampleterm', label: 'ExampleTerm' }, body_markdown: '합성 설명 문장입니다.', images,
+})
+const serverError = (status: number) => ({
+  status,
+  json: { error: { code: status === 404 ? 'not_found' : status === 429 ? 'rate_limited' : 'internal_error', message: 'x', request_id: 'r-test-0001' } },
+})
+
+type TermRoutes = {
+  member?: boolean
+  glossaryStatus?: number // 200이 아니면 그 상태의 오류로 답한다
+  glossaryBody?: () => object
+  viewStatus?: number // 200이 아니면 그 상태의 오류로 답한다
+  recorded?: boolean
+}
+
+// 노트·사전·열람 기록 응답을 합성하고 E06·E07 호출 횟수를 센다.
+async function setupTerm(page: Page, options: TermRoutes = {}) {
+  const calls = { glossary: 0, views: 0, viewBodies: [] as unknown[] }
+  await page.route('**/api/me', (route) => route.fulfill({
+    json: options.member ? { authenticated: true, role: 'member', display_name: '합성 사용자' } : { authenticated: false },
+  }))
+  await page.route('**/api/notes/11', (route) => route.fulfill({ json: termNote }))
+  await page.route('**/api/glossary/7', (route) => {
+    calls.glossary += 1
+    if (options.glossaryStatus && options.glossaryStatus !== 200) return route.fulfill(serverError(options.glossaryStatus))
+    return route.fulfill({ json: (options.glossaryBody ?? glossary)() })
+  })
+  await page.route('**/api/term-views', (route) => {
+    calls.views += 1
+    calls.viewBodies.push(route.request().postDataJSON())
+    if (options.viewStatus && options.viewStatus !== 200) return route.fulfill(serverError(options.viewStatus))
+    return route.fulfill({ json: { recorded: options.recorded ?? Boolean(options.member) } })
+  })
+  return calls
+}
+
+const termLink = (page: Page) => page.getByRole('link', { name: 'ExampleTerm' })
+const termSheet = (page: Page) => page.getByRole('dialog', { name: 'ExampleTerm' })
+const viewNotice = (page: Page) => page.getByText('열람 기록을 저장하지 못했어요')
+
+test('E07은 E06 성공 뒤 열 때마다 한 번, 용어 번호와 함께 부른다', async ({ page }) => {
+  const calls = await setupTerm(page, { member: true })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await expect.poll(() => calls.views).toBe(1)
+  expect(calls.viewBodies).toEqual([{ term_id: 7 }])
+  await expect(viewNotice(page)).toHaveCount(0)
+  // 닫았다 다시 열면 새로 한 번 더(열기당 한 번)
+  await page.keyboard.press('Escape')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await expect.poll(() => calls.views).toBe(2)
+})
+
+test('방문자도 E07을 부르고 recorded: false는 정상이라 안내도 로그인 시트도 뜨지 않는다', async ({ page }) => {
+  const calls = await setupTerm(page, { member: false })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await expect.poll(() => calls.views).toBe(1)
+  await page.waitForTimeout(300)
+  await expect(viewNotice(page)).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: '로그인이 필요해요' })).toHaveCount(0)
+})
+
+for (const [name, options] of [
+  ['recorded: false', { recorded: false }],
+  ['500 실패', { viewStatus: 500 }],
+] as const) {
+  test(`로그인 상태에서 E07이 ${name}이면 설명은 유지하고 짧게 안내하며 로그인 안내는 띄우지 않는다`, async ({ page }) => {
+    const calls = await setupTerm(page, { member: true, ...options })
+    await page.goto('/notes/11')
+    await termLink(page).click()
+    await expect(viewNotice(page)).toBeVisible()
+    await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    expect(calls.views).toBe(1)
+    await expect(page.getByRole('dialog', { name: '로그인이 필요해요' })).toHaveCount(0)
+  })
+}
+
+test('E06이 404면 안내만 보이고 열람은 기록하지 않는다', async ({ page }) => {
+  const calls = await setupTerm(page, { glossaryStatus: 404 })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('설명을 찾을 수 없어요')).toBeVisible()
+  await page.waitForTimeout(300)
+  expect(calls.views).toBe(0)
+})
+
+test('E06이 실패하면 오류와 다시 시도가 보이고, 다시 시도해 성공하면 열람을 한 번 기록한다', async ({ page }) => {
+  const calls = await setupTerm(page, { glossaryStatus: 500 })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByRole('alert')).toContainText('설명을 불러오지 못했어요')
+  expect(calls.views).toBe(0)
+  await page.unroute('**/api/glossary/7')
+  await page.route('**/api/glossary/7', (route) => route.fulfill({ json: glossary() }))
+  await termSheet(page).getByRole('button', { name: '다시 시도' }).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await expect.poll(() => calls.views).toBe(1)
+})
+
+test('이미지가 안 열리면 E06을 한 번 다시 부르고, 재실패하면 대체 글을 보이며 E07은 다시 보내지 않는다', async ({ page }) => {
+  let n = 0
+  const failedImages: string[] = []
+  page.on('requestfailed', (request) => { if (request.url().includes('/glossary-broken-')) failedImages.push(request.url()) })
+  const calls = await setupTerm(page, {
+    member: true,
+    glossaryBody: () => {
+      n += 1
+      return glossary([{ id: 3, url: `http://127.0.0.1:1/glossary-broken-${n}.png`, alt: '합성 구조도' }])
+    },
+  })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('이미지를 불러오지 못했어요')).toBeVisible()
+  await page.waitForTimeout(500)
+  // 처음 URL과 다시 받은 URL이 각각 한 번씩만 실패하고 더 되풀이하지 않는다
+  expect(new Set(failedImages).size).toBe(failedImages.length)
+  expect(failedImages.length).toBeLessThanOrEqual(2)
+  // 이미지 때문에 E06을 다시 받아도 E07은 열기당 한 번이다
+  expect(calls.views).toBe(1)
+})
+
+// PR #58 Codex 리뷰 P2: 다시 받은 E06 응답에서 실패한 이미지가 빠지면 이미지 영역이 대체 글도 없이 사라졌다.
+test('E06을 다시 불러 응답에서 이미지가 빠져도 대체 글로 보이고 설명은 유지되며 E07은 다시 보내지 않는다', async ({ page }) => {
+  let imageFailed = false
+  page.on('requestfailed', (request) => { if (request.url().includes('/glossary-dropped.png')) imageFailed = true })
+  const calls = await setupTerm(page, {
+    member: true,
+    // 이미지가 한 번 실패한 뒤(다시 받는 요청)에는 이미지 목록이 비어 온다
+    glossaryBody: () => glossary(imageFailed ? [] : [{ id: 3, url: 'http://127.0.0.1:1/glossary-dropped.png', alt: '합성 구조도' }]),
+  })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('이미지를 불러오지 못했어요')).toBeVisible()
+  await expect(termSheet(page).getByText('(합성 구조도)')).toBeVisible()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await page.waitForTimeout(300)
+  expect(calls.views).toBe(1)
+  await expect(viewNotice(page)).toHaveCount(0)
+})
+
+test('E06을 다시 불러도 이미지 URL이 같으면 대체 글로 닫는다', async ({ page }) => {
+  const calls = await setupTerm(page, { glossaryBody: () => glossary([{ id: 3, url: 'http://127.0.0.1:1/glossary-same.png', alt: '합성 구조도' }]) })
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('이미지를 불러오지 못했어요')).toBeVisible()
+  await page.waitForTimeout(300)
+  expect(calls.glossary).toBeGreaterThanOrEqual(2)
+  expect(calls.glossary).toBeLessThanOrEqual(4) // StrictMode의 첫 호출이 더 있을 수 있다
+  expect(calls.views).toBe(1)
+})
+
 // MEG-77 로그인 안내 시트의 오류 분기. 브라우저의 실제 fetch 경로로 서버 응답을 합성한다.
 // handleLoginRequired는 HTTP 401이면서 code가 login_required일 때만 시트를 연다. 그 밖은 호출한 화면의 기존 오류 처리다.
 // 실제 백엔드의 401은 이 시험이 확인하지 못한다.

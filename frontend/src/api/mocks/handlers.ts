@@ -47,6 +47,10 @@ const EXAMPLE_IMAGE =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120"><rect width="320" height="120" fill="#dde2e9"/><text x="160" y="66" text-anchor="middle" font-size="20" fill="#16202f">EXAMPLE IMAGE</text></svg>')
 
+const GLOSSARY_IMAGE =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160"><rect width="320" height="160" fill="#dde2e9"/><text x="160" y="86" text-anchor="middle" font-size="20" fill="#16202f">합성 구조도</text></svg>')
+
 // 노트 본문 속 label의 모든 위치를 glossary_spans 형식(코드포인트, 끝 제외)으로 만든다. 가짜 응답이 서버 계산을 흉내 낸다.
 function spansOf(body: string, label: string, termId: number) {
   const spans: { term_id: number; start: number; end: number }[] = []
@@ -174,7 +178,8 @@ const routes: Route[] = [
       const body = {
         term: { id: 7, key: 'exampleterm', label: 'ExampleTerm' },
         body_markdown: '합성 설명 문장입니다.',
-        images: [{ id: 3, url: 'https://storage.example.test/glossary/EXAMPLE', alt: '합성 구조도' }],
+        // 예시 2는 https://storage.example.test/... URL이다. 가짜 응답에서도 그림이 보이도록 같은 모양의 data URL을 쓴다.
+        images: [{ id: 3, url: GLOSSARY_IMAGE, alt: '합성 구조도' }],
       }
       return { status: 200, body: getMockSession() === 'visitor' ? body : { ...body, is_favorite: favoriteTerm7 } }
     },

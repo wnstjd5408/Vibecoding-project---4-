@@ -30,16 +30,18 @@ type NoteBodyProps = {
   brokenImages: ReadonlySet<string>
   onTerm: (termId: number) => void
   onImageError: (token: string, failedUrl: string) => void
+  // 시트 안 설명처럼 작은 글자로 그린다. 노트 본문이 아니라서 선택 위치 계산 대상(data-note-body)에서 뺀다.
+  compact?: boolean
 }
 
 // 노트 본문을 마크다운 구문 트리로 읽어 React 요소로 그린다. 본문은 HTML로 해석하지 않는다.
 // 본문 속 HTML은 글자 그대로 보이고, dangerouslySetInnerHTML은 쓰지 않는다.
 // 글자 조각마다 원문 위치를 data 속성으로 달아 두어(selection.ts) 드래그한 범위를 원문 위치로 바꿀 수 있다.
-export function NoteBody({ body, spans, images, brokenImages, onTerm, onImageError }: NoteBodyProps) {
+export function NoteBody({ body, spans, images, brokenImages, onTerm, onImageError, compact = false }: NoteBodyProps) {
   const tree = useMemo(() => fromMarkdown(body), [body])
   const prepared = useMemo(() => prepareSpans(body, spans), [body, spans])
   const context: Context = { body, spans: prepared, images, brokenImages, onTerm, onImageError }
-  return <div className={styles.body} data-note-body>{blocks(tree, context)}</div>
+  return <div className={compact ? `${styles.body} ${styles.compact}` : styles.body} {...(compact ? {} : { 'data-note-body': '' })}>{blocks(tree, context)}</div>
 }
 
 function blocks(parent: Root | Extract<Nodes, { children: unknown[] }>, context: Context): ReactNode {

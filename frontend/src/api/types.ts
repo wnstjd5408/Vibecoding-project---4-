@@ -54,5 +54,17 @@ export type NoteReadResponse = {
   glossary_spans: { term_id: number; start: number; end: number }[]
 }
 
+// E06 GET /api/glossary/{term_id}. 사전에 없는 용어(AI로만 설명된 용어 포함)는 404다. is_favorite는 로그인했을 때만 온다.
+// images[].url이 공개 주소인지 서명 URL인지는 아직 정해지지 않았다(기술 검토 Q7). 안 열리면 E06을 다시 불러 새 값을 받는다.
+export type GlossaryResponse = {
+  term: { id: number; key: string; label: string }
+  body_markdown: string
+  images: { id: number; url: string; alt: string }[]
+  is_favorite?: boolean
+}
+
+// E07 POST /api/term-views. 방문자는 오류 없이 recorded가 false다.
+export type TermViewResponse = { recorded: boolean }
+
 // E08 PUT /api/favorites/{term_id}
 export type FavoriteResponse = { term_id: number; is_favorite: boolean }
