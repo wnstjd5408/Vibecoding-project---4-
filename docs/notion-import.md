@@ -82,7 +82,14 @@ uv run --no-sync python -m scripts.import_notion
 SVG는 허용된 Notion 호스트의 `file` 이미지에만 지원한다. 원본 SVG는 저장하지 않는다.
 UTF-8 XML을 DTD·엔티티·외부 해석 없이 파싱하고 요소 허용 목록과 CSS 토큰 검사를 거친다.
 스크립트·이벤트 속성·외부/로컬 파일 참조·CSS import 및 font-face를 거부한다.
-`image`(data URI 포함)·`foreignObject`·`use`·애니메이션·필터 등 지원하지 않는 요소도 거부한다.
+`image`는 `data:image/png;base64,...` 또는 `data:image/jpeg;base64,...` 한 개의
+`href`/`xlink:href` 참조만 허용한다. base64를 엄격히 디코딩하고 선언 MIME과 실제 파일 형식이
+일치하는지 확인한 뒤 메타데이터 없는 PNG로 재인코딩해 렌더러에 전달한다.
+내장 이미지 전체의 디코딩 바이트·재인코딩 바이트는 각각 10,000,000바이트,
+화소 합계는 25,000,000으로 제한하며 각 변 8,000px 제한도 적용한다.
+정규화한 SVG 전체도 10,000,000바이트로 제한한다.
+외부/로컬 image 참조·내장 SVG·GIF/WebP·애니메이션 PNG·중복 참조는 거부한다.
+`foreignObject`·`use`·애니메이션·필터 등 지원하지 않는 요소도 계속 거부한다.
 내부 그라데이션/클리핑 참조는 허용한다. 잘못된 문서를 조용히 일부 렌더링하지 않는다.
 별도 Python 프로세스에서 resvg로 PNG를 만들고 Pillow로 검증·재인코딩한다.
 작업당 10초 제한, 입력/출력 각 10,000,000바이트, 각 변 8,000px, 총 25,000,000화소,

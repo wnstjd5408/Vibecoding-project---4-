@@ -1,6 +1,7 @@
 """Synthetic Notion/PostgREST/Storage contracts; never contact real services."""
 
 import json
+import base64
 from pathlib import Path
 from io import BytesIO
 from unittest.mock import Mock
@@ -192,10 +193,14 @@ def test_resume_after_storage_upload_before_image_row():
     assert second.notes == 0 and second.images == 1 and len(service.objects) == 1
 
 
-def test_svg_resume_adds_only_missing_png_and_second_run_adds_zero():
+@pytest.mark.parametrize("embedded", [False, True])
+def test_svg_resume_adds_only_missing_png_and_second_run_adds_zero(embedded):
     service = Service()
     service.notes = [{"id": 7, "body_markdown": "app edit", "is_published": True}]
     raw = b'<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="red"/></svg>'
+    if embedded:
+        uri = "data:image/png;base64," + base64.b64encode(png()).decode()
+        raw = f'<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><image href="{uri}" width="2" height="2"/></svg>'.encode()
     fetch = Mock(return_value=raw)
     first, second = importer.Counts(), importer.Counts()
     importer.run(*clients(service), first, fetch)

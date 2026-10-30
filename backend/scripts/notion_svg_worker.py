@@ -1,13 +1,17 @@
 """Restricted SVG rasterizer process. Input/output are bytes, never log content."""
 
 import math
+import base64
+import binascii
 import re
 import sys
+from io import BytesIO
 from xml.etree.ElementTree import tostring
 
 from defusedxml.ElementTree import fromstring
 import resvg_py
 import tinycss2
+from PIL import Image, UnidentifiedImageError
 
 MAX_BYTES = 10_000_000
 MAX_SIDE = 8_000
@@ -16,8 +20,43 @@ SVG_NS = "http://www.w3.org/2000/svg"
 ALLOWED_TAGS = {
     "svg", "g", "defs", "title", "desc", "style", "path", "rect", "circle",
     "ellipse", "line", "polyline", "polygon", "text", "tspan", "textPath",
-    "linearGradient", "radialGradient", "stop", "clipPath", "mask",
+    "linearGradient", "radialGradient", "stop", "clipPath", "mask", "image",
 }
+IMAGE_HREFS = {"href", "{http://www.w3.org/1999/xlink}href"}
+
+
+def embedded_png(value, budget):
+    """Decode only embedded PNG/JPEG; share byte/pixel budgets across images."""
+    match = re.fullmatch(r"data:image/(png|jpeg);base64,([A-Za-z0-9+/=\s]+)", value)
+    if not match:
+        raise ValueError("embedded_source")
+    try:
+        raw = base64.b64decode(re.sub(r"\s", "", match[2]), validate=True)
+        budget[0] += len(raw)
+        if budget[0] > MAX_BYTES:
+            raise ValueError("embedded_size")
+        with Image.open(BytesIO(raw)) as source:
+            if source.format != {"png": "PNG", "jpeg": "JPEG"}[match[1]]:
+                raise ValueError("embedded_format")
+            width, height = source.size
+            budget[1] += width * height
+            if (max(width, height) > MAX_SIDE or budget[1] > MAX_PIXELS
+                    or getattr(source, "n_frames", 1) != 1):
+                raise ValueError("embedded_pixels")
+            source.verify()
+        with Image.open(BytesIO(raw)) as source:
+            source.load()
+            clean = Image.new("RGBA", source.size)
+            clean.paste(source.convert("RGBA"))
+            output = BytesIO()
+            clean.save(output, format="PNG")
+        encoded = output.getvalue()
+        budget[2] += len(encoded)
+        if budget[2] > MAX_BYTES:
+            raise ValueError("embedded_size")
+        return "data:image/png;base64," + base64.b64encode(encoded).decode("ascii")
+    except (binascii.Error, UnidentifiedImageError, OSError, Image.DecompressionBombError):
+        raise ValueError("embedded_format") from None
 
 
 def fragment(value):
@@ -71,15 +110,26 @@ def prepare(data):
     if root.tag != "{" + SVG_NS + "}svg":
         raise ValueError("root")
     stack, count = [(root, 0)], 0
+    embedded_budget = [0, 0, 0]
     while stack:
         node, depth = stack.pop()
         count += 1
         if count > 10_000 or depth > 32:
             raise ValueError("complexity")
         if not node.tag.startswith("{" + SVG_NS + "}") or node.tag.split("}", 1)[1] not in ALLOWED_TAGS:
-            # No script, foreignObject, image, use, animation or filters.
+            # No script, foreignObject, use, animation or filters.
             raise ValueError("element")
+        image_href = None
+        if node.tag == "{" + SVG_NS + "}image":
+            references = [name for name in node.attrib if name.rsplit("}", 1)[-1].lower() == "href"]
+            if len(references) != 1 or references[0] not in IMAGE_HREFS:
+                raise ValueError("embedded_source")
+            image_href = references[0]
+            node.set(image_href, embedded_png(node.get(image_href), embedded_budget))
         for name, value in node.attrib.items():
+            if name == image_href:
+                # This single reference is now our own metadata-free PNG data URI.
+                continue
             local = name.rsplit("}", 1)[-1].lower()
             if local.startswith("on") or local in {"base", "src"}:
                 raise ValueError("attribute")
@@ -98,7 +148,10 @@ def prepare(data):
         raise ValueError("pixels")
     root.set("width", str(width))
     root.set("height", str(height))
-    return tostring(root, encoding="unicode"), width, height
+    normalized = tostring(root, encoding="unicode")
+    if len(normalized.encode("utf-8")) > MAX_BYTES:
+        raise ValueError("size")
+    return normalized, width, height
 
 
 def render(data):
