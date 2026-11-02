@@ -14,7 +14,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from botocore.exceptions import ReadTimeoutError
+from botocore.exceptions import ClientError, ConnectionClosedError, ConnectTimeoutError, ReadTimeoutError
 
 from app.ai_ledger import AiBudget, AiLimitReached, SupabaseLedgerStore, run_ai_call
 from app.bedrock import AiCallError, BedrockSettings
@@ -418,6 +418,50 @@ def test_injected_failures_leave_the_specified_ledger_states(clean, local_env):
         f"{a}:timeout:2=settled:reserved_fallback:-:{reserved}",
         f"{a}:nousage:1=settled:reserved_fallback:-:{reserved}",
         f"{a}:nocontent:1=settled:usage:40:{BUDGET.cost(40, 0)}",
+    ]
+
+
+def test_connection_and_auth_failures_release_and_leave_every_limit_untouched(clean, local_env):
+    """MEG-145: 요청이 닿지 않은 연결 실패와 인증 실패는 예약을 풀어 일·월 합계·사용자 몫·횟수에 남지 않는다."""
+    a = new_user(clean)
+    never_sent = ConnectTimeoutError(endpoint_url="https://bedrock-runtime.example")
+    denied = ClientError({"Error": {"Code": "ExpiredTokenException", "Message": "x"}}, "Converse")
+
+    # 연결 실패 두 번(호출 안 재시도 포함), 인증 실패 한 번. 모두 502
+    for key, failures in (("conn", [never_sent, never_sent]), ("auth", [denied])):
+        bedrock = SequenceBedrock(*failures)
+        with pytest.raises(AiCallError):
+            call(clean, a, bedrock, key)
+        assert bedrock.calls == len(failures)
+
+    rows = sql(clean, """select string_agg(idempotency_key || '=' || status || ':' || coalesce(settle_basis, '-'), '|' order by id)
+                         from public.ai_usage_ledger;""")
+    assert rows.split("|") == [
+        f"{a}:conn:1=released:-",
+        f"{a}:conn:2=released:-",
+        f"{a}:auth:1=released:-",
+    ]
+    # 합계·사용자 몫·횟수에 남은 것이 없다: 하루 예산 1달러의 사용자 몫(0.5달러)을 정확히 채우는 예약이,
+    # 첫 시도 횟수 1회 제한에서도 통과한다. 풀린 예약액이나 횟수가 남았다면 limit_reached가 된다.
+    assert sql(clean, "select count(*) from public.ai_usage_ledger where status in ('reserved', 'settled');") == "0"
+    outcome = sql(clean, f"""select outcome from public.ai_reserve('{a}', 'explain', '{a}:next:1', 1, 0.5, 1, 7, 0.5, 1);""")
+    assert outcome == "reserved"
+
+
+def test_connection_closed_after_sending_still_counts_as_billed(clean, local_env):
+    """요청이 나갔을 수 있는 실패는 이전처럼 예약액 그대로 정산한다(과금으로 센다)."""
+    a = new_user(clean)
+    closed = ConnectionClosedError(endpoint_url="https://bedrock-runtime.example")
+
+    with pytest.raises(AiCallError):
+        call(clean, a, SequenceBedrock(closed, closed), "closed")
+
+    reserved = BUDGET.reserve_amount("자료: 문장", 600)
+    rows = sql(clean, """select string_agg(idempotency_key || '=' || status || ':' || coalesce(settle_basis, '-') || ':' || actual_usd,
+                         '|' order by id) from public.ai_usage_ledger;""")
+    assert rows.split("|") == [
+        f"{a}:closed:1=settled:reserved_fallback:{reserved}",
+        f"{a}:closed:2=settled:reserved_fallback:{reserved}",
     ]
 
 
