@@ -464,6 +464,12 @@ def test_malformed_usage_is_treated_as_missing(usage):
         ("bedrock", "UnrecognizedClientException", "released", False),
         ("bedrock", "ExpiredTokenException", "released", False),
         ("bedrock", "InvalidSignatureException", "released", False),
+        ("bedrock", "InvalidClientTokenId", "released", False),
+        ("bedrock", "IncompleteSignature", "released", False),
+        ("bedrock", "RequestExpired", "released", False),
+        ("bedrock", "NotAuthorized", "released", False),
+        # 서명 단계에서 끝나 요청이 나가지 않는다(api_key 모드에서 키가 없을 때)
+        ("bedrock", "NoCredentialsError", "released", False),
         # 요청이 나갔을 수 있으면 과금으로 센다
         ("bedrock", "ReadTimeoutError", "reserved_fallback", True),
         ("bedrock", "ConnectionClosedError", "reserved_fallback", True),

@@ -15,6 +15,7 @@ from botocore.exceptions import (
     ConnectionClosedError,
     ConnectTimeoutError,
     EndpointConnectionError,
+    NoCredentialsError,
     ReadTimeoutError,
 )
 
@@ -333,7 +334,18 @@ def test_known_rejection_releases_and_does_not_retry():
     assert store.settled == [(101, "released", {})]
 
 
-@pytest.mark.parametrize("code", ["UnrecognizedClientException", "ExpiredTokenException", "InvalidSignatureException"])
+@pytest.mark.parametrize(
+    "code",
+    [
+        "UnrecognizedClientException",
+        "ExpiredTokenException",
+        "InvalidSignatureException",
+        "InvalidClientTokenId",
+        "IncompleteSignature",
+        "RequestExpired",
+        "NotAuthorized",
+    ],
+)
 def test_auth_rejection_releases_without_retry_and_is_a_502(code):
     store = FakeStore()
     bedrock = FakeBedrock(client_error(code))
@@ -358,6 +370,18 @@ def test_connection_failure_that_never_sent_the_request_releases_both_attempts(e
     # 한 번 다시 부르고(새 예약), 두 예약 모두 푼다. 응답은 502
     assert bedrock.calls == 2
     assert store.settled == [(101, "released", {}), (102, "released", {})]
+    assert api_error_for(error.value).code == "ai_unavailable"
+
+
+def test_missing_credentials_fail_before_the_request_is_sent_and_release_without_retry():
+    store = FakeStore()
+    bedrock = FakeBedrock(NoCredentialsError())
+
+    with pytest.raises(AiCallError) as error:
+        run(store, bedrock)
+
+    assert (error.value.code, bedrock.calls) == ("NoCredentialsError", 1)
+    assert store.settled == [(101, "released", {})]
     assert api_error_for(error.value).code == "ai_unavailable"
 
 

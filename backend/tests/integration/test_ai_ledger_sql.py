@@ -441,9 +441,10 @@ def test_connection_and_auth_failures_release_and_leave_every_limit_untouched(cl
         f"{a}:conn:2=released:-",
         f"{a}:auth:1=released:-",
     ]
-    # 합계에 남은 금액이 없고, 첫 시도 횟수를 1회로 제한해도 다음 예약이 통과한다
+    # 합계·사용자 몫·횟수에 남은 것이 없다: 하루 예산 1달러의 사용자 몫(0.5달러)을 정확히 채우는 예약이,
+    # 첫 시도 횟수 1회 제한에서도 통과한다. 풀린 예약액이나 횟수가 남았다면 limit_reached가 된다.
     assert sql(clean, "select count(*) from public.ai_usage_ledger where status in ('reserved', 'settled');") == "0"
-    outcome = sql(clean, f"""select outcome from public.ai_reserve('{a}', 'explain', '{a}:next:1', 1, 0.001, 1, 7, 0.5, 1);""")
+    outcome = sql(clean, f"""select outcome from public.ai_reserve('{a}', 'explain', '{a}:next:1', 1, 0.5, 1, 7, 0.5, 1);""")
     assert outcome == "reserved"
 
 

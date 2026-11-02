@@ -5,7 +5,7 @@ E09(설명)·E11(퀴즈)·E13(꼬리 질문)은 run_ai_call 하나로 Bedrock을
 1. 설정·배포 환경을 먼저 검사한다. 실패하면 원장 행 없이 끝난다.
 2. ai_reserve로 예약한다. 한도를 넘으면 행도 호출도 없이 AiLimitReached다.
 3. Bedrock을 부른다(시간 초과 30초, botocore 재시도 없음).
-4. ai_settle로 정산한다. 응답 usage가 있으면 usage, 거절이 확실하면 released, 그 밖은 reserved_fallback.
+4. ai_settle로 정산한다. 응답 usage가 있으면 usage, 요청이 닿지 않았거나 거절(인증 포함)이 확실하면 released, 그 밖은 reserved_fallback.
 5. 다시 불러 볼 만한 실패면 attempt_no 2로 새로 예약해 한 번 더 부른다.
 
 예산·단가 금액은 공개 저장소에 쓰지 않는다. 환경변수에서 읽는다(2026-11-02 사람 결정).

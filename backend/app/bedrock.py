@@ -50,12 +50,24 @@ def _no_retry() -> dict:
 REJECTED_CODES = frozenset(
     {"AccessDeniedException", "ThrottlingException", "ValidationException", "ResourceNotFoundException"}
 )
-# 요청이 서버에 닿기 전에 끝난 연결 실패. 과금될 수 없어 예약을 푼다. 요청이 나갔을 수 있는
-# ReadTimeoutError·ConnectionClosedError는 넣지 않는다(과금 여부를 모르므로 과금으로 센다).
-NOT_SENT_CODES = frozenset({"ConnectTimeoutError", "EndpointConnectionError"})
-# 인증이 거절돼 모델이 실행되지 않은 오류. 키 만료·서명 오류가 이어지는 동안 한도가 닫히지 않게 한다.
+# 요청이 서버에 닿기 전에 끝난 실패. 모델이 실행되지 않아 과금되지 않은 것으로 보고 예약을 푼다
+# (botocore 매핑으로 확인: 연결 시간 초과·이름 해석·연결 거부만 이 코드로 나온다).
+# 요청이 나갔을 수 있는 ReadTimeoutError·ConnectionClosedError는 넣지 않는다(과금 여부를 모르므로 과금으로 센다).
+# NoCredentialsError는 서명 단계에서 나므로 요청을 보내기 전에 끝난다(api_key 모드에서 키가 없을 때).
+NOT_SENT_CODES = frozenset({"ConnectTimeoutError", "EndpointConnectionError", "NoCredentialsError"})
+# 인증·권한이 거절된 오류. 동기 Converse는 모델 실행 전에 거절하므로 과금되지 않은 것으로 본다(AWS의 과금 확인은 없다,
+# 기존 REJECTED_CODES와 같은 수준의 근거). 키 만료·서명 오류가 이어지는 동안 한도가 닫히지 않게 한다.
+# 뒤 네 개는 Bedrock 문서의 "Troubleshooting Amazon Bedrock API Error Codes"에 나온 코드다.
 AUTH_REJECTED_CODES = frozenset(
-    {"UnrecognizedClientException", "ExpiredTokenException", "InvalidSignatureException"}
+    {
+        "UnrecognizedClientException",
+        "ExpiredTokenException",
+        "InvalidSignatureException",
+        "InvalidClientTokenId",
+        "IncompleteSignature",
+        "RequestExpired",
+        "NotAuthorized",
+    }
 )
 # 한도 예약을 풀어 주는 bedrock 단계 오류 전체
 RELEASED_CODES = REJECTED_CODES | NOT_SENT_CODES | AUTH_REJECTED_CODES
@@ -101,7 +113,7 @@ class AiCallError(Exception):
 
     @property
     def settlement(self) -> str:
-        """원장을 어떻게 끝낼지(API spec 1.4.4). Bedrock에 닿지 않았거나 거절이 확실하면 예약을 푼다."""
+        """원장을 어떻게 끝낼지(API spec 1.4.4). 요청이 Bedrock에 닿지 않았거나 거절(권한·인증 포함)이 확실하면 예약을 푼다."""
         if self.step in ("environment", "sts") or (self.step == "bedrock" and self.code in RELEASED_CODES):
             return SETTLE_RELEASED
         if self.input_tokens is not None and self.output_tokens is not None:
