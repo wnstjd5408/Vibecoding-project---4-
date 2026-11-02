@@ -59,9 +59,9 @@ human_approved가 false이면 정식 결과는 pending을 유지한다.
 실제 출력·원장·사용량·검수 기록은 비공개 경로에 보관한다.
 공개 PR에는 합성 테스트와 공개 가능한 검증 요약만 포함한다.
 
-## Compact prompt v4
+## Scene prompt v5
 
-`wiki-live-v4-format` sends one independent source/output demonstration
+`wiki-live-v5-scene` sends one independent source/output demonstration
 (stack) before the actual final user payload. The
 demonstrations teach definition, mechanism, a concrete situation/problem/application,
 and specific cautions. They are not answers from the development or sealed datasets.
@@ -83,3 +83,7 @@ The prompt permits explicitly hypothetical applications of supplied concepts, bu
 not invented technical facts or policies. It requests a final JSON/section check.
 This is a prompt instruction, not a guarantee of valid provider output. Validation
 still rejects malformed responses; failed calls are not automatically repaired or retried.
+
+Human example review checks actor/context, concrete data/task, problem and
+application to that same data/task. These are semantic checks, not exact answer
+matching or keyword presence. A mechanically valid output can still fail this review.
