@@ -852,3 +852,86 @@ def test_an_explanation_invalidated_before_it_was_read_back_is_returned_one_off(
 
     assert response.status_code == 200
     assert response.json() == {"source": "ai", "term": None, "explanation": {"id": None, "body": AI_TEXT}, "reportable": False}
+
+
+# --- 독립 리뷰 반영(MEG-87 PR #96): 코드 안의 백슬래시, 저장 직후 무효화 ---
+
+
+def test_backslash_inside_inline_code_is_kept_so_the_code_is_a_different_term_from_the_plain_text_one():
+    text = "정규식 `a\\+b` 는 코드이고 a\\+b 는 이스케이프된 글이다."
+    code = text.index("a\\+b")
+    plain = text.index("a\\+b", code + 5)
+
+    in_code = pick_term_and_sentence(text, code, code + 4)
+    in_text = pick_term_and_sentence(text, plain, plain + 4)
+
+    assert (in_code.label, in_code.key) == ("a\\+b", "a\\+b")
+    assert (in_text.label, in_text.key) == ("a+b", "a+b")
+    # 주변 문장도 같은 원칙이다: 코드의 백슬래시는 남고, 코드 밖의 이스케이프만 풀린다
+    assert "`a\\+b`" in in_text.sentence and "a+b 는 이스케이프된" in in_text.sentence
+
+
+def test_backslash_inside_a_fenced_block_is_kept_for_the_term_and_the_sentence():
+    text = "앞 문장이다.\n```\npattern = \\d+\\.\\w\n```\n뒤 문장이다."
+    start = text.index("pattern")
+
+    picked = pick_term_and_sentence(text, start, start + len("pattern = \\d+"))
+
+    assert picked.label == "pattern = \\d+"
+    assert "\\d+\\.\\w" in picked.sentence
+
+
+def test_a_code_selection_does_not_get_the_glossary_explanation_of_the_unescaped_term(client, fake, bedrock):
+    fake.notes[0]["body_markdown"] = "소개. 코드 `a\\+b` 와 글 a\\+b 가 있다."
+    fake.terms["a+b"] = term_row(7, "a+b", "a+b", source="glossary", glossary_entries={"body_markdown": "사전 a+b"})
+    fake.glossary.append({"id": 7, "key": "a+b", "label": "a+b"})
+    fake.ai_terms = set()
+    text = fake.notes[0]["body_markdown"]
+    code = text.index("a\\+b")
+    plain = text.index("a\\+b", code + 5)
+
+    in_code = explain(client, start=code, end=code + 4)
+    in_text = explain(client, start=plain, end=plain + 4, key=KEY2)
+
+    assert in_code.status_code == 200 and in_code.json()["source"] == "ai"
+    assert in_code.json()["term"]["key"] == "a\\+b"
+    assert bedrock.calls == 1
+    assert in_text.json()["source"] == "glossary" and in_text.json()["body_markdown"] == "사전 a+b"
+    assert bedrock.calls == 1
+
+
+def test_an_explanation_invalidated_right_after_it_was_saved_is_not_returned_as_a_valid_shared_one(client, fake):
+    real_store = fake.store_ai_explanation
+
+    def store_then_invalidate(**arguments):
+        stored = real_store(**arguments)
+        # 저장 직후 노트가 바뀌어 설명이 무효화됐다(재조회에는 유효한 설명이 없다)
+        fake.terms[arguments["term_key"]]["explanations"] = []
+        return stored
+
+    fake.store_ai_explanation = store_then_invalidate
+
+    response = explain(client)
+
+    assert response.status_code == 200
+    assert response.json() == {"source": "ai", "term": None, "explanation": {"id": None, "body": AI_TEXT}, "reportable": False}
+    # 유효한 공유 설명이 아니므로 열람 기록도 없다
+    assert fake.term_views == set()
+
+
+def test_the_response_uses_the_explanation_read_back_not_the_id_the_save_returned(client, fake):
+    real_store = fake.store_ai_explanation
+
+    def store_then_replace(**arguments):
+        stored = real_store(**arguments)
+        # 저장한 설명이 무효화되고 다른 요청이 새 설명을 저장했다
+        fake.terms[arguments["term_key"]]["explanations"] = [
+            {"id": 777, "body": "다른 요청이 저장한 설명", "review_status": "pending"}]
+        return stored
+
+    fake.store_ai_explanation = store_then_replace
+
+    response = explain(client)
+
+    assert response.json()["explanation"] == {
+        "id": 777, "body": "다른 요청이 저장한 설명", "review_status": "pending", "cached": True}

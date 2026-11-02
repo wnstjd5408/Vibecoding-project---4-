@@ -73,6 +73,41 @@ def strip_hidden(text: str) -> str:
     return _HIDDEN.sub("", text)
 
 
+_ESCAPABLE = re.compile(r"[!-/:-@\[-`{-~]")
+
+
+def code_mask(text: str) -> bytearray:
+    """코드 블록·인라인 코드 위치(1). visible_text가 코드 안의 백슬래시를 지키는 데 쓴다."""
+    return _code_mask(text)
+
+
+def visible_text(text: str, low: int, high: int, mask: bytearray, hidden: list[tuple[int, int]]) -> str:
+    """text[low:high]에서 AI에 보낼 글을 만든다: 숨김 구간(note-image: 토큰·URL)을 지우고, 코드 밖의 마크다운
+    백슬래시 이스케이프만 푼다. 코드 안의 백슬래시는 실제 글자라 그대로 둔다(`a\\+b`와 a\\+b는 다른 글이다).
+
+    low·high는 text 안의 위치이고 mask는 code_mask(text), hidden은 hidden_ranges(text)다. 이스케이프는 왼쪽부터
+    짝을 지어 풀므로 `\\\\`도 백슬래시 하나로 풀린다.
+    """
+    out: list[str] = []
+    ranges = iter(hidden)
+    current = next(ranges, None)
+    index = low
+    while index < high:
+        while current is not None and current[1] <= index:
+            current = next(ranges, None)
+        if current is not None and current[0] <= index:
+            index = min(current[1], high)
+            continue
+        char = text[index]
+        if char == "\\" and not mask[index] and index + 1 < high and _ESCAPABLE.fullmatch(text[index + 1]):
+            out.append(text[index + 1])
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
 def hidden_ranges(text: str) -> list[tuple[int, int]]:
     """note-image: 토큰과 URL이 차지하는 [시작, 끝) 위치. 선택 범위가 이 안에 걸치는지 E09가 확인한다."""
     return [(match.start(), match.end()) for match in _HIDDEN.finditer(text)]

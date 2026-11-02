@@ -33,7 +33,7 @@ from app.auth import SessionUser, require_login
 from app.bedrock import AiCallError, AiConfigError, BedrockSettings, make_client
 from app.errors import FIELD_MESSAGES, ApiError
 from app.glossary import glossary_payload, study_date
-from app.glossary_spans import hidden_ranges, normalize_key, strip_hidden, unescape_markdown
+from app.glossary_spans import code_mask, hidden_ranges, normalize_key, visible_text
 from app.rate_limit import AI_EXPLAIN, RateLimiter, get_rate_limiter
 from app.supabase import SupabaseClient, SupabaseConfigError, SupabaseUnavailable, get_supabase
 
@@ -141,8 +141,8 @@ def sentence_bounds(text: str, start: int, end: int) -> tuple[int, int]:
     return left, found.end() if found else len(text)
 
 
-def _overlaps_hidden(text: str, start: int, end: int) -> bool:
-    return any(low < end and start < high for low, high in hidden_ranges(text))
+def _overlaps_hidden(hidden: list[tuple[int, int]], start: int, end: int) -> bool:
+    return any(low < end and start < high for low, high in hidden)
 
 
 def pick_term_and_sentence(text: str, start: int, end: int) -> Picked | None:
@@ -151,10 +151,12 @@ def pick_term_and_sentence(text: str, start: int, end: int) -> Picked | None:
     용어가 비었거나 글자·숫자가 없거나, 선택이 note-image: 토큰·URL에 조금이라도 걸치면 None이다(422). 앞뒤 문장은
     note-image: 토큰·URL을 먼저 지운 뒤 500자로 줄인다(5.6). 줄일 때 선택한 용어는 그대로 두고 앞뒤를 반씩 남긴다.
     """
-    if _overlaps_hidden(text, start, end):
+    hidden = hidden_ranges(text)
+    if _overlaps_hidden(hidden, start, end):
         return None
-    raw_term = text[start:end]
-    label = unicodedata.normalize("NFC", _collapse(unescape_markdown(raw_term)))
+    # 코드 안의 백슬래시는 실제 글자다. 코드 밖의 이스케이프만 푼다(코드 `a\\+b`와 글 a\\+b는 다른 용어다).
+    mask = code_mask(text)
+    label = unicodedata.normalize("NFC", _collapse(visible_text(text, start, end, mask, hidden)))
     key = normalize_key(label)
     # 글자나 숫자가 하나도 없는 선택(기호·공백만)은 설명할 용어가 아니다. AI를 부르지 않는다.
     if not key or not any(char.isalnum() for char in label):
@@ -162,8 +164,8 @@ def pick_term_and_sentence(text: str, start: int, end: int) -> Picked | None:
 
     left, right = sentence_bounds(text, start, end)
     # 선택이 숨김 구간에 걸치지 않으므로 숨김 구간은 선택 앞이나 뒤에 통째로 있다. 앞뒤를 따로 지워도 토큰이 잘리지 않는다.
-    before = unescape_markdown(strip_hidden(text[left:start]))
-    after = unescape_markdown(strip_hidden(text[end:right]))
+    before = visible_text(text, left, start, mask, hidden)
+    after = visible_text(text, end, right, mask, hidden)
     budget = max(MAX_SENTENCE_CHARS - len(label), 0)
     if len(before) + len(after) > budget:
         keep_after = min(len(after), max(budget // 2, budget - len(before)))
@@ -366,14 +368,15 @@ def explain(
     if row.get("glossary_entries") is not None:
         # 호출하는 사이 같은 용어가 사전에 등록됐다. 사전이 AI보다 우선한다(D-020).
         response = _glossary_response(row, supabase)
-    elif stored["explanation_id"] is None:
-        # 저장한 설명이 읽기 전에 무효화됐다(드문 경합). 결과만 1회용으로 준다.
+    elif not row["ai_explanations"]:
+        # 다시 읽었더니 유효한 설명이 없다. 저장한 설명이 읽기 전에 무효화됐다(노트 변경·비공개 전환·신고 처리).
+        # 저장 함수가 준 id를 쓰면 무효화된 설명을 유효한 공유 설명처럼 내보내므로 결과만 1회용으로 준다.
         return _one_off_response(explanation_text)
     else:
+        # 응답은 다시 읽은 유효한 설명으로 만든다. 저장 함수가 돌려준 id와 다르면(그 사이 다른 요청이 새로 저장) 내 것이 아니다.
+        active = row["ai_explanations"][0]
         response = _shared_response(
-            row,
-            {"id": stored["explanation_id"], "body": stored["body"], "review_status": stored["review_status"]},
-            cached=stored["outcome"] == "existing",
+            row, active, cached=stored["outcome"] == "existing" or active["id"] != stored["explanation_id"]
         )
     _record_view(supabase, user.user_id, row["id"])
     return response
