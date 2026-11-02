@@ -12,4 +12,6 @@
   .page { --gutter: calc(var(--space-6) + var(--space-4)); max-width: none; }
   .main { padding: var(--space-6) var(--gutter) var(--space-8); }
   .article { max-width: 720px; margin-inline: auto; }
+  /* 패널이 열려 있으면 오른쪽 480px를 비운다. 본문 열은 남은 영역의 가운데에 놓이고, 공간이 모자라면 줄어든다 */
+  .panelOpen .main { margin-right: 480px; }
 }

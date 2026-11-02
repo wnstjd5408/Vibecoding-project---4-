@@ -1,8 +1,9 @@
 import { useCallback, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useLocation } from 'react-router'
-import { BottomSheet } from '../components/BottomSheet.tsx'
 import { LinkButton } from '../components/Button.tsx'
+import { ResponsiveSheet } from '../components/ResponsiveSheet.tsx'
+import { useWideLayout } from '../components/useWideLayout.ts'
 import { userPaths } from '../routes/paths.ts'
 import { isLoginRequired } from './isLoginRequired.ts'
 import { LoginPromptContext } from './loginPromptContext.ts'
@@ -12,9 +13,13 @@ import styles from './LoginPromptProvider.module.css'
 
 // 앱 위쪽에 하나 둔다. 방문자가 로그인 기능을 눌렀을 때 뜨는 안내 시트(F1-1c·F2-2b)를 그린다.
 // 시트는 기존 BottomSheet를 그대로 쓴다. 제목 포커스, Esc·닫기·막 누르기, 연 요소로의 포커스 복귀는 BottomSheet가 맡는다.
+// 용어 즐겨찾기 401(F3-2d)만 PC 폭(1024px 이상)에서 오른쪽 사이드 패널로 연다(options.panel). 그 밖의 안내는 PC 폭에서도 바텀시트다.
 export function LoginPromptProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false)
   const [body, setBody] = useState<string>(LOGIN_PROMPT_MESSAGES.body)
+  const [panel, setPanel] = useState(false)
+  const [returnFocus, setReturnFocus] = useState<(() => HTMLElement | null) | undefined>(undefined)
+  const wide = useWideLayout()
   const { pathname } = useLocation()
 
   // 화면을 옮기면(로그인 버튼, 뒤로·앞으로 가기 등) 열림 상태 자체를 해제한다. 시트는 앱 위쪽에 있어 화면이 바뀌어도 남기 때문이다.
@@ -28,6 +33,9 @@ export function LoginPromptProvider({ children }: { children: ReactNode }) {
   const openLoginPrompt = useCallback((options?: LoginPromptOptions) => {
     // 호출마다 본문을 새로 정한다. 퀴즈 문구로 열었다 닫은 뒤 기본 호출을 해도 이전 문구가 남지 않는다.
     setBody(options?.body ?? LOGIN_PROMPT_MESSAGES.body)
+    setPanel(options?.panel ?? false)
+    // 함수를 상태로 두려면 감싸서 넣는다(그냥 넣으면 갱신 함수로 읽힌다)
+    setReturnFocus(options?.returnFocus ? () => options.returnFocus : undefined)
     setOpen(true)
   }, [])
 
@@ -37,17 +45,19 @@ export function LoginPromptProvider({ children }: { children: ReactNode }) {
     return true
   }, [openLoginPrompt])
 
-  const value = useMemo<LoginPromptContextValue>(() => ({ openLoginPrompt, handleLoginRequired }), [openLoginPrompt, handleLoginRequired])
+  // PC 사이드 패널로 열려 있을 때만 화면이 오른쪽 공간을 비운다.
+  const panelOpen = open && panel && wide
+  const value = useMemo<LoginPromptContextValue>(() => ({ openLoginPrompt, handleLoginRequired, panelOpen }), [openLoginPrompt, handleLoginRequired, panelOpen])
 
   return (
     <LoginPromptContext.Provider value={value}>
       {children}
-      <BottomSheet open={open} onClose={() => setOpen(false)} title={LOGIN_PROMPT_MESSAGES.title}>
+      <ResponsiveSheet open={open} onClose={() => setOpen(false)} title={LOGIN_PROMPT_MESSAGES.title} allowPanel={panel} returnFocus={returnFocus}>
         <p className={styles.body}>{body}</p>
-        <div className={styles.actions}>
+        <div className={panelOpen ? styles.panelActions : styles.actions}>
           <LinkButton variant="primary" to={userPaths.login} onClick={() => setOpen(false)}>{LOGIN_PROMPT_MESSAGES.login}</LinkButton>
         </div>
-      </BottomSheet>
+      </ResponsiveSheet>
     </LoginPromptContext.Provider>
   )
 }

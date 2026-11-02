@@ -2,3 +2,5 @@
 .actions { display: flex; gap: var(--space-2); }
 /* 목업 F1-1c처럼 로그인 버튼이 시트 너비를 채운다 */
 .actions > a { flex: 1; }
+/* PC 사이드 패널: 로그인 버튼은 패널 폭을 채우지 않고 내용 폭이다 */
+.panelActions { display: flex; }

@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { apiFetch, isApiError } from '../api/client.ts'
 import type { NoteReadResponse } from '../api/types.ts'
 import { AccountMenu } from '../account/AccountMenu.tsx'
 import { useAuth } from '../auth/useAuth.ts'
 import { AiExplainSheet } from '../ai/AiExplainSheet.tsx'
+import { useWideLayout } from '../components/useWideLayout.ts'
 import { toCodePointRange } from '../ai/explain.ts'
 import { AppHeader, Button, LinkButton, SelectionAction, StateMessage } from '../components/index.ts'
 import { TermSheet } from '../glossary/TermSheet.tsx'
@@ -42,7 +43,7 @@ export default function NoteReadPage() {
 
 function NoteRead({ noteId }: { noteId: string }) {
   const auth = useAuth()
-  const { handleLoginRequired, openLoginPrompt } = useLoginPrompt()
+  const { handleLoginRequired, openLoginPrompt, panelOpen: loginPanelOpen } = useLoginPrompt()
   const [attempt, setAttempt] = useState(0)
   const [result, setResult] = useState<Result | null>(null)
   // 열린 용어 시트. openId는 열 때마다 올라가 같은 용어를 다시 열어도 새로 불러온다.
@@ -53,6 +54,11 @@ function NoteRead({ noteId }: { noteId: string }) {
   // 열린 AI 설명 시트. 요청 위치·개정은 버튼을 누른 때의 값이고 시트가 열려 있는 동안 바뀌지 않는다.
   const [openAi, setOpenAi] = useState<{ target: ExplainTarget; text: string; openId: number } | null>(null)
   const articleRef = useRef<HTMLElement>(null)
+  // PC 폭(1024px 이상)이면 용어·AI 설명을 오른쪽 사이드 패널로 보인다. 용어 링크는 패널과 aria-expanded·aria-controls로 잇는다.
+  const wide = useWideLayout()
+  const panelId = useId()
+  // 마지막으로 누른 용어 링크. 패널을 닫으면 포커스가 여기로 돌아간다.
+  const lastTermLink = useRef<HTMLElement | null>(null)
   // 버튼을 누르는 동안 브라우저가 선택을 풀어도(터치) 버튼이 사라지지 않게 한다.
   const pressing = useRef(false)
   const [brokenImages, setBrokenImages] = useState<ReadonlySet<string>>(new Set())
@@ -128,7 +134,8 @@ function NoteRead({ noteId }: { noteId: string }) {
   const onFavoriteLoginRequired = (error: unknown) => {
     if (!isLoginRequired(error)) return false
     setOpenTerm(null)
-    return handleLoginRequired(error)
+    // PC 폭에서는 용어 패널을 닫고 같은 자리에 로그인 안내 패널을 연다. 닫으면 마지막으로 누른 용어 링크로 포커스가 돌아간다.
+    return handleLoginRequired(error, { panel: true, returnFocus: () => lastTermLink.current })
   }
   // AI 설명 버튼: 방문자는 요청 없이 로그인 안내를 열고, 로그인한 사용자는 E09 요청을 보내는 시트를 연다.
   const askAi = () => {
@@ -155,12 +162,15 @@ function NoteRead({ noteId }: { noteId: string }) {
     setPick(null)
     setAttempt((value) => value + 1)
   }, [])
-  const showTerm = (termId: number) => {
+  const showTerm = (termId: number, link: HTMLElement) => {
+    lastTermLink.current = link
     openCount.current += 1
     setOpenTerm({ termId, openId: openCount.current })
   }
+  // 패널이 열려 있으면 본문 오른쪽 480px를 비워 패널이 본문을 가리지 않게 한다(PC 폭에서만).
+  const panelReserved = wide && (term !== undefined || loginPanelOpen)
 
-  return <div className={styles.page}>
+  return <div className={panelReserved ? `${styles.page} ${styles.panelOpen}` : styles.page}>
     <AppHeader title="CS 학습 노트" backTo={userPaths.noteList} backLabel="목록" wide stickyOnWide actions={
       auth.status === 'loading' ? null
         : auth.role === 'visitor' ? <LinkButton to={userPaths.login}>로그인</LinkButton> : <AccountMenu />
@@ -177,7 +187,8 @@ function NoteRead({ noteId }: { noteId: string }) {
             <h1 className={styles.title}>{current.data.title}</h1>
             <p className={styles.meta}>{[...current.data.subjects.map((item) => item.name), ...(current.data.studied_on ? [current.data.studied_on] : [])].join(' · ')}</p>
             <NoteBody body={current.data.body_markdown} spans={current.data.glossary_spans} images={current.data.images}
-              brokenImages={brokenImages} onTerm={showTerm} onImageError={onImageError} />
+              brokenImages={brokenImages} onTerm={showTerm} onImageError={onImageError}
+              panelId={wide ? panelId : undefined} expandedTermId={wide ? (term ? openTerm?.termId ?? null : null) : undefined} />
             {pick
               ? <SelectionAction top={pick.top} left={pick.left}
                   onPointerDown={(event) => { pressing.current = true; event.preventDefault() }}
@@ -189,6 +200,7 @@ function NoteRead({ noteId }: { noteId: string }) {
     </main>
     <AiExplainSheet open={openAi !== null} onClose={() => setOpenAi(null)} openId={openAi?.openId ?? 0} target={openAi?.target ?? null} text={openAi?.text ?? ''} onLoginRequired={onAiLoginRequired} onReloadNote={onReloadNote} />
     {/* 용어를 누르면 열리는 시트(F1-3). 시트 안 즐겨찾기 버튼(MEG-90)과 로그인 안내 연결(MEG-77)이 이 안에 있다. */}
-    <TermSheet open={term !== undefined} onClose={() => setOpenTerm(null)} openId={openTerm?.openId ?? 0} termId={openTerm?.termId ?? null} label={term?.label ?? ''} onLoginRequired={onFavoriteLoginRequired} />
+    <TermSheet open={term !== undefined} onClose={() => setOpenTerm(null)} openId={openTerm?.openId ?? 0} termId={openTerm?.termId ?? null} label={term?.label ?? ''} onLoginRequired={onFavoriteLoginRequired}
+      panelId={panelId} returnFocus={() => lastTermLink.current} />
   </div>
 }
