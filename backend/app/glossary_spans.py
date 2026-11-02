@@ -73,6 +73,11 @@ def strip_hidden(text: str) -> str:
     return _HIDDEN.sub("", text)
 
 
+def hidden_ranges(text: str) -> list[tuple[int, int]]:
+    """note-image: 토큰과 URL이 차지하는 [시작, 끝) 위치. 선택 범위가 이 안에 걸치는지 E09가 확인한다."""
+    return [(match.start(), match.end()) for match in _HIDDEN.finditer(text)]
+
+
 def _composing_starters() -> frozenset[str]:
     """결합 등급이 0인데 NFC가 앞 글자와 합칠 수 있는 글자(한글 중성·종성 자모, 일부 인도계 모음 기호 등).
 

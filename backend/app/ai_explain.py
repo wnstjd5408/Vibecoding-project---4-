@@ -33,7 +33,7 @@ from app.auth import SessionUser, require_login
 from app.bedrock import AiCallError, AiConfigError, BedrockSettings, make_client
 from app.errors import FIELD_MESSAGES, ApiError
 from app.glossary import glossary_payload, study_date
-from app.glossary_spans import normalize_key, strip_hidden, unescape_markdown
+from app.glossary_spans import hidden_ranges, normalize_key, strip_hidden, unescape_markdown
 from app.rate_limit import AI_EXPLAIN, RateLimiter, get_rate_limiter
 from app.supabase import SupabaseClient, SupabaseConfigError, SupabaseUnavailable, get_supabase
 
@@ -48,6 +48,7 @@ MAX_SENTENCE_CHARS = 500
 # 같은 요청이 최대 약 60초 걸린다(호출 30초 × 2). 진행 중 응답의 재시도 시간은 이 이상이다(1.3, 1.4.5).
 IN_PROGRESS_RETRY_SECONDS = 60
 # reserved로 이 시간 넘게 남은 행은 죽은 요청이다. 다음 예약이 reserved_fallback으로 정산한다(5.3 6번).
+# supabase/migrations/20261102120000_ai_ledger_functions.sql의 ai_reserve(interval '10 minutes')와 같은 값이어야 한다.
 STALE_RESERVED_SECONDS = 10 * 60
 # 프롬프트 형식 버전. 설명 행에 남겨 프롬프트를 바꿨을 때 이전 설명을 가려낼 수 있게 한다.
 PROMPT_VERSION = "explain-v1"
@@ -126,23 +127,33 @@ def check_selection_shape(start: int, end: int) -> None:
 
 
 def sentence_bounds(text: str, start: int, end: int) -> tuple[int, int]:
-    """선택 범위가 든 문장의 [시작, 끝) 위치. 선택 안쪽의 문장 부호는 경계로 보지 않는다."""
+    """선택 범위가 든 문장의 [시작, 끝) 위치. 선택 안쪽의 문장 부호는 경계로 보지 않는다.
+
+    앞쪽 경계는 본문 전체에서 찾고 선택 시작 전에 끝나는 것만 쓴다. 검색 끝을 start로 잘라 두면 정규식의 `$`가
+    그 자리에서 맞아, "3.5"의 5를 고를 때 앞의 마침표가 문장 끝으로 잘못 보인다.
+    """
     left = 0
-    for match in _SENTENCE_BREAK.finditer(text, 0, start):
+    for match in _SENTENCE_BREAK.finditer(text):
+        if match.end() > start:
+            break
         left = match.end()
     found = _SENTENCE_BREAK.search(text, end)
     return left, found.end() if found else len(text)
 
 
+def _overlaps_hidden(text: str, start: int, end: int) -> bool:
+    return any(low < end and start < high for low, high in hidden_ranges(text))
+
+
 def pick_term_and_sentence(text: str, start: int, end: int) -> Picked | None:
     """저장된 본문에서 선택한 용어와 그 문장(최대 500자)을 서버가 자른다. 클라이언트가 보낸 문장은 쓰지 않는다.
 
-    용어가 비었거나 note-image: 토큰·URL을 담고 있으면 None이다(422). 문장이 500자를 넘으면 선택한 곳을 가운데에 둔
-    500자만 남긴다. note-image: 토큰과 URL은 AI 입력에서 뺀다(5.6).
+    용어가 비었거나 글자·숫자가 없거나, 선택이 note-image: 토큰·URL에 조금이라도 걸치면 None이다(422). 앞뒤 문장은
+    note-image: 토큰·URL을 먼저 지운 뒤 500자로 줄인다(5.6). 줄일 때 선택한 용어는 그대로 두고 앞뒤를 반씩 남긴다.
     """
-    raw_term = text[start:end]
-    if strip_hidden(raw_term) != raw_term:
+    if _overlaps_hidden(text, start, end):
         return None
+    raw_term = text[start:end]
     label = unicodedata.normalize("NFC", _collapse(unescape_markdown(raw_term)))
     key = normalize_key(label)
     # 글자나 숫자가 하나도 없는 선택(기호·공백만)은 설명할 용어가 아니다. AI를 부르지 않는다.
@@ -150,13 +161,21 @@ def pick_term_and_sentence(text: str, start: int, end: int) -> Picked | None:
         return None
 
     left, right = sentence_bounds(text, start, end)
-    if right - left > MAX_SENTENCE_CHARS:
-        before = (MAX_SENTENCE_CHARS - (end - start)) // 2
-        low = max(left, start - before)
-        high = min(right, low + MAX_SENTENCE_CHARS)
-        left, right = max(left, high - MAX_SENTENCE_CHARS), high
-    sentence = _collapse(unescape_markdown(strip_hidden(text[left:right])))
+    # 선택이 숨김 구간에 걸치지 않으므로 숨김 구간은 선택 앞이나 뒤에 통째로 있다. 앞뒤를 따로 지워도 토큰이 잘리지 않는다.
+    before = unescape_markdown(strip_hidden(text[left:start]))
+    after = unescape_markdown(strip_hidden(text[end:right]))
+    budget = max(MAX_SENTENCE_CHARS - len(label), 0)
+    if len(before) + len(after) > budget:
+        keep_after = min(len(after), max(budget // 2, budget - len(before)))
+        keep_before = min(len(before), budget - keep_after)
+        before, after = before[len(before) - keep_before :], after[:keep_after]
+    sentence = _collapse(before + label + after)
     return Picked(label=label, key=key, sentence=sentence)
+
+
+def _data(text: str) -> str:
+    """자료 구역의 경계 표시를 자료 안에서 흉내 내지 못하게 바꾼다(5.6)."""
+    return text.replace("[자료 끝]", "(자료 끝)").replace("[자료]", "(자료)")
 
 
 def build_prompt(picked: Picked) -> str:
@@ -168,8 +187,8 @@ def build_prompt(picked: Picked) -> str:
         "- 한국어로 3~5문장으로 설명합니다. 마크다운·링크·이미지·HTML 없이 순수한 글로만 씁니다.\n"
         "- 노트 문장에서 이 용어가 어떤 뜻으로 쓰였는지부터 설명합니다. 확실하지 않으면 모른다고 씁니다.\n"
         "[자료]\n"
-        f"용어: {picked.label}\n"
-        f"노트 문장: {picked.sentence}\n"
+        f"용어: {_data(picked.label)}\n"
+        f"노트 문장: {_data(picked.sentence)}\n"
         "[자료 끝]"
     )
 
@@ -203,6 +222,10 @@ def _one_off_response(body: str) -> dict:
     return {"source": "ai", "term": None, "explanation": {"id": None, "body": body}, "reportable": False}
 
 
+def _glossary_response(row: dict, supabase: SupabaseClient) -> dict:
+    return {"source": "glossary", **glossary_payload(row, supabase), "is_favorite": bool(row["favorites"])}
+
+
 def _replay_error(rows: list[dict]) -> ApiError | None:
     """같은 사용자의 같은 키 원장 행으로 판정한다(5.5절 9단계). 행이 없으면 None이다(새 요청).
 
@@ -231,7 +254,7 @@ def _record_view(supabase: SupabaseClient, user_id: str, term_id: int) -> None:
 def _known_term_response(supabase: SupabaseClient, user: SessionUser, row: dict) -> dict | None:
     """사전 용어면 사전 설명(7단계), 유효한 AI 설명이 있으면 캐시(8단계)를 돌려준다. 둘 다 아니면 None이다."""
     if row.get("glossary_entries") is not None:
-        response = {"source": "glossary", **glossary_payload(row, supabase), "is_favorite": bool(row["favorites"])}
+        response = _glossary_response(row, supabase)
     elif row.get("ai_explanations"):
         response = _shared_response(row, row["ai_explanations"][0], cached=True)
     else:
@@ -342,7 +365,10 @@ def explain(
         return _one_off_response(explanation_text)
     if row.get("glossary_entries") is not None:
         # 호출하는 사이 같은 용어가 사전에 등록됐다. 사전이 AI보다 우선한다(D-020).
-        response = {"source": "glossary", **glossary_payload(row, supabase), "is_favorite": bool(row["favorites"])}
+        response = _glossary_response(row, supabase)
+    elif stored["explanation_id"] is None:
+        # 저장한 설명이 읽기 전에 무효화됐다(드문 경합). 결과만 1회용으로 준다.
+        return _one_off_response(explanation_text)
     else:
         response = _shared_response(
             row,
