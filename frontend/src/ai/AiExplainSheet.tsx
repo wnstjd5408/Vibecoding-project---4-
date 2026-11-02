@@ -9,6 +9,7 @@ import { BottomSheet } from '../components/BottomSheet.tsx'
 import { Button } from '../components/Button.tsx'
 import { StateMessage } from '../components/StateMessage.tsx'
 import { NoteBody } from '../notes/NoteBody.tsx'
+import { ReportControl } from '../reports/ReportControl.tsx'
 import { classifyExplainError, requestExplanation, retryAvailableAt } from './explain.ts'
 import type { ExplainFailure, ExplainTarget } from './explain.ts'
 import styles from './AiExplainSheet.module.css'
@@ -166,9 +167,15 @@ function AiExplainContent({ target, onBadge, onLoginRequired, onReloadNote }: Pi
     )
   }
   // AI 설명(저장된 공유 설명 또는 저장하지 않는 1회용 설명). AI 본문은 텍스트로만 보인다.
+  // 신고는 서버가 reportable: true로 알린 저장된 공유 설명(explanation.id가 있다)에만 열린다. 1회용 설명은 대상이 아니다.
   return (
-    <AiBox label={MESSAGES.aiBoxLabel}>
-      <p className={styles.body}>{data.explanation.body}</p>
-    </AiBox>
+    <>
+      <AiBox label={MESSAGES.aiBoxLabel}>
+        <p className={styles.body}>{data.explanation.body}</p>
+      </AiBox>
+      {data.reportable && data.explanation.id !== null
+        ? <div className={styles.report}><ReportControl key={data.explanation.id} target={{ type: 'ai_explanation', id: data.explanation.id }} /></div>
+        : null}
+    </>
   )
 }

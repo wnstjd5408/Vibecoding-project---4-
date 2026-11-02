@@ -60,12 +60,15 @@ export function BottomSheet({ open, onClose, title, badge, closeLabel = '닫기'
       aria-labelledby={titleId}
       aria-modal="true"
       onCancel={(event) => {
+        // 시트 안에 다른 시트가 겹쳐 열린 경우(예: AI 설명 시트 안의 오류 신고 시트) 안쪽 시트의 Esc가 React 이벤트로 올라와 바깥 시트까지 닫지 않게, 이 dialog 자신의 이벤트만 다룬다.
+        if (event.target !== event.currentTarget) return
         // Esc는 브라우저가 바로 닫지 않게 막고, 부모가 open을 바꾸게 한다.
         event.preventDefault()
         onClose()
       }}
       // 브라우저가 스스로 닫은 경우에만 부모 상태를 맞춘다. 코드가 닫았거나(정리 함수·StrictMode) 이미 다시 열렸으면 알리지 않는다.
-      onClose={() => {
+      onClose={(event) => {
+        if (event.target !== event.currentTarget) return
         if (open && !dialogRef.current?.open) onClose()
       }}
     >
