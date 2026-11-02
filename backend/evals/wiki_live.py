@@ -18,7 +18,7 @@ from .schema import DatasetError
 from .wiki_dev import manifest
 from .wiki_examples import example_messages
 
-VERSION = "wiki-live-v5-scene"
+VERSION = "wiki-live-v6-grounding"
 MAX_OUTPUT = 3000
 SECTIONS = ("정의", "작동 원리", "활용 예시", "주의사항")
 PROMPT = r'''비전공자를 위한 한국어 CS 설명을 JSON 객체 하나로 작성한다.
@@ -28,6 +28,15 @@ PROMPT = r'''비전공자를 위한 한국어 CS 설명을 JSON 객체 하나로
 - 앞선 시범의 사실·출처는 현재 근거가 아니다.
 - 정의·필수 조건·예외를 보존하고, 특정 구현의 정책을 일반화하지 않는다.
 - 근거가 부족한 부분만 확인을 안내하고 설명 가능한 내용은 유지한다.
+
+[근거가 부족할 때]
+- sources가 비어 있으면 개념을 설명하지 않는다. 4개 절을 유지하고 근거 확인이 필요함을 알리며 source_ids는 []로 둔다.
+- 일부만 있으면 있는 내용만 설명하고 부족한 부분만 확인을 안내한다.
+- 예시는 적용할 기술 동작이 근거에 있을 때만 쓴다. 없으면 예시 대신 그 이유를 쓴다.
+
+[용어 풀이]
+- 근거에 뜻이 없는 전문용어는 일반적인 뜻을 한 구절로 풀 수 있다.
+- 용어 풀이에 새로운 동작·방법·정책·성능을 덧붙이지 않는다. 풀이만으로 활용 방법을 확장하지 않는다.
 
 [문체]
 - 새 전문용어는 처음 나올 때 짧게 풀어 쓴다.
@@ -53,7 +62,7 @@ PROMPT = r'''비전공자를 위한 한국어 CS 설명을 JSON 객체 하나로
 
 [인용]
 - 근거를 사용한 주장 옆에 현재 sources 번호를 [1]처럼 붙인다.
-- 하나 이상 인용하고 source_ids에는 실제 인용한 번호만 중복 없이 넣는다.
+- sources에 사용할 근거가 있으면 하나 이상 인용하고 source_ids에는 실제 인용한 번호만 중복 없이 넣는다.
 - 가상 장면 설정 자체에는 인용하지 않는다. 그 장면에 적용한 기술 설명에는 인용한다.
 - URL·링크 목록·이미지·도구 호출은 생성하지 않는다. 링크는 서버가 연결한다.
 
@@ -63,6 +72,17 @@ PROMPT = r'''비전공자를 위한 한국어 CS 설명을 JSON 객체 하나로
 - summary는 문자열 3개의 배열, explanation은 문자열, source_ids는 문자열 배열이다.
 - 문자열 내부 줄바꿈은 JSON 규칙에 따라 \n으로 이스케이프한다.
 - 출력 전 JSON 유효성, 요약 3개, 본문 4개 절, 예시의 대상·구체물·문제·적용을 확인한다.'''
+
+
+OUTPUT_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["summary", "explanation", "source_ids"],
+    "properties": {
+        "summary": {"type": "array", "items": {"type": "string"}},
+        "explanation": {"type": "string"},
+        "source_ids": {"type": "array", "items": {"type": "string"}},
+    },
+}
 
 
 def make_plan(cases):
@@ -82,7 +102,8 @@ def make_plan(cases):
         requests[key] = {"modelId": MODEL, "system": [{"text": PROMPT}],
                          "messages": example_messages() + [{"role": "user", "content": [{"text": json.dumps(payload, ensure_ascii=False)}]}],
                          "inferenceConfig": {"maxTokens": MAX_OUTPUT},
-                         "additionalModelRequestFields": {"reasoning": {"effort": "none"}}}
+                         "outputConfig": {"textFormat": {"type": "json_schema", "structure": {"jsonSchema": {"name": "wiki_explanation", "schema": json.dumps(OUTPUT_SCHEMA)}}}},
+                         "additionalModelRequestFields": {"reasoning": {"effort": "none"}, "text": {"format": {"strict": True}}}}
     config = SimpleNamespace(model_id=MODEL, max_input=CONTEXT_LIMIT, max_output=MAX_OUTPUT,
                              input_price="0.20", output_price="0.75", price_version=POLICY)
     amount = reservation(config, requests)

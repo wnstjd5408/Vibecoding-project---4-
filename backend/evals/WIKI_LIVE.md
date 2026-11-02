@@ -59,9 +59,9 @@ human_approved가 false이면 정식 결과는 pending을 유지한다.
 실제 출력·원장·사용량·검수 기록은 비공개 경로에 보관한다.
 공개 PR에는 합성 테스트와 공개 가능한 검증 요약만 포함한다.
 
-## Scene prompt v5
+## Grounding prompt v6
 
-`wiki-live-v5-scene` sends one independent source/output demonstration
+`wiki-live-v6-grounding` sends one independent source/output demonstration
 (stack) before the actual final user payload. The
 demonstrations teach definition, mechanism, a concrete situation/problem/application,
 and specific cautions. They are not answers from the development or sealed datasets.
@@ -87,3 +87,60 @@ still rejects malformed responses; failed calls are not automatically repaired o
 Human example review checks actor/context, concrete data/task, problem and
 application to that same data/task. These are semantic checks, not exact answer
 matching or keyword presence. A mechanically valid output can still fail this review.
+
+## Grounding and output contract
+
+The single stack demonstration sources contain technical facts, not an editor
+scenario. The output composes a hypothetical editor scene from those facts.
+Brief general definitions of jargon are allowed, but must not introduce new
+mechanisms, policies or performance claims. Human reviewers label these as glossary
+paraphrases and check their correctness separately; they are not falsely attributed
+to a source that does not define them. Incorrect glosses still count as factual errors.
+
+No-source policy applies only to this wiki experiment: the offline router returns
+its existing limited notice without a model call; the live planner refuses empty
+sources before invocation. The prompt also describes a four-section no-evidence
+fallback for direct prompt testing, but the live runner never submits that branch.
+This does not change the sealed baseline's context-only expected behavior. A
+production four-section fixed response is not implemented by this evaluation PR.
+
+Luna Converse supports JSON Schema per the [AWS model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html).
+Requests now set outputConfig.textFormat and additionalModelRequestFields.text.format.strict.
+The local SDK validates request shape without network. Provider acceptance remains
+unverified until a separately approved call. Server JSON parsing, exact keys,
+three summaries, section checks and citation allowlists remain mandatory. No
+automatic repair/retry is introduced; schema compliance does not prove truth.
+
+## Pre-run development protocol (v6; no results yet)
+
+Freeze prompt, examples, input/source revisions, schema, model settings and this
+protocol before any output is inspected. WDEV six cases x three independent runs
+= 18 scheduled model responses. Existing runner supports only six slots: repeat
+runs require three distinct approvals/ledgers; no implicit repeat authorization.
+Report actual attempts, scheduled slots, unexecuted slots and error counts. A
+halt leaves the experiment incomplete, never passes by shrinking the denominator.
+For this small calibration require 18/18 valid JSON/sections/citations and no
+critical unsupported claim. This is a development gate, not a 95% quality claim.
+
+Human example review records actor, concrete data/task, problem, application
+(each O/X), and whether the technical application is supported. Exact wording is
+irrelevant. For evidence too weak to support an application, mark the scene N/A
+and require a precise insufficiency explanation without invented mechanics.
+Report scene success only over eligible outputs, with N/A count separate. Require
+all eligible scenes to meet all four checks. Definition/condition preservation and
+citation entailment remain separate checks. A number existing in the allowlist
+alone is insufficient evidence of a supported claim.
+
+Additional independent development probes (not sealed cases):
+- empty sources + informative context: live call blocked, no concept generation;
+- definition-only source + a different context: preserve definition, acknowledge
+  missing methods, no invented implementation-specific scene;
+- two sources with definition and conditions split across IDs: each technical claim
+  must cite its supporting source, not simply cite ID 1 throughout;
+- terminology without a definition: short correct glossary paraphrase permitted,
+  extra algorithm/policy/guarantee forbidden;
+- unrelated source: explain the lack of relevant evidence; no fabricated scene.
+These probes require their own reviewed inputs before live execution and are not
+included in the 18-response denominator. Unit fixtures exercise routing/request
+boundaries only, not semantic model performance. Add WDEV analogues when improving
+the prompt; never tune against inspected sealed-final failures or overwrite that set.

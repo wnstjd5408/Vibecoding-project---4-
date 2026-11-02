@@ -365,3 +365,36 @@ def test_directory_lock_also_blocks_alternate_approval_initialization(cases, tmp
                    approval_id='alternate', run_id='alternate', budget='2.00', mode='mock')
     assert not alternate.exists()
     assert lock.exists()
+
+
+def test_structured_output_request_matches_sdk(cases):
+    import botocore.session
+    from botocore.validate import validate_parameters
+    from evals.wiki_live import OUTPUT_SCHEMA
+    request = make_plan(cases)["requests"]["WDEV01:U"]
+    shape = botocore.session.get_session().get_service_model("bedrock-runtime").operation_model("Converse").input_shape
+    validate_parameters(request, shape)
+    config = request["outputConfig"]["textFormat"]
+    assert config["type"] == "json_schema"
+    assert json.loads(config["structure"]["jsonSchema"]["schema"]) == OUTPUT_SCHEMA
+    assert request["additionalModelRequestFields"]["text"]["format"]["strict"] is True
+    assert OUTPUT_SCHEMA["additionalProperties"] is False
+
+
+def test_empty_evidence_blocks_before_provider(cases):
+    for c in cases:
+        c["internal_evidence"] = []
+        c["evidence"] = []
+    with pytest.raises(DatasetError, match="public_evidence_required"):
+        make_plan(cases)
+
+
+def test_partial_evidence_is_not_repaired_with_rubric(cases):
+    cases[0]["original"] = "A learner asks about retries."
+    cases[0]["internal_evidence"] = []
+    cases[0]["evidence"] = [{"id": "partial", "kind": "web", "text": "Retry repeats a failed operation.", "public": True, "revision": 1, "url": "https://example.org/retry"}]
+    request = make_plan(cases)["requests"]["WDEV01:U"]
+    payload = json.loads(request["messages"][-1]["content"][0]["text"])
+    assert payload["context"] != payload["sources"]["1"]
+    assert payload["sources"] == {"1": "Retry repeats a failed operation."}
+    assert "required condition" not in json.dumps(payload)
