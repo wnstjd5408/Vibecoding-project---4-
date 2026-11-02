@@ -9,6 +9,7 @@ import { BottomSheet } from '../components/BottomSheet.tsx'
 import { Button } from '../components/Button.tsx'
 import { StateMessage } from '../components/StateMessage.tsx'
 import { NoteBody } from '../notes/NoteBody.tsx'
+import { currentSession } from '../auth/sessionGeneration.ts'
 import { classifyExplainError, requestExplanation, retryAvailableAt } from './explain.ts'
 import type { ExplainFailure, ExplainTarget } from './explain.ts'
 import styles from './AiExplainSheet.module.css'
@@ -119,7 +120,9 @@ function AiExplainContent({ target, onBadge, onLoginRequired, onReloadNote }: Pi
   }, [waitingUntil])
 
   useEffect(() => {
-    requestExplanation(target).then(
+    // 요청을 시작한 시점의 세션 번호로 요청과 대기 조회를 모두 한다(오류가 도착한 시점에 다시 읽지 않는다).
+    const session = currentSession()
+    requestExplanation(target, session).then(
       (data) => {
         if (!alive.current) return
         callbacks.current.onBadge(data.source === 'glossary'
@@ -131,7 +134,7 @@ function AiExplainContent({ target, onBadge, onLoginRequired, onReloadNote }: Pi
         if (!alive.current) return
         // 401 login_required는 로그인 안내가 맡는다(로그인 사용자의 세션 만료). 그 밖의 오류는 아래의 오류별 안내다.
         if (callbacks.current.onLoginRequired(error)) return
-        const until = retryAvailableAt(target)
+        const until = retryAvailableAt(target, session)
         setWaitingUntil(until)
         setResult({ key: attempt, failure: isApiError(error) ? classifyExplainError(error) : 'failed', until, seconds: until === null ? 0 : Math.ceil((until - Date.now()) / 1000) })
       },
