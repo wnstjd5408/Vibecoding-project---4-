@@ -18,6 +18,8 @@ import pytest
 CONTAINER = os.environ.get("GLOSSARY_SQL_TEST_CONTAINER")
 pytestmark = pytest.mark.skipif(not CONTAINER, reason="dedicated local PostgreSQL container not selected")
 BUCKET = "glossary-images"
+# run_sessions가 쓰는 데이터베이스 이름. 각 시험이 시작할 때 넣는다.
+DATABASE_FOR_SESSIONS: list[str] = []
 
 
 def run_sql(database, query, *, expect_ok=True):
@@ -69,7 +71,7 @@ def db(database):
     sql(database, """
       delete from public.ai_explanations; delete from public.quiz_sets; delete from public.storage_delete_jobs;
       delete from public.term_views; delete from public.favorites; delete from public.favorite_events;
-      delete from public.terms; delete from public.profiles; delete from auth.users;
+      delete from public.terms; delete from public.notes where title = 'meg81 race note'; delete from public.profiles; delete from auth.users;
     """)
     return database
 
@@ -269,6 +271,87 @@ def test_add_image_fails_and_rolls_back_when_the_upload_job_is_gone_or_mismatche
     assert sql(db, f"select status from public.storage_delete_jobs where id = {pending};") == "pending"
 
 
+def open_psql(database):
+    return subprocess.Popen(["docker", "exec", "-i", CONTAINER, "psql", "-U", "postgres", "-d", database,
+                             "-v", "ON_ERROR_STOP=1", "-qAt"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, encoding="utf-8")
+
+
+def run_sessions(first_sql, second_sql, delay=1.0):
+    """첫 세션을 먼저 시작하고 delay초 뒤 둘째 세션을 시작한다. 각 세션의 (종료 코드, 출력, 오류)를 돌려준다."""
+    first, second = open_psql(DATABASE_FOR_SESSIONS[0]), open_psql(DATABASE_FOR_SESSIONS[0])
+    first.stdin.write(first_sql)
+    first.stdin.close()
+    time.sleep(delay)
+    second.stdin.write(second_sql)
+    second.stdin.close()
+    return [(proc.wait(timeout=60), proc.stdout.read(), proc.stderr.read()) for proc in (first, second)]
+
+
+def new_published_note(database):
+    row = sql(database, "insert into public.notes (title, is_published) values ('meg81 race note', true) returning id || ',' || revision;")
+    note_id, revision = row.split(",")
+    return int(note_id), int(revision)
+
+
+def store_call(note, key, label):
+    note_id, revision = note
+    return (f"select out_outcome from public.ai_store_explanation({note_id}, {revision}, '{key}', '{label}', "
+            f"'{'h' * 64}', 'synthetic ai body', 'test-model', 'v1');")
+
+
+# --- 리뷰 지적(2026-11-02 P2): 사전 등록(E20)과 AI 설명 저장(E09)이 겹쳐도 AI 설명이 무효화를 피하지 못한다 ---
+
+
+def test_ai_store_waits_for_an_uncommitted_dictionary_registration_and_stores_nothing(db):
+    """E20이 커밋 전일 때 E09가 오면, E09는 E20이 끝나길 기다린 뒤 사전 용어임을 보고 저장하지 않는다."""
+    operator = new_user(db)
+    note = new_published_note(db)
+    sql(db, "insert into public.terms (key, label, source) values ('racea', 'RaceA', 'ai');")
+    DATABASE_FOR_SESSIONS[:] = [db]
+    e20, e09 = run_sessions(
+        f"""set role service_role; begin;
+            select public.glossary_upsert_entry('racea', 'RaceA', 'dictionary', '{operator}');
+            select pg_sleep(2.5); commit;""",
+        "set role service_role; " + store_call(note, "racea", "RaceA"),
+    )
+    assert e20[0] == 0 and e09[0] == 0, (e20, e09)
+    assert e09[1].strip() == "glossary", e09
+    assert sql(db, "select count(*) from public.ai_explanations where term_key_snapshot = 'racea' and invalidated_at is null;") == "0"
+    assert sql(db, "select source from public.terms where key = 'racea';") == "glossary"
+
+
+def test_dictionary_registration_waits_for_an_uncommitted_ai_store_and_invalidates_it(db):
+    """E09가 커밋 전일 때 E20이 오면, E20은 E09가 끝나길 기다린 뒤 방금 저장된 설명까지 무효화한다."""
+    operator = new_user(db)
+    note = new_published_note(db)
+    sql(db, "insert into public.terms (key, label, source) values ('raceb', 'RaceB', 'ai');")
+    DATABASE_FOR_SESSIONS[:] = [db]
+    e09, e20 = run_sessions(
+        "set role service_role; begin; " + store_call(note, "raceb", "RaceB") + " select pg_sleep(2.5); commit;",
+        f"set role service_role; select public.glossary_upsert_entry('raceb', 'RaceB', 'dictionary', '{operator}');",
+    )
+    assert e09[0] == 0 and e20[0] == 0, (e09, e20)
+    assert e09[1].split()[0] == "stored", e09
+    assert sql(db, "select count(*) from public.ai_explanations where term_key_snapshot = 'raceb' and invalidated_at is null;") == "0"
+    assert sql(db, "select count(*) from public.ai_explanations where term_key_snapshot = 'raceb';") == "1"
+    assert sql(db, "select source from public.terms where key = 'raceb';") == "glossary"
+
+
+def test_new_term_created_by_ai_store_and_dictionary_registration_at_once_ends_without_a_valid_ai_explanation(db):
+    """용어 행이 아직 없을 때 두 쪽이 동시에 만들려 해도, 사전 용어에 유효한 AI 설명이 남지 않는다."""
+    operator = new_user(db)
+    note = new_published_note(db)
+    DATABASE_FOR_SESSIONS[:] = [db]
+    e09, e20 = run_sessions(
+        "set role service_role; begin; " + store_call(note, "racec", "RaceC") + " select pg_sleep(2.5); commit;",
+        f"set role service_role; select public.glossary_upsert_entry('racec', 'RaceC', 'dictionary', '{operator}');",
+    )
+    assert e09[0] == 0 and e20[0] == 0, (e09, e20)
+    assert sql(db, "select count(*) from public.ai_explanations where term_key_snapshot = 'racec' and invalidated_at is null;") == "0"
+    assert sql(db, "select source from public.terms where key = 'racec';") == "glossary"
+
+
 def test_delete_entry_takes_locks_in_the_same_order_as_upsert(db):
     """E20은 terms → glossary_entries 순서로 잠근다. E21이 반대로 잡으면 서로를 기다린다(교착).
 
@@ -277,13 +360,8 @@ def test_delete_entry_takes_locks_in_the_same_order_as_upsert(db):
     """
     term_id = upsert(db, "ordering", "Ordering", "", new_user(db))["id"]
 
-    def psql_process(query):
-        return subprocess.Popen(["docker", "exec", "-i", CONTAINER, "psql", "-U", "postgres", "-d", db,
-                                 "-v", "ON_ERROR_STOP=1", "-qAt"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, encoding="utf-8")
-
-    holder = psql_process(None)
-    deleter = psql_process(None)
+    holder = open_psql(db)
+    deleter = open_psql(db)
     holder.stdin.write(f"""begin;
       update public.terms set label = label where id = {term_id};
       select pg_sleep(2.5);
