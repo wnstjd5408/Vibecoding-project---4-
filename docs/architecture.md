@@ -154,6 +154,8 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 
 **멱등성:** E09는 클라이언트가 사용자 동작마다 보내는 `Idempotency-Key`(UUID)를 쓴다. 같은 키의 재요청은 새 예약을 만들지 않는다. 퀴즈 세트는 DB 고유 제약이 중복 생성을 막는다. (결정, 2026-10-23)
 
+**E09 구현(MEG-87):** `POST /api/ai/explanations`는 `backend/app/ai_explain.py`가 API spec 5.5절 순서대로 처리한다. 사전과 공유 캐시(유효한 `ai_explanations`)를 먼저 읽고, 없을 때만 `run_ai_call`로 부른다. 선택 범위는 노트 본문의 유니코드 코드포인트 위치이고, 용어(80자)와 문장(500자)은 서버가 저장된 본문에서 자른다. 원장 키는 `{user_id}:{Idempotency-Key}:{attempt_no}`다. 같은 키의 재전송은 끝난 공유 설명이면 캐시로 같은 결과를 주고, 1회용 설명이나 AI 실패면 409 `result_unavailable`, `reserved`가 10분 안이면 409 `in_progress`(`Retry-After` 60초)다. 결과 저장(용어 삽입과 설명 삽입, 노트가 아직 공개이고 revision이 같은지 다시 확인)은 SQL 함수 `ai_store_explanation`이 한 트랜잭션으로 한다. 사용자별 분당 요청 제한(`AI_EXPLAIN`, 10회/60초)은 사전·캐시 응답도 센다. 연결·인증 실패는 `released`라 원장 한도에 안 잡히므로 이 제한이 호출 폭주를 막는다(MEG-145). 숫자는 제안값이다.
+
 **공유 캐시**
 
 - 같은 용어의 AI 설명은 저장해 모든 사용자가 다시 쓴다. 캐시 응답은 AI를 부르지 않고 한도에도 세지 않는다.

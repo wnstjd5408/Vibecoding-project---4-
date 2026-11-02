@@ -396,6 +396,65 @@ class SupabaseClient:
             return False
         raise SupabaseConfigError(f"term_views insert status {response.status_code}")
 
+    def get_note_for_explain(self, note_id: int, include_unpublished: bool) -> dict[str, Any] | None:
+        """E09가 읽는 노트의 열(id, revision, is_published, body_markdown). 없거나 볼 수 없으면 None이다.
+
+        include_unpublished가 False면 공개 노트만 DB에서 거른다(비공개 노트는 없는 노트와 같다). 이미지·과목 행은
+        읽지 않는다.
+        """
+        params = {
+            "id": f"eq.{int(note_id)}",
+            "select": "id,revision,is_published,body_markdown",
+            "limit": "1",
+        }
+        if not include_unpublished:
+            params["is_published"] = "eq.true"
+        rows = self._select("notes", params)
+        return rows[0] if rows else None
+
+    def find_term_for_explain(self, key: str, user_id: str) -> dict[str, Any] | None:
+        """E09 5.5절 7·8단계를 한 번에 읽는다: key가 같은 용어와 그 사전 설명·이미지, 유효한 AI 설명, 내 즐겨찾기.
+
+        glossary_entries는 사전 용어일 때만 객체이고 아니면 null이다. ai_explanations는 무효화되지 않은 행만
+        배열로 온다(용어당 하나). favorites는 세션 사용자의 행만 온다. 용어가 없으면 None이다.
+        """
+        select = (
+            "id,key,label,source,glossary_entries(body_markdown),glossary_images(id,storage_path,alt),"
+            "ai_explanations(id,body,review_status),favorites(term_id)"
+        )
+        params = {
+            "key": f"eq.{key}",
+            "select": select,
+            "glossary_images.order": "id.asc",
+            "ai_explanations.invalidated_at": "is.null",
+            "favorites.user_id": f"eq.{uuid.UUID(user_id)}",
+            "limit": "1",
+        }
+        rows = self._select("terms", params)
+        return rows[0] if rows else None
+
+    def list_ledger_rows(self, user_id: str, request_key: str) -> list[dict[str, Any]]:
+        """한 요청({request_key}:{attempt_no})의 원장 행(status, attempt_no, created_at). E09의 멱등 키 확인에 쓴다.
+
+        request_key는 서버가 UUID 두 개로 만든 값이라 like 패턴의 특수 문자가 들어 있지 않다. user_id로도 거른다
+        (남의 행을 보지 않는다).
+        """
+        return self._select(
+            "ai_usage_ledger",
+            {
+                "user_id": f"eq.{uuid.UUID(user_id)}",
+                "idempotency_key": f"like.{request_key}:*",
+                "select": "status,attempt_no,created_at",
+                "order": "attempt_no.asc",
+            },
+        )
+
+    def store_ai_explanation(self, **arguments: Any) -> dict[str, Any]:
+        """ai_store_explanation 함수를 부른다(5.5절 11~12단계). 결과 한 행을 out_ 접두사 없이 돌려준다."""
+        rows = self.rpc("ai_store_explanation", {f"p_{name}": value for name, value in arguments.items()})
+        row = rows[0] if isinstance(rows, list) else rows
+        return {name.removeprefix("out_"): value for name, value in row.items()}
+
     def glossary_image_url(self, storage_path: str) -> str:
         """사전 이미지 공개 버킷의 주소(기술 검토 Q7 결정 (a), 2026-11-02). 발급 요청 없이 만든다.
 

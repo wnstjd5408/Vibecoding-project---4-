@@ -35,6 +35,9 @@ SIGNED_URL = RateRule("signed_url", 60, 60)
 LOGIN_FAILURE = RateRule("login_failure", 5, 15 * 60, releasable=True)
 LOGIN_IP = RateRule("login_ip", 30, 15 * 60)
 WRITE = RateRule("write", 30, 60)
+# E09 AI 설명(MEG-87 AC-4). 한 요청이 Bedrock을 최대 두 번 부르고, 연결·인증 실패는 원장 한도에 안 잡히므로
+# 사용자별 분당 요청 수를 따로 막는다. 숫자는 제안값이다(spec 1.8 "숫자는 모두 임시").
+AI_EXPLAIN = RateRule("ai_explain", 10, 60)
 
 
 @dataclass(frozen=True)

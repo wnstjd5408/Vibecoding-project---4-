@@ -640,3 +640,72 @@ def test_from_env_reads_the_glossary_image_bucket(monkeypatch):
 
     monkeypatch.delenv("GLOSSARY_IMAGE_BUCKET")
     assert SupabaseClient.from_env()._glossary_image_bucket is None
+
+
+# --- E09(MEG-87)가 쓰는 조회·저장 ---
+
+
+def test_note_for_explain_reads_only_the_four_columns_and_filters_private_notes_in_the_db():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, dict(request.url.params)))
+        return httpx.Response(200, json=[{"id": 11, "revision": 3, "is_published": True, "body_markdown": "본문"}])
+
+    client = client_with(handler)
+    assert client.get_note_for_explain(11, include_unpublished=False)["revision"] == 3
+    client.get_note_for_explain(11, include_unpublished=True)
+
+    columns = "id,revision,is_published,body_markdown"
+    assert seen[0] == ("/rest/v1/notes", {"id": "eq.11", "select": columns, "limit": "1", "is_published": "eq.true"})
+    assert seen[1] == ("/rest/v1/notes", {"id": "eq.11", "select": columns, "limit": "1"})
+    assert client_with(lambda r: httpx.Response(200, json=[])).get_note_for_explain(99, True) is None
+
+
+def test_term_for_explain_filters_embedded_explanations_and_favorites_to_active_and_mine():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json=[{"id": 9, "key": "k"}])
+
+    assert client_with(handler).find_term_for_explain("k", USER_ID) == {"id": 9, "key": "k"}
+    params = seen["params"]
+    assert params["key"] == "eq.k" and params["limit"] == "1"
+    assert params["ai_explanations.invalidated_at"] == "is.null"
+    assert params["favorites.user_id"] == f"eq.{USER_ID}"
+    assert params["glossary_images.order"] == "id.asc"
+    for embedded in ("glossary_entries(body_markdown)", "ai_explanations(id,body,review_status)", "favorites(term_id)"):
+        assert embedded in params["select"]
+    assert client_with(lambda r: httpx.Response(200, json=[])).find_term_for_explain("k", USER_ID) is None
+
+
+def test_ledger_rows_are_looked_up_by_request_key_prefix_for_the_session_user_only():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"], seen["params"] = request.url.path, dict(request.url.params)
+        return httpx.Response(200, json=[{"status": "settled", "attempt_no": 1, "created_at": "2026-11-02T05:00:00+00:00"}])
+
+    key = f"{USER_ID}:3f2b8c1e-0000-4000-8000-000000000001"
+    rows = client_with(handler).list_ledger_rows(USER_ID, key)
+
+    assert rows[0]["status"] == "settled"
+    assert seen["path"] == "/rest/v1/ai_usage_ledger"
+    assert seen["params"]["idempotency_key"] == f"like.{key}:*"
+    assert seen["params"]["user_id"] == f"eq.{USER_ID}"
+
+
+def test_store_ai_explanation_sends_p_arguments_and_strips_the_out_prefix():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"], seen["json"] = request.url.path, request.read()
+        return httpx.Response(200, json=[{"out_outcome": "stored", "out_term_id": 5, "out_explanation_id": 8,
+                                          "out_body": "설명", "out_review_status": "pending"}])
+
+    result = client_with(handler).store_ai_explanation(note_id=1, note_revision=2, term_key="k", body="설명")
+
+    assert result == {"outcome": "stored", "term_id": 5, "explanation_id": 8, "body": "설명", "review_status": "pending"}
+    assert seen["path"] == "/rest/v1/rpc/ai_store_explanation"
+    assert b'"p_note_id":1' in seen["json"] and b'"p_term_key":"k"' in seen["json"]

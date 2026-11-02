@@ -476,3 +476,121 @@ def test_budget_shortfall_through_the_python_layer_makes_no_ai_call(clean, local
 
     assert bedrock.calls == 0
     assert sql(clean, "select count(*) from public.ai_usage_ledger;") == "1"
+
+
+# --- MEG-87: E09 설명 저장 함수 ai_store_explanation ---
+
+
+@pytest.fixture
+def fresh(clean):
+    """용어·설명·E09 시험 노트까지 비운다. clean은 원장과 퀴즈만 비운다."""
+    sql(clean, "delete from public.ai_explanations; delete from public.glossary_entries; delete from public.terms;"
+               " delete from public.notes where title = 'meg87 note';")
+    return clean
+
+
+
+def new_note(database, *, published=True, body="합성 본문"):
+    """공개 여부를 정해 노트를 하나 넣고 (id, revision)을 돌려준다."""
+    row = sql(database, f"""insert into public.notes (title, body_markdown, is_published)
+                            values ('meg87 note', '{body}', {str(published).lower()}) returning id || ',' || revision;""")
+    note_id, revision = row.splitlines()[0].split(",")
+    return int(note_id), int(revision)
+
+
+def store(database, note, key="unknownword", body="합성 AI 설명", label="UnknownWord"):
+    note_id, revision = note
+    client = PsqlSupabase(database)
+    rows = client.rpc("ai_store_explanation", {
+        "p_note_id": note_id, "p_note_revision": revision, "p_term_key": key, "p_term_label": label,
+        "p_sentence_hash": "h" * 64, "p_body": body, "p_model": "global.example-model", "p_prompt_version": "explain-v1"})
+    return {name.removeprefix("out_"): value for name, value in rows[0].items()}
+
+
+def explanation_rows(database, key):
+    return sql(database, f"""select coalesce(string_agg(e.body || ':' || (e.invalidated_at is not null)::text, '|' order by e.id), '')
+                             from public.ai_explanations e where e.term_key_snapshot = '{key}';""")
+
+
+def test_store_creates_the_ai_term_and_a_pending_explanation_then_replays_the_saved_one(fresh):
+    note = new_note(fresh)
+
+    first = store(fresh, note)
+    second = store(fresh, note, body="다른 설명")
+
+    assert first["outcome"] == "stored" and first["review_status"] == "pending" and first["body"] == "합성 AI 설명"
+    assert second["outcome"] == "existing"
+    assert (second["term_id"], second["explanation_id"], second["body"]) == (first["term_id"], first["explanation_id"], "합성 AI 설명")
+    assert sql(fresh, "select source || ':' || label from public.terms where key = 'unknownword';") == "ai:UnknownWord"
+    assert sql(fresh, "select count(*) from public.terms where key = 'unknownword';") == "1"
+    assert explanation_rows(fresh, "unknownword") == "합성 AI 설명:false"
+    saved = sql(fresh, f"""select note_id || ',' || note_revision || ',' || prompt_version || ',' || model
+                           from public.ai_explanations where id = {first['explanation_id']};""")
+    assert saved == f"{note[0]},{note[1]},explain-v1,global.example-model"
+
+
+@pytest.mark.parametrize("case", ["private", "revision_changed", "missing"])
+def test_store_returns_one_off_and_writes_nothing_when_the_note_is_no_longer_shareable(fresh, case):
+    if case == "private":
+        note = new_note(fresh, published=False)
+    elif case == "revision_changed":
+        note = new_note(fresh)
+        sql(fresh, f"update public.notes set body_markdown = '수정된 본문' where id = {note[0]};")
+    else:
+        note = (987654, 1)
+
+    result = store(fresh, note)
+
+    assert result["outcome"] == "one_off" and result["explanation_id"] is None and result["term_id"] is None
+    assert sql(fresh, "select count(*) from public.terms;") == "0"
+    assert sql(fresh, "select count(*) from public.ai_explanations;") == "0"
+
+
+def test_store_never_overrides_the_glossary(fresh):
+    note = new_note(fresh)
+    sql(fresh, """with t as (insert into public.terms (key, label, source) values ('unknownword', 'UnknownWord', 'glossary') returning id)
+                  insert into public.glossary_entries (term_id, body_markdown) select id, '사전 설명' from t;""")
+
+    result = store(fresh, note)
+
+    assert result["outcome"] == "glossary" and result["explanation_id"] is None
+    assert sql(fresh, "select count(*) from public.ai_explanations;") == "0"
+
+
+def test_store_after_an_invalidated_explanation_creates_a_new_active_one(fresh):
+    note = new_note(fresh)
+    first = store(fresh, note)
+    sql(fresh, f"select public.ai_invalidate_explanations(null, {first['term_id']}, null);")
+
+    second = store(fresh, note, body="새 설명")
+
+    assert second["outcome"] == "stored" and second["term_id"] == first["term_id"]
+    assert explanation_rows(fresh, "unknownword") == "합성 AI 설명:true|새 설명:false"
+
+
+def test_store_rejects_malformed_arguments(fresh):
+    note = new_note(fresh)
+    for kwargs in ({"body": "   "}, {"key": ""}, {"label": "x" * 201}):
+        with pytest.raises(AssertionError) as error:
+            store(fresh, note, **kwargs)
+        assert "invalid ai explanation arguments" in str(error.value) or "violates check" in str(error.value)
+
+
+def test_concurrent_stores_of_the_same_new_term_leave_one_active_explanation(fresh):
+    note = new_note(fresh)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda number: store(fresh, note, body=f"설명 {number}"), range(4)))
+
+    outcomes = sorted(result["outcome"] for result in results)
+    assert outcomes == ["existing", "existing", "existing", "stored"]
+    assert len({result["explanation_id"] for result in results}) == 1
+    assert sql(fresh, "select count(*) from public.ai_explanations where invalidated_at is null;") == "1"
+    assert sql(fresh, "select count(*) from public.terms where key = 'unknownword';") == "1"
+
+
+def test_store_is_not_executable_by_anon_or_authenticated_roles(fresh):
+    for role in ("anon", "authenticated"):
+        error = sql_error(fresh, f"""set role {role};
+            select * from public.ai_store_explanation(1, 1, 'k', 'k', 'h', 'b', 'm', 'v');""")
+        assert "permission denied" in error

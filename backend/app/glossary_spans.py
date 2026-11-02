@@ -63,6 +63,16 @@ def normalize_key(text: str) -> str:
     return _ascii_lower(_SPACES.sub(" ", unicodedata.normalize("NFC", text)).strip())
 
 
+def unescape_markdown(text: str) -> str:
+    """가져오기 스크립트가 붙인 마크다운 백슬래시 이스케이프를 푼다(E09가 선택한 용어·문장을 AI에 넘길 때 쓴다)."""
+    return _ESCAPE.sub(r"\1", text)
+
+
+def strip_hidden(text: str) -> str:
+    """note-image: 토큰과 URL을 지운다. 용어 매칭에서 건너뛰는 것과 같은 구간이고, AI 입력에서도 뺀다(5.6)."""
+    return _HIDDEN.sub("", text)
+
+
 def _composing_starters() -> frozenset[str]:
     """결합 등급이 0인데 NFC가 앞 글자와 합칠 수 있는 글자(한글 중성·종성 자모, 일부 인도계 모음 기호 등).
 
