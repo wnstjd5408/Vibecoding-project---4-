@@ -63,6 +63,56 @@ def normalize_key(text: str) -> str:
     return _ascii_lower(_SPACES.sub(" ", unicodedata.normalize("NFC", text)).strip())
 
 
+def unescape_markdown(text: str) -> str:
+    """가져오기 스크립트가 붙인 마크다운 백슬래시 이스케이프를 푼다(E09가 선택한 용어·문장을 AI에 넘길 때 쓴다)."""
+    return _ESCAPE.sub(r"\1", text)
+
+
+def strip_hidden(text: str) -> str:
+    """note-image: 토큰과 URL을 지운다. 용어 매칭에서 건너뛰는 것과 같은 구간이고, AI 입력에서도 뺀다(5.6)."""
+    return _HIDDEN.sub("", text)
+
+
+_ESCAPABLE = re.compile(r"[!-/:-@\[-`{-~]")
+
+
+def code_mask(text: str) -> bytearray:
+    """코드 블록·인라인 코드 위치(1). visible_text가 코드 안의 백슬래시를 지키는 데 쓴다."""
+    return _code_mask(text)
+
+
+def visible_text(text: str, low: int, high: int, mask: bytearray, hidden: list[tuple[int, int]]) -> str:
+    """text[low:high]에서 AI에 보낼 글을 만든다: 숨김 구간(note-image: 토큰·URL)을 지우고, 코드 밖의 마크다운
+    백슬래시 이스케이프만 푼다. 코드 안의 백슬래시는 실제 글자라 그대로 둔다(`a\\+b`와 a\\+b는 다른 글이다).
+
+    low·high는 text 안의 위치이고 mask는 code_mask(text), hidden은 hidden_ranges(text)다. 이스케이프는 왼쪽부터
+    짝을 지어 풀므로 `\\\\`도 백슬래시 하나로 풀린다.
+    """
+    out: list[str] = []
+    ranges = iter(hidden)
+    current = next(ranges, None)
+    index = low
+    while index < high:
+        while current is not None and current[1] <= index:
+            current = next(ranges, None)
+        if current is not None and current[0] <= index:
+            index = min(current[1], high)
+            continue
+        char = text[index]
+        if char == "\\" and not mask[index] and index + 1 < high and _ESCAPABLE.fullmatch(text[index + 1]):
+            out.append(text[index + 1])
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def hidden_ranges(text: str) -> list[tuple[int, int]]:
+    """note-image: 토큰과 URL이 차지하는 [시작, 끝) 위치. 선택 범위가 이 안에 걸치는지 E09가 확인한다."""
+    return [(match.start(), match.end()) for match in _HIDDEN.finditer(text)]
+
+
 def _composing_starters() -> frozenset[str]:
     """결합 등급이 0인데 NFC가 앞 글자와 합칠 수 있는 글자(한글 중성·종성 자모, 일부 인도계 모음 기호 등).
 

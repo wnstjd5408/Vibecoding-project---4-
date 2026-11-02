@@ -18,9 +18,14 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", fail)
 
 
+def make_config(run_id="run-1", **kw):
+    """Fixture values are explicit: RunConfig itself has no default budget or prices."""
+    return RunConfig(run_id, **{"budget": "1", "input_price": "1", "output_price": "1", **kw})
+
+
 def setup():
     cases = full_set()
-    return cases, freeze_dataset(cases, "reviewer"), RunConfig("run-1")
+    return cases, freeze_dataset(cases, "reviewer"), make_config()
 
 
 def test_prompt_allowlist():
@@ -116,3 +121,48 @@ def test_resume_after_durable_completed_slot(tmp_path, monkeypatch):
     result = run(cases, manifest, config, tmp_path, transport=fake)
     assert fake.calls == 120
     assert all(row["status"] == "ok" for row in result["slots"].values())
+
+
+@pytest.mark.parametrize("omit", [("budget",), ("input_price",), ("output_price",),
+                                  ("budget", "input_price", "output_price")])
+def test_omitted_budget_or_prices_rejected_before_any_call(tmp_path, omit):
+    cases, manifest, _ = setup()
+    fields = {"budget": "1", "input_price": "1", "output_price": "1"}
+    config = RunConfig("missing-budget-and-prices", **{k: v for k, v in fields.items() if k not in omit})
+    fake = FakeTransport()
+    with pytest.raises(DatasetError, match="budget_or_price_required"):
+        run(cases, manifest, config, tmp_path, transport=fake)
+    with pytest.raises(DatasetError, match="budget_or_price_required"):
+        run(cases, manifest, config, tmp_path, dry_run=True)
+    assert fake.calls == 0 and not (tmp_path / "state.json").exists()
+
+
+def test_non_string_budget_or_price_rejected(tmp_path):
+    cases, manifest, config = setup()
+    for change in ({"budget": 1}, {"input_price": None}, {"output_price": 1.5}):
+        with pytest.raises(DatasetError, match="budget_or_price_required"):
+            run(cases, manifest, replace(config, **change), tmp_path, dry_run=True)
+
+
+def test_known_over_limit_usage_is_preserved_and_stops_run(tmp_path):
+    cases, manifest, _ = setup()
+    config = make_config("over-output", max_output=4)
+    fake = FakeTransport()
+    state = run(cases, manifest, config, tmp_path, transport=fake)
+    row = state["slots"]["C20:1"]
+    assert (row["status"], row["error_code"]) == ("error", "token_limit_exceeded")
+    assert (row["input_tokens"], row["output_tokens"]) == (10, 5)
+    assert row["cost"] == "0.000015" and row["text"] == "Synthetic explanation"
+    assert fake.calls == 1
+    assert sum(1 for v in state["slots"].values() if v["status"] == "pending") == 119
+    with pytest.raises(DatasetError, match="limit_exceeded_manual_recovery"):
+        run(cases, manifest, config, tmp_path, transport=fake)
+    assert fake.calls == 1
+
+
+def test_malformed_usage_is_still_unknown_not_a_limit_failure(tmp_path):
+    cases, manifest, config = setup()
+    state = run(cases, manifest, config, tmp_path, transport=FakeTransport({"C20:1": "unknown"}))
+    row = state["slots"]["C20:1"]
+    assert (row["status"], row["error_code"]) == ("unknown", "usage_or_transport_unknown")
+    assert "cost" not in row
