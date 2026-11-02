@@ -39,6 +39,8 @@ const ACCOUNTS = {
 
 // E06 예시 2의 용어 7을 즐겨찾기했는지. 가짜 응답이 흉내 낸다.
 let favoriteTerm7 = false
+// E10 가짜 응답이 같은 대상의 재신고(200)를 흉내 내려고 기억하는 신고 대상. 새로 고치면 비워진다.
+const reportedTargets = new Set<string>()
 
 const SUBJECTS = [
   { id: 1, name: '네트워크', note_count: 2 },
@@ -264,6 +266,22 @@ const routes: Route[] = [
           ],
         },
       }
+    },
+  },
+  // E10 신고. 방문자는 401 login_required다. 로그인한 사용자는 AI 설명 31·퀴즈 문항 41·42만 신고할 수 있고(그 밖은 404),
+  // 같은 대상을 다시 신고하면 200으로 기존 신고를 돌려준다(예시 7).
+  {
+    method: 'POST',
+    pattern: /^\/api\/reports$/,
+    handle: ({ body }) => {
+      if (getMockSession() === 'visitor') return loginRequired()
+      const { target } = (body ?? {}) as { target?: { type?: string; id?: number } }
+      const known = (target?.type === 'ai_explanation' && target.id === 31) || (target?.type === 'quiz_item' && (target.id === 41 || target.id === 42))
+      if (!known) return notFound()
+      const key = `${target.type}:${target.id}`
+      const again = reportedTargets.has(key)
+      reportedTargets.add(key)
+      return { status: again ? 200 : 201, body: { id: 5, status: 'open' } }
     },
   },
   // E08 즐겨찾기. 방문자는 항상 401 login_required다.

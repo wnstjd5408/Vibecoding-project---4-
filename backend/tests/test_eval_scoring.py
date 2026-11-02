@@ -7,6 +7,8 @@ from evals.dataset import _digest, freeze_dataset
 from evals.scoring import score, templates
 from evals.schema import DatasetError
 from test_eval_dataset import full_set
+from test_eval_runner import make_config, no_network
+from evals.runner import run
 
 
 def fixture():
@@ -114,6 +116,27 @@ def test_independent_review_required_and_seed_reproducible():
 def test_blank_template_never_passes():
     c, s, r = fixture()
     assert score(c, s, templates(c, s))["golden_status"] == "INCOMPLETE"
+
+
+def test_runner_state_with_explicit_prices_can_be_scored(tmp_path, no_network):
+    cases = full_set()
+    state = run(cases, freeze_dataset(cases, "fixture"), make_config(), tmp_path)
+    reviews = templates(cases, state)
+    result = score(cases, state, reviews)
+    assert len(reviews) == result["expected_count"] == 120
+    assert result["golden_status"] == "INCOMPLETE"
+    assert result["product_status"] == "INCOMPLETE"
+
+
+def test_runner_token_limit_failure_remains_failed_in_score(tmp_path, no_network):
+    cases = full_set()
+    state = run(cases, freeze_dataset(cases, "fixture"),
+                make_config(max_output=4), tmp_path)
+    result = score(cases, state, templates(cases, state))
+    assert result["rows"]["C20:1"]["verdict"] == "X"
+    assert result["rows"]["C20:1"]["score"] == 0
+    assert result["golden_status"] == "FAIL"
+    assert result["product_status"] == "INCOMPLETE"
 
 
 def test_execution_failure_stays_in_rubric_denominator():
