@@ -1,0 +1,27 @@
+/* 전역 기본 스타일. 토큰(tokens.css)을 바탕으로 페이지 바탕·글꼴·포커스 링을 정한다. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--surface-100);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 26px;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+/* 모든 조작 요소의 포커스 링은 2px ink다(목업 구현 메모). */
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}

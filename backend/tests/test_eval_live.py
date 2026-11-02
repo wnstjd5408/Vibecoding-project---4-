@@ -25,7 +25,8 @@ def setup(monkeypatch, counter=True):
         monkeypatch.setattr(live, "input_bound", lambda request: 100)
     cases = full_set()
     return cases, freeze_dataset(cases, "reviewer"), RunConfig(
-        "calibration", split="dev", repetitions=1, max_calls=3, model_id=live.MODEL)
+        "calibration", split="dev", repetitions=1, max_calls=3, model_id=live.MODEL,
+        budget="1", input_price="1", output_price="1")
 
 
 def response(**changes):

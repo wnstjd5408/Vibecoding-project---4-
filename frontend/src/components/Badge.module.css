@@ -1,0 +1,21 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 var(--space-3);
+  border: 1px solid currentcolor;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+}
+
+/* AI가 만든 내용 표시. 연필은 이 배지와 점선 상자에만 쓴다 */
+.ai {
+  color: var(--pencil);
+}
+
+/* 사전 설명 표시 */
+.dictionary {
+  color: var(--ink-muted);
+}

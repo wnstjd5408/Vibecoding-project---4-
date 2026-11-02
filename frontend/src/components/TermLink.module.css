@@ -1,0 +1,36 @@
+/* 사전 용어. 형광 칠은 중복 신호이고 2px ink 밑줄이 주 신호다(칠 하나만으로 구분하지 않는다) */
+.term {
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--highlight);
+  box-shadow: 0 0 0 2px var(--highlight);
+  color: var(--ink);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-decoration-color: var(--ink);
+  text-underline-offset: 3px;
+  /* 여러 줄로 나뉘어도 줄마다 칠과 둥근 모서리가 따로 적용된다 */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.interactive {
+  position: relative;
+  cursor: pointer;
+}
+
+/* 누르는 영역: 줄 높이 26px에 위아래 8px를 더해 42px로 한다. 글자 상자는 19px라 위아래 11.5px씩 늘린다 */
+.interactive::after {
+  content: '';
+  position: absolute;
+  inset: -11.5px 0;
+}
+
+/* 눌린 상태와 포커스는 같은 2px ink 링(offset 3px) */
+.interactive:active,
+.interactive:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}

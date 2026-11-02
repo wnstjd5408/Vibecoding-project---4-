@@ -1,0 +1,57 @@
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+/* 주요 동작. 먹색 바탕에 종이색 글자 */
+.primary {
+  background: var(--ink);
+  color: var(--surface-100);
+}
+
+/* 보조 동작. 테두리만 */
+.outline {
+  background: transparent;
+  color: var(--ink);
+}
+
+/* 틀림 신고. 빨간펜은 이 버튼의 글자와 테두리에만 쓴다(항상 글자 라벨과 함께) */
+.report {
+  border-color: var(--red-pen);
+  background: transparent;
+  color: var(--red-pen);
+}
+
+/* 눌린 상태: 보조·신고는 surface-300 배경, 주요(채움)는 ink-muted 배경 */
+.outline:active,
+.report:active {
+  background: var(--surface-300);
+}
+
+.primary:active {
+  background: var(--ink-muted);
+  border-color: var(--ink-muted);
+}
+
+/* 비활성: 테두리는 line-strong, 글자는 ink-muted */
+.button:disabled,
+.button[aria-disabled='true'] {
+  border-color: var(--line-strong);
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: not-allowed;
+}

@@ -333,3 +333,310 @@ def test_disabled_email_provider_is_a_config_error_not_a_wrong_password():
     body = {"code": 422, "error_code": "email_provider_disabled", "msg": "Email logins are disabled"}
     with pytest.raises(SupabaseConfigError):
         client_with(lambda r: httpx.Response(422, json=body)).sign_in_with_password("a@b.c", "x")
+
+
+# --- E04 과목·노트 조회 (MEG-71) ---
+
+
+def capture(rows):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["params"] = dict(request.url.params)
+        seen["authorization"] = request.headers["authorization"]
+        return httpx.Response(200, json=rows)
+
+    return seen, handler
+
+
+def test_list_notes_for_non_operator_filters_published_in_db_and_skips_operator_columns():
+    rows = [{"id": 1, "title": "t", "studied_on": None, "parent_note_id": None, "note_subjects": []}]
+    seen, handler = capture(rows)
+
+    assert client_with(handler).list_notes(include_unpublished=False) == rows
+    assert seen == {
+        "path": "/rest/v1/notes",
+        "params": {
+            "select": "id,title,studied_on,parent_note_id,note_subjects(subject_id)",
+            "order": "studied_on.desc.nullslast,id.desc",
+            "is_published": "eq.true",
+        },
+        "authorization": "Bearer sb_secret_test",
+    }
+
+
+def test_list_notes_for_operator_reads_all_notes_and_operator_columns():
+    seen, handler = capture([])
+
+    client_with(handler).list_notes(include_unpublished=True)
+
+    assert "is_published" not in seen["params"]
+    assert seen["params"]["select"].endswith(",is_published,revision,needs_review")
+
+
+def test_list_subjects_reads_id_and_name_in_id_order():
+    seen, handler = capture([{"id": 1, "name": "네트워크"}])
+
+    assert client_with(handler).list_subjects() == [{"id": 1, "name": "네트워크"}]
+    assert seen["path"] == "/rest/v1/subjects"
+    assert seen["params"] == {"select": "id,name", "order": "id.asc"}
+
+
+def test_notes_select_rejected_is_a_config_error():
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(401, json=INVALID_KEY)).list_notes(include_unpublished=False)
+
+
+def test_notes_select_server_error_is_unavailable():
+    with pytest.raises(SupabaseUnavailable):
+        client_with(lambda r: httpx.Response(503)).list_subjects()
+
+
+# --- E05 노트 읽기·사전 용어·서명 URL (MEG-73) ---
+
+NOTE_SELECT = (
+    "id,revision,title,studied_on,body_markdown,"
+    "note_subjects(subjects(id,name)),note_sources(id,url,label),"
+    "note_images(notion_block_id,storage_path,alt)"
+)
+
+
+def test_get_note_for_non_operator_filters_published_in_db_and_skips_private_columns():
+    row = {"id": 11, "title": "t"}
+    seen, handler = capture([row])
+
+    assert client_with(handler).get_note(11, include_unpublished=False) == row
+    assert seen["path"] == "/rest/v1/notes"
+    assert seen["params"] == {"id": "eq.11", "select": NOTE_SELECT, "limit": "1", "is_published": "eq.true"}
+    # memo·needs_review·is_published 같은 비공개 열은 읽지 않는다.
+    assert not {"memo", "needs_review", "importance", "is_published"} & set(seen["params"]["select"].split(","))
+
+
+def test_get_note_for_operator_reads_unpublished_and_missing_is_none():
+    seen, handler = capture([])
+
+    assert client_with(handler).get_note(13, include_unpublished=True) is None
+    assert "is_published" not in seen["params"]
+
+
+def test_list_glossary_terms_reads_only_terms_with_a_glossary_entry():
+    seen, handler = capture([])
+
+    client_with(handler).list_glossary_terms()
+
+    assert seen["path"] == "/rest/v1/terms"
+    assert seen["params"] == {"select": "id,key,label,glossary_entries!inner(term_id)", "order": "id.asc"}
+
+
+def signing_client(handler, bucket: str | None = "note-images") -> SupabaseClient:
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    return SupabaseClient("https://project.supabase.co/", "sb_secret_test", http, note_image_bucket=bucket)
+
+
+def test_sign_note_images_signs_all_paths_in_one_call_and_drops_failed_items():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["body"] = request.content.decode()
+        seen["authorization"] = request.headers["authorization"]
+        # 로컬 Storage(2026-10-30)에서 본 모양. 서명 경로는 공백을 그대로 담아 온다. 토큰은 가짜다.
+        return httpx.Response(
+            200,
+            json=[
+                {"error": None, "path": "notes/11/a b+(1).png", "signedURL": "/object/sign/note-images/notes/11/a b+(1).png?token=fake-token"},
+                {"error": "Either the object does not exist or you do not have access to it", "path": "notes/11/gone.png", "signedURL": None},
+            ],
+        )
+
+    signed = signing_client(handler).sign_note_images(["notes/11/a b+(1).png", "notes/11/gone.png"], 300)
+
+    assert signed == {
+        "notes/11/a b+(1).png": "https://project.supabase.co/storage/v1/object/sign/note-images/notes/11/a%20b%2B%281%29.png?token=fake-token"
+    }
+    assert seen["path"] == "/storage/v1/object/sign/note-images"
+    assert '"expiresIn":300' in seen["body"].replace(" ", "")
+    assert seen["authorization"] == "Bearer sb_secret_test"
+
+
+def test_question_mark_in_a_storage_path_is_encoded_not_taken_as_the_query():
+    # Storage 키에는 ?가 들어갈 수 있다(2026-10-30 로컬 업로드 200). 마지막 ? 앞까지만 경로다.
+    body = [{"error": None, "path": "n/q?mark.png", "signedURL": "/object/sign/b.1/n/q?mark.png?token=fake-token"}]
+    client = signing_client(lambda r: httpx.Response(200, json=body), "b.1")
+
+    assert client.sign_note_images(["n/q?mark.png"], 300) == {
+        "n/q?mark.png": "https://project.supabase.co/storage/v1/object/sign/b.1/n/q%3Fmark.png?token=fake-token"
+    }
+
+
+@pytest.mark.parametrize("bad", ["/object/sign/b/a.png", 7, None])
+def test_an_odd_signed_item_drops_only_that_image(bad):
+    body = [
+        {"error": None, "path": "a.png", "signedURL": bad},
+        {"error": None, "path": "b.png", "signedURL": "/object/sign/b/b.png?token=fake-token"},
+    ]
+
+    signed = signing_client(lambda r: httpx.Response(200, json=body)).sign_note_images(["a.png", "b.png"], 300)
+
+    assert list(signed) == ["b.png"]
+
+
+@pytest.mark.parametrize("bucket", [None, "", "../other", "note images", ".", ".."])
+def test_sign_without_a_valid_bucket_is_a_config_error_and_sends_nothing(bucket):
+    def handler(request):
+        raise AssertionError("must not call Storage")
+
+    with pytest.raises(SupabaseConfigError):
+        signing_client(handler, bucket).sign_note_images(["notes/11/a.png"], 300)
+
+
+def test_sign_rejected_is_a_config_error():
+    with pytest.raises(SupabaseConfigError):
+        signing_client(lambda r: httpx.Response(400, json={"error": "Bucket not found"})).sign_note_images(["a.png"], 300)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [httpx.Response(503), httpx.Response(200, json={"not": "a list"}), httpx.Response(200, text="oops"), httpx.Response(200, json=[{}])],
+)
+def test_sign_outage_or_malformed_body_is_unavailable(response):
+    with pytest.raises(SupabaseUnavailable):
+        signing_client(lambda r: response).sign_note_images(["a.png"], 300)
+
+
+def test_from_env_reads_the_note_image_bucket(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setenv("NOTE_IMAGE_BUCKET", " note-images ")
+
+    assert SupabaseClient.from_env()._note_image_bucket == "note-images"
+
+    monkeypatch.delenv("NOTE_IMAGE_BUCKET")
+    assert SupabaseClient.from_env()._note_image_bucket is None
+
+
+# --- E06 사전 용어·E07 열람 기록 (MEG-75) ---
+
+
+GLOSSARY_SELECT = "id,key,label,glossary_entries!inner(body_markdown),glossary_images(id,storage_path,alt)"
+
+
+def test_get_glossary_entry_reads_one_glossary_term_with_ordered_images():
+    row = {"id": 7, "key": "k", "label": "K", "glossary_entries": {"body_markdown": "b"}, "glossary_images": []}
+    seen, handler = capture([row])
+
+    assert client_with(handler).get_glossary_entry(7) == row
+    assert seen["path"] == "/rest/v1/terms"
+    # 방문자는 즐겨찾기를 읽지 않는다.
+    assert seen["params"] == {
+        "id": "eq.7",
+        "select": GLOSSARY_SELECT,
+        "glossary_images.order": "id.asc",
+        "limit": "1",
+    }
+
+
+def test_get_glossary_entry_for_a_user_embeds_only_that_users_favorite():
+    seen, handler = capture([])
+
+    client_with(handler).get_glossary_entry(7, USER_ID)
+
+    assert seen["params"] == {
+        "id": "eq.7",
+        "select": GLOSSARY_SELECT + ",favorites(term_id)",
+        "favorites.user_id": f"eq.{USER_ID}",
+        "glossary_images.order": "id.asc",
+        "limit": "1",
+    }
+
+
+def test_get_glossary_entry_rejects_non_uuid_user_ids():
+    with pytest.raises(ValueError):
+        client_with(capture([])[1]).get_glossary_entry(7, "not-a-uuid")
+
+
+def test_get_glossary_entry_without_a_glossary_row_is_none():
+    _, handler = capture([])
+    assert client_with(handler).get_glossary_entry(9) is None
+
+
+def test_record_term_view_inserts_and_ignores_duplicates():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["prefer"] = request.headers["prefer"]
+        seen["body"] = request.content.decode()
+        return httpx.Response(201)
+
+    assert client_with(handler).record_term_view(USER_ID, 7, "2026-10-23") is True
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/rest/v1/term_views"
+    assert seen["prefer"] == "resolution=ignore-duplicates,return=minimal"
+    assert seen["body"].replace(" ", "") == f'{{"user_id":"{USER_ID}","term_id":7,"study_date":"2026-10-23"}}'
+
+
+# 2026-11-02 로컬 PostgREST가 준 외래 키 위반 본문(값만 합성).
+TERM_FK = {"code": "23503", "message": 'insert or update on table "term_views" violates foreign key constraint "term_views_term_id_fkey"'}
+USER_FK = {"code": "23503", "message": 'insert or update on table "term_views" violates foreign key constraint "term_views_user_id_fkey"'}
+
+
+def test_record_term_view_for_a_missing_term_is_false():
+    assert client_with(lambda r: httpx.Response(409, json=TERM_FK)).record_term_view(USER_ID, 7, "2026-10-23") is False
+
+
+@pytest.mark.parametrize(
+    "response",
+    [httpx.Response(409, json=USER_FK), httpx.Response(409, json={"code": "23503"}),
+     httpx.Response(409, json={"code": "23505"}), httpx.Response(401, json={"message": "Invalid API key"}),
+     httpx.Response(403, json={"code": "42501"}), httpx.Response(409, text="not json"),
+     httpx.Response(409, json=["not", "an", "object"])],
+)
+def test_record_term_view_other_rejections_are_config_errors(response):
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: response).record_term_view(USER_ID, 7, "2026-10-23")
+
+
+def test_record_term_view_outage_is_unavailable():
+    with pytest.raises(SupabaseUnavailable):
+        client_with(lambda r: httpx.Response(503)).record_term_view(USER_ID, 7, "2026-10-23")
+
+
+def glossary_client(bucket: str | None = "glossary-images") -> SupabaseClient:
+    def handler(request):
+        raise AssertionError("public URLs need no Storage call")
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    return SupabaseClient("https://project.supabase.co/", "sb_secret_test", http, glossary_image_bucket=bucket)
+
+
+def test_glossary_image_url_is_the_public_object_url_with_an_encoded_path():
+    assert glossary_client().glossary_image_url("terms/7/a b+(1)?.png") == (
+        "https://project.supabase.co/storage/v1/object/public/glossary-images/terms/7/a%20b%2B%281%29%3F.png"
+    )
+
+
+@pytest.mark.parametrize("path", ["../note-images/x.png", "terms/../../x.png", "/abs.png", "terms//x.png", "./x.png", "terms/"])
+def test_glossary_image_url_rejects_empty_or_dot_segments(path):
+    # 브라우저가 ../를 정규화하면 다른 버킷의 공개 주소가 된다.
+    with pytest.raises(SupabaseConfigError):
+        glossary_client().glossary_image_url(path)
+
+
+@pytest.mark.parametrize("bucket", [None, "", "../other", "glossary images", ".", ".."])
+def test_glossary_image_url_without_a_valid_bucket_is_a_config_error(bucket):
+    with pytest.raises(SupabaseConfigError):
+        glossary_client(bucket).glossary_image_url("terms/7/a.png")
+
+
+def test_from_env_reads_the_glossary_image_bucket(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setenv("GLOSSARY_IMAGE_BUCKET", " glossary-images ")
+
+    assert SupabaseClient.from_env()._glossary_image_bucket == "glossary-images"
+
+    monkeypatch.delenv("GLOSSARY_IMAGE_BUCKET")
+    assert SupabaseClient.from_env()._glossary_image_bucket is None

@@ -1,0 +1,78 @@
+/* 화면 전체를 덮는 모달. 막(Scrim)은 직접 그리므로 브라우저 기본 backdrop은 투명하게 둔다 */
+.dialog {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+}
+
+.dialog::backdrop {
+  background: transparent;
+}
+
+.sheet {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  max-width: 560px;
+  max-height: 85%;
+  margin: 0 auto;
+  overflow-y: auto;
+  padding: 0 var(--space-4) var(--space-4);
+  background: var(--surface-200);
+  border: 1px solid var(--surface-300);
+  border-bottom: 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+
+.grabRow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+}
+
+.handle {
+  display: block;
+  width: 40px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--line-strong);
+}
+
+.close {
+  position: absolute;
+  top: 0;
+  right: calc(var(--space-2) * -1);
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--ink-muted);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.badge {
+  margin-bottom: var(--space-2);
+}
+
+.title {
+  margin: 0 0 var(--space-2);
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 700;
+}

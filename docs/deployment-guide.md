@@ -26,7 +26,10 @@ Vercel 프로젝트의 **Settings → Environment Variables**에서 환경을 �
 | `VITE_API_MOCK` | 미설정 또는 `false` | 미설정 또는 `false` | 실제 연동 검증은 미설정 또는 `false` |
 | `SUPABASE_URL` | 운영 프로젝트 URL | 스테이징 프로젝트 URL | 필요한 경우 승인된 테스트 프로젝트만 사용 |
 | `SUPABASE_SECRET_KEY` | 운영 프로젝트 Secret Key | 스테이징 프로젝트 Secret Key | 운영 키 사용 금지 |
-| AI 자격증명 | 운영 전용 | 필요 시 별도 테스트 자격증명 | 승인된 테스트 자격증명만 사용 |
+| `AI_AUTH_MODE` | `oidc` | `oidc` | 등록하지 않는다 |
+| `AWS_ROLE_ARN` | 운영 역할(`<owner>-vercel-bedrock-prd`) ARN | Preview 역할(`<owner>-vercel-bedrock-preview`) ARN | 등록하지 않는다 |
+| `BEDROCK_REGION`·`BEDROCK_MODEL_ID` | 미설정(기본값 `ap-northeast-1`, `global.openai.gpt-6-luna`) | 미설정 | 미설정 |
+| `AWS_BEARER_TOKEN_BEDROCK` | 미설정 | 미설정 | 사용 금지 |
 
 1. Production의 `ALLOWED_ORIGINS`를 설정한다.
 2. Preview를 선택하고 Git Branch를 `staging`으로 지정해 같은 이름의 변수를 등록한다. 같은 이름의 Preview 공통값보다 브랜치별 값이 우선한다.
@@ -34,6 +37,8 @@ Vercel 프로젝트의 **Settings → Environment Variables**에서 환경을 �
 4. 변경한 환경과 브랜치를 대상으로 새 배포를 만든다. 환경변수 변경은 기존 배포에 소급 적용되지 않는다. [Vercel 환경변수](https://vercel.com/docs/environment-variables)
 
 `ALLOWED_ORIGINS`는 `scheme://host[:port]` 목록을 쉼표로 구분한다. 경로·질의 문자열·와일드카드는 허용하지 않는다. 상태 변경 요청의 Origin 검사와 CORS에 사용된다. Production에서 누락하면 서버 시작 자체가 실패한다. Preview에서 누락하면 로컬 개발 출처가 기본값이므로, GET 헬스체크 성공만으로 Preview의 상태 변경 API가 정상이라고 판단하지 않는다. 기준 구현은 [`backend/app/config.py`](../backend/app/config.py)다.
+
+AI 변수는 Vercel OIDC로 Bedrock을 부를 때 쓴다(MEG-118). `AI_AUTH_MODE`·`AWS_ROLE_ARN`은 타입 Config로 Production과 Preview(Git Branch `staging`)에만 등록하고 Preview 공통값은 두지 않는다. 역할 ARN은 비밀값은 아니지만 계정 ID가 들어 있어 저장소·PR·이슈에 적지 않는다. 역할은 `infra/vercel-oidc/`가 만들고, 각 역할은 같은 환경의 Vercel OIDC 토큰만 받는다(`infra/README.md` "Vercel OIDC 역할" 절). 백엔드는 `staging` 밖의 Preview에서 AI를 STS 전에 막는다([ai-credentials.md](ai-credentials.md) "배포 환경 제한" 절). `AWS_BEARER_TOKEN_BEDROCK`은 OIDC가 막혔을 때만 쓰는 대체 경로라 평소에는 등록하지 않는다. `/api/health` 200은 AI 연결 근거가 아니다.
 
 ### Supabase 운영·스테이징 연결
 

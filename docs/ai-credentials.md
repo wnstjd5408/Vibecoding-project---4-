@@ -11,6 +11,14 @@
 
 두 방식의 호출 코드와 결과 형식은 같다. 장기 키는 AWS가 탐색용으로 안내하므로 대체 경로로만 둔다. 키를 켜 두는 기간이 길수록 노출 위험이 커진다.
 
+## 배포 환경 제한 (MEG-120)
+
+AI는 운영(`VERCEL_ENV=production`), staging 브랜치의 Preview(`VERCEL_ENV=preview`·`VERCEL_GIT_COMMIT_REF=staging`, `VERCEL_TARGET_ENV`가 있으면 `preview`), `vercel dev`(`development`), Vercel 밖의 로컬(`VERCEL`·`VERCEL_ENV` 없음)에서만 부른다. PR 미리보기 같은 다른 Preview, 사용자 지정 환경, Vercel 위인데 `VERCEL_ENV`가 없거나 모르는 값인 경우에는 두 인증 방식 모두 AWS에 요청하기 전에 `AiCallError("environment", "BlockedEnvironment")`로 막는다(`ai_allowed_in_environment`, `is_staging_preview`). 이 값들은 Vercel 시스템 환경변수로 런타임에 들어온다(프로젝트 설정의 시스템 환경변수 노출이 켜져 있어야 한다).
+
+Vercel OIDC 토큰의 `sub`에는 브랜치가 없어 Preview 역할을 staging과 PR 미리보기가 함께 맡을 수 있기 때문이다. 이 검사는 앱 안의 장치라서, PR 코드가 STS를 직접 부르는 경우는 막지 못한다. 역할·한계는 `infra/README.md`의 "Vercel OIDC 역할" 절에 있다.
+
+**배포 런타임 확인 기록:** staging에서 실제 OIDC 토큰 → STS → Bedrock 경로는 2026-10-30에 임시 확인 API로 한 번 확인했고(MEG-118), 그 API는 확인 뒤 지웠다(MEG-121). Production은 아직 미검증이며 MEG-21 출시 때 확인한다.
+
 ## 키 규칙
 
 - 만료는 **30일**로 발급한다. 상한 90일은 IAM 조건 `iam:ServiceSpecificCredentialAgeDays`로 건다. 최소 만료는 1일이다.

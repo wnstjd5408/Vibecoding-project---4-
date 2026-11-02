@@ -12,7 +12,6 @@ from app.bedrock import (
     AiCallError,
     AiConfigError,
     BedrockSettings,
-    call_bedrock,
     converse_text,
     make_client,
 )
@@ -69,6 +68,10 @@ def clean_env(monkeypatch):
         "AWS_PROFILE",
         "BEDROCK_REGION",
         "BEDROCK_MODEL_ID",
+        "VERCEL",
+        "VERCEL_ENV",
+        "VERCEL_TARGET_ENV",
+        "VERCEL_GIT_COMMIT_REF",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -148,7 +151,9 @@ def test_api_key_client_has_no_explicit_credentials(monkeypatch):
 
     make_client(BedrockSettings(auth_mode="api_key"))
 
+    config = captured.pop("config")
     assert captured == {"name": "bedrock-runtime", "region_name": "ap-northeast-1"}
+    assert (config.read_timeout, config.retries["total_max_attempts"]) == (30, 1)
 
 
 def test_oidc_client_uses_exchanged_credentials_and_pins_sigv4(monkeypatch):
@@ -171,6 +176,9 @@ def test_oidc_client_uses_exchanged_credentials_and_pins_sigv4(monkeypatch):
     assert name == "bedrock-runtime"
     assert kwargs["aws_access_key_id"] == FAKE_CREDENTIALS["AccessKeyId"]
     assert kwargs["config"].signature_version == "v4"
+    assert (kwargs["config"].read_timeout, kwargs["config"].retries["total_max_attempts"]) == (30, 1)
+    sts_config = clients[0][1]["config"]
+    assert (sts_config.read_timeout, sts_config.retries["total_max_attempts"]) == (10, 1)
 
 
 def test_oidc_mode_without_token_is_a_config_error():
@@ -191,6 +199,70 @@ def test_oidc_exchange_failure_reports_step_and_code_only(monkeypatch):
     assert (error.value.step, error.value.code) == ("sts", "AccessDenied")
     assert "arn:" not in str(error.value)
     assert FAKE_TOKEN not in str(error.value)
+
+
+# --- 배포 환경 차단 (MEG-120) ---
+
+
+BLOCKED_ENVIRONMENTS = [
+    # PR 미리보기
+    {"VERCEL": "1", "VERCEL_ENV": "preview", "VERCEL_GIT_COMMIT_REF": "meg-1-feature"},
+    {"VERCEL": "1", "VERCEL_ENV": "preview"},
+    {"VERCEL": "1", "VERCEL_ENV": "preview", "VERCEL_GIT_COMMIT_REF": ""},
+    {"VERCEL": "1", "VERCEL_ENV": "preview", "VERCEL_GIT_COMMIT_REF": "Staging"},
+    # staging 브랜치를 따라가는 사용자 지정 환경(VERCEL_ENV는 preview, 이름은 VERCEL_TARGET_ENV)
+    {"VERCEL": "1", "VERCEL_ENV": "preview", "VERCEL_TARGET_ENV": "qa", "VERCEL_GIT_COMMIT_REF": "staging"},
+    # Vercel 위인데 VERCEL_ENV가 빠졌거나 모르는 값
+    {"VERCEL": "1"},
+    {"VERCEL": "1", "VERCEL_ENV": "qa", "VERCEL_GIT_COMMIT_REF": "staging"},
+]
+
+
+@pytest.mark.parametrize("env", BLOCKED_ENVIRONMENTS)
+@pytest.mark.parametrize("settings", [BedrockSettings(role_arn="role"), BedrockSettings(auth_mode="api_key")])
+def test_pr_preview_is_blocked_before_sts(monkeypatch, env, settings):
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    def no_aws(*args, **kwargs):
+        raise AssertionError("blocked environments must not reach AWS")
+
+    monkeypatch.setattr(bedrock.boto3, "client", no_aws)
+
+    with pytest.raises(AiCallError) as error:
+        make_client(settings, FAKE_TOKEN)
+
+    assert (error.value.step, error.value.code) == ("environment", "BlockedEnvironment")
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {},  # 로컬(Vercel 밖)
+        {"VERCEL_ENV": "development"},
+        {"VERCEL": "1", "VERCEL_ENV": "production", "VERCEL_GIT_COMMIT_REF": "main"},
+        {"VERCEL": "1", "VERCEL_ENV": "production"},
+        {"VERCEL": "1", "VERCEL_ENV": "preview", "VERCEL_GIT_COMMIT_REF": "staging"},
+        {"VERCEL": "1", "VERCEL_ENV": "preview", "VERCEL_TARGET_ENV": "preview", "VERCEL_GIT_COMMIT_REF": "staging"},
+    ],
+)
+def test_production_staging_and_local_still_reach_sts(monkeypatch, env):
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    calls = []
+    monkeypatch.setattr(bedrock, "_assume_role", lambda *a: calls.append(a) or FAKE_CREDENTIALS)
+    monkeypatch.setattr(bedrock.boto3, "client", lambda name, **kwargs: "bedrock-client")
+
+    assert make_client(BedrockSettings(role_arn="role"), FAKE_TOKEN) == "bedrock-client"
+    assert len(calls) == 1
+
+
+def test_environment_check_reads_given_mapping():
+    assert bedrock.ai_allowed_in_environment({}) is True
+    assert bedrock.ai_allowed_in_environment({"VERCEL": "1"}) is False
+    assert bedrock.ai_allowed_in_environment({"VERCEL_ENV": "preview", "VERCEL_GIT_COMMIT_REF": "staging"}) is True
+    assert bedrock.ai_allowed_in_environment({"VERCEL_ENV": "preview", "VERCEL_GIT_COMMIT_REF": "Staging"}) is False
+    assert bedrock.is_staging_preview({"VERCEL_ENV": "production", "VERCEL_GIT_COMMIT_REF": "staging"}) is False
 
 
 # --- 인증 헤더 (실제 boto3, 네트워크 없음) ---
@@ -229,17 +301,13 @@ def test_plain_boto3_would_pick_bearer_over_explicit_keys(monkeypatch):
 # --- 호출 결과 (두 모드가 같은 코드·같은 형식) ---
 
 
-def test_both_modes_return_the_same_result_shape(monkeypatch):
-    fake_bedrock = SimpleNamespace(converse=lambda **_: GOOD_RESPONSE)
-    monkeypatch.setattr(bedrock, "make_client", lambda *a, **k: fake_bedrock)
-
-    oidc = call_bedrock(
-        BedrockSettings(role_arn="role"), "ping", max_tokens=50, oidc_token=FAKE_TOKEN
+def test_converse_returns_text_stop_reason_and_tokens():
+    """두 인증 방식은 make_client만 다르고 결과는 converse_text 하나가 만든다(클라이언트 차이는 위 시험들)."""
+    result = converse_text(
+        SimpleNamespace(converse=lambda **_: GOOD_RESPONSE), BedrockSettings(auth_mode="api_key"), "ping", max_tokens=50
     )
-    api_key = call_bedrock(BedrockSettings(auth_mode="api_key"), "ping", max_tokens=50)
 
-    assert oidc == api_key
-    assert (oidc.text, oidc.stop_reason, oidc.input_tokens, oidc.output_tokens) == (
+    assert (result.text, result.stop_reason, result.input_tokens, result.output_tokens) == (
         "pong",
         "end_turn",
         5,
@@ -316,3 +384,125 @@ def test_truncated_or_empty_answers_are_not_used():
         )
 
     assert (error.value.step, error.value.code) == ("response", "max_tokens")
+
+
+# --- 응답 모양과 원장 정산 분류 (MEG-86, API spec 1.4.4) ---
+
+
+def converse_once(response):
+    return converse_text(
+        SimpleNamespace(converse=lambda **_: response),
+        BedrockSettings(auth_mode="api_key"),
+        "ping",
+        max_tokens=20,
+    )
+
+
+def test_missing_content_is_a_response_error_with_usage_not_a_key_error():
+    with pytest.raises(AiCallError) as error:
+        converse_once({"stopReason": "end_turn", "usage": {"inputTokens": 7, "outputTokens": 0}})
+
+    assert (error.value.step, error.value.code) == ("response", "NoContent")
+    assert (error.value.input_tokens, error.value.output_tokens) == (7, 0)
+    assert error.value.settlement == "usage"
+
+
+def test_incomplete_answer_keeps_usage_for_settlement():
+    truncated = {
+        "output": {"message": {"content": [{"reasoningContent": {}}]}},
+        "stopReason": "max_tokens",
+        "usage": {"inputTokens": 12, "outputTokens": 20},
+    }
+
+    with pytest.raises(AiCallError) as error:
+        converse_once(truncated)
+
+    assert (error.value.input_tokens, error.value.output_tokens) == (12, 20)
+    assert error.value.settlement == "usage"
+    assert error.value.retryable is False
+
+
+def test_null_or_non_text_blocks_are_ignored_not_an_exception():
+    response = {
+        "output": {"message": {"content": [{"text": None}, "x", {"text": "pong"}, {"text": 3}]}},
+        "stopReason": "end_turn",
+    }
+
+    assert converse_once(response).text == "pong"
+    with pytest.raises(AiCallError) as error:
+        converse_once({**response, "output": {"message": {"content": [{"text": None}]}}})
+    assert (error.value.step, error.value.code) == ("response", "end_turn")
+
+
+def test_success_without_usage_returns_no_token_counts():
+    result = converse_once({"output": {"message": {"content": [{"text": "pong"}]}}, "stopReason": "end_turn"})
+
+    assert (result.text, result.input_tokens, result.output_tokens) == ("pong", None, None)
+
+
+@pytest.mark.parametrize("usage", [{"inputTokens": -1, "outputTokens": 2}, {"inputTokens": "5"}, "x"])
+def test_malformed_usage_is_treated_as_missing(usage):
+    result = converse_once({**GOOD_RESPONSE, "usage": usage})
+
+    assert (result.input_tokens, result.output_tokens) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("step", "code", "settlement", "retryable"),
+    [
+        ("environment", "BlockedEnvironment", "released", False),
+        ("sts", "AccessDenied", "released", False),
+        ("sts", "ReadTimeoutError", "released", False),
+        ("bedrock", "AccessDeniedException", "released", False),
+        ("bedrock", "ValidationException", "released", False),
+        ("bedrock", "ResourceNotFoundException", "released", False),
+        ("bedrock", "ThrottlingException", "released", True),
+        # 요청이 서버에 닿기 전에 끝난 연결 실패는 과금될 수 없다(MEG-145)
+        ("bedrock", "ConnectTimeoutError", "released", True),
+        ("bedrock", "EndpointConnectionError", "released", True),
+        # 인증 거절은 모델이 실행되지 않았다(MEG-145)
+        ("bedrock", "UnrecognizedClientException", "released", False),
+        ("bedrock", "ExpiredTokenException", "released", False),
+        ("bedrock", "InvalidSignatureException", "released", False),
+        ("bedrock", "InvalidClientTokenId", "released", False),
+        ("bedrock", "IncompleteSignature", "released", False),
+        ("bedrock", "RequestExpired", "released", False),
+        ("bedrock", "NotAuthorized", "released", False),
+        # 서명 단계에서 끝나 요청이 나가지 않는다(api_key 모드에서 키가 없을 때)
+        ("bedrock", "NoCredentialsError", "released", False),
+        # 요청이 나갔을 수 있으면 과금으로 센다
+        ("bedrock", "ReadTimeoutError", "reserved_fallback", True),
+        ("bedrock", "ConnectionClosedError", "reserved_fallback", True),
+        ("bedrock", "ModelTimeoutException", "reserved_fallback", True),
+        ("bedrock", "InternalServerException", "reserved_fallback", True),
+        ("bedrock", "ServiceUnavailableException", "reserved_fallback", True),
+        ("bedrock", "SomethingNew", "reserved_fallback", False),
+        ("response", "max_tokens", "reserved_fallback", False),
+    ],
+)
+def test_failure_classification(step, code, settlement, retryable):
+    error = AiCallError(step, code)
+
+    assert (error.settlement, error.retryable) == (settlement, retryable)
+
+
+def test_botocore_does_not_retry_on_its_own(monkeypatch):
+    """스로틀링을 흉내 내도 botocore는 한 번만 보낸다. 다시 부르는 것은 앱(ai_ledger)의 몫이다."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", FAKE_KEY)
+    client = make_client(BedrockSettings(auth_mode="api_key"))
+    sent = []
+
+    def throttled(request, **_):
+        sent.append(request.url)
+        body = json.dumps({"message": "slow down"}).encode()
+        return AWSResponse(
+            request.url, 429, {"x-amzn-ErrorType": "ThrottlingException:http://internal"}, RawBody(body)
+        )
+
+    client.meta.events.register("before-send.bedrock-runtime.Converse", throttled)
+
+    with pytest.raises(AiCallError) as error:
+        converse_text(client, BedrockSettings(auth_mode="api_key"), "ping", max_tokens=20)
+
+    assert error.value.code == "ThrottlingException"
+    assert len(sent) == 1

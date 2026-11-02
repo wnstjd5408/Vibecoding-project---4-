@@ -19,7 +19,7 @@ fake 결과의 PASS는 집계 논리 시험이며 AI 품질 통과가 아니다.
 
 `python -m evals run --dataset CASES --manifest MANIFEST --config CONFIG --output-dir PRIVATE_DIR --dry-run`
 은 버전·입력 상한·예산과 예정 슬롯을 검사한다. `--fake`는 같은 계약으로 모의 출력만 저장한다.
-live 옵션이나 공급자 연결은 없다. RunConfig JSON 필드는 runner.py를 따른다.
+live 옵션이나 공급자 연결은 없다. RunConfig JSON 필드는 runner.py를 따른다. `budget`·`input_price`·`output_price`는 필수이며, 빠지면 실행 전에 거부한다.
 기본 토큰 계산은 문자 수 기반 **시험용**이다. 실제 모델 토큰·단가·품질 검증으로 사용하지 않는다.
 최대 입력/출력 기준 전체 슬롯 예약액이 예산을 넘으면 호출 전에 거부한다.
 state.json은 비공개 경로에 원자적으로 저장되며 설정·입력 해시가 다른 재개는 거부한다.
@@ -73,7 +73,7 @@ UTF-8 또는 UTF-8 BOM, 줄마다 객체 하나. 빈 줄은 무시한다. 중복
 | review_status | draft / approved |
 | provenance | synthetic / curated (실제 자료에서 선정) |
 
-리스트 안 빈 문자열과 같은 항목의 정확한 중복은 거부한다. 질문별 2개 key_points는 각 1점의 채점 기준이다. source_text는 노트 전체가 아니라 추출한 입력 문맥이므로 같은 source_id + note_revision에서 서로 다른 문맥을 사용할 수 있다. 동일 본문의 교차 분할도 거부한다. 자동 검사는 의미가 유사한 문장을 찾아주지 못하므로 group_id와 과목 대표성은 사람이 검수한다. revision은 양의 정수만 검사하며 실제 앱 최신 개정·문맥과의 대조는 통합 단계다.
+리스트 안 빈 문자열과 같은 항목의 정확한 중복은 거부한다. 질문별 2개 key_points는 각 1점의 채점 기준이며 서로 정확히 같은 문자열이면 거부한다. source_text는 노트 전체가 아니라 추출한 입력 문맥이므로 같은 source_id + note_revision에서 서로 다른 문맥을 사용할 수 있다. 동일 본문의 교차 분할도 거부한다. 자동 검사는 의미가 유사한 문장을 찾아주지 못하므로 group_id와 과목 대표성은 사람이 검수한다. revision은 양의 정수만 검사하며 실제 앱 최신 개정·문맥과의 대조는 통합 단계다.
 
 ### 최종 후보 40개 분포
 

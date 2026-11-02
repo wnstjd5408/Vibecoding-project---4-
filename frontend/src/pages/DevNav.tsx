@@ -11,11 +11,17 @@ const userLinks: NavLink[] = [
   { to: userPaths.myInfo, label: 'F4-5 내 정보' },
 ]
 
-const operatorLinks: NavLink[] = [{ to: operatorPaths.home, label: 'F5-1a 운영자 노트 목록' }]
+const operatorLinks: NavLink[] = [
+  { to: operatorPaths.home, label: 'F5-1a 운영자 노트 목록' },
+  { to: operatorPaths.glossary, label: 'F5-1c 용어 사전' },
+  { to: operatorPaths.reports, label: 'F5-2 신고' },
+  { to: operatorPaths.accounts, label: 'F4-3a 계정 발급' },
+]
 
 const devLinks: NavLink[] = [
   { to: devPaths.foundationDemo, label: '공통 기반 샘플' },
   { to: devPaths.mockup, label: '목업 v0.2 전체 화면' },
+  { to: devPaths.componentShowcase, label: '공통 컴포넌트' },
 ]
 
 function LinkGroup({ title, links }: { title: string; links: NavLink[] }) {
