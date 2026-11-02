@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import session
+from app.errors import FIELD_MESSAGES
 from app.rate_limit import PUBLIC_READ, WRITE
 from support import FakeSupabase, build_glossary_app, cookie, origin
 
@@ -91,18 +92,21 @@ def test_response_has_no_storage_path_field(client):
     assert "storage_path" not in json.dumps(payload)
 
 
-def test_member_sees_only_their_own_favorite_state(client):
+def test_member_sees_only_their_own_favorite_state(client, fake):
     assert read(client, GLOSSARY_TERM, "member-token").json()["is_favorite"] is True
+    # 즐겨찾기는 세션 사용자로 거른 같은 조회에서 읽는다(별도 왕복 없음).
+    assert fake.term_reads == [MEMBER]
     assert read(client, NO_IMAGE_TERM, "member-token").json()["is_favorite"] is False
     # 다른 사용자의 즐겨찾기(OTHER, 8)는 MEMBER 응답에 영향을 주지 않는다.
     assert read(client, GLOSSARY_TERM, "other-token").json()["is_favorite"] is False
     assert read(client, NO_IMAGE_TERM, "other-token").json()["is_favorite"] is True
 
 
-def test_inactive_account_is_read_as_a_visitor(client):
+def test_inactive_account_is_read_as_a_visitor(client, fake):
     response = read(client, GLOSSARY_TERM, "inactive-token")
     assert response.status_code == 200
     assert "is_favorite" not in response.json()
+    assert fake.term_reads == [None]
 
 
 def test_term_without_images_has_an_empty_list(client):
@@ -185,21 +189,26 @@ def test_visitor_view_is_not_recorded_and_touches_no_table(client, fake, token):
 
     assert response.status_code == 200
     assert response.json() == {"recorded": False}
+    # 방문자는 기록 시도·용어 확인·속도 제한을 하지 않는다(2026-11-02 결정).
+    assert fake.view_inserts == []
     assert fake.term_views == set()
-    # 방문자는 용어 확인·속도 제한도 하지 않는다(2026-11-02 결정).
-    assert fake.term_reads == []
     assert fake.rpc_calls == []
 
 
-def test_missing_term_is_404_and_not_rate_counted(client, fake):
+def test_missing_term_is_404_after_the_write_limit_is_counted(client, fake):
     assert_error(view(client, {"term_id": MISSING_TERM}, "member-token"), 404, "not_found")
     assert fake.term_views == set()
-    assert fake.rpc_calls == []
+    # 없는 용어도 사용자당 쓰기 제한에 센다(명세 순서의 예외, 2026-11-02 결정).
+    assert fake.hits(f"{WRITE.name}:{fake.keyed_hash(f'user:{MEMBER}')}", WRITE.window_seconds) == 1
 
 
-def test_term_deleted_between_check_and_insert_is_404(client, fake):
-    fake.term_deleted_before_insert = True
-    assert_error(view(client, {"term_id": GLOSSARY_TERM}, "member-token"), 404, "not_found")
+def test_missing_term_spam_hits_the_write_limit_without_more_db_calls(client, fake):
+    for _ in range(WRITE.limit):
+        assert view(client, {"term_id": MISSING_TERM}, "member-token").status_code == 404
+    inserts = len(fake.view_inserts)
+
+    assert_error(view(client, {"term_id": MISSING_TERM}, "member-token"), 429, "rate_limited")
+    assert len(fake.view_inserts) == inserts
 
 
 @pytest.mark.parametrize(
@@ -220,9 +229,9 @@ def test_malformed_body_is_422_for_visitors_and_members(client, fake, body, reas
 
     assert_error(response, 422, "validation_failed")
     assert response.json()["error"]["fields"] == [
-        {"name": "term_id", "reason": reason, "message": response.json()["error"]["fields"][0]["message"]}
+        {"name": "term_id", "reason": reason, "message": FIELD_MESSAGES[reason]}
     ]
-    assert fake.term_views == set()
+    assert fake.view_inserts == []
 
 
 def test_unknown_body_key_is_422_without_echoing_the_key(client):
@@ -243,7 +252,10 @@ def test_write_limit_is_per_user(client, fake):
     for _ in range(WRITE.limit):
         assert view(client, {"term_id": GLOSSARY_TERM}, "member-token").status_code == 200
 
-    assert_error(view(client, {"term_id": GLOSSARY_TERM}, "member-token"), 429, "rate_limited")
+    assert_error(view(client, {"term_id": NO_IMAGE_TERM}, "member-token"), 429, "rate_limited")
+    # 한도를 넘은 요청은 기록을 시도하지 않는다.
+    assert len(fake.view_inserts) == WRITE.limit
+    assert (MEMBER, NO_IMAGE_TERM, "2026-10-23") not in fake.term_views
     # 다른 사용자는 따로 센다.
     assert view(client, {"term_id": GLOSSARY_TERM}, "other-token").json() == {"recorded": True}
 

@@ -49,7 +49,7 @@ def read_glossary_term(
     # 공개 읽기 제한은 E04·E05와 같은 IP 키다. E05처럼 DB를 읽기 전에 센다. 없는 id를 무제한으로 두드려
     # DB를 읽게 하지 못한다(명세 1.2 순서의 예외, 2026-11-02 김준성 결정).
     limiter.check(PUBLIC_READ, f"ip:{ip_bucket(client_ip(request))}")
-    row = supabase.get_glossary_entry(int(term_id))
+    row = supabase.get_glossary_entry(int(term_id), user.user_id if user is not None else None)
     if row is None:
         raise ApiError("not_found", stage="db")
 
@@ -64,7 +64,8 @@ def read_glossary_term(
         ],
     }
     if user is not None:
-        body["is_favorite"] = supabase.is_favorite(user.user_id, row["id"])
+        # 세션 사용자의 즐겨찾기 행만 같은 조회로 읽었다. 다른 사용자의 행은 오지 않는다.
+        body["is_favorite"] = bool(row["favorites"])
     return body
 
 
@@ -88,11 +89,10 @@ def record_term_view(
     """
     if user is None:
         return {"recorded": False}
-    if not supabase.term_exists(body.term_id):
-        raise ApiError("not_found", stage="db")
-    # 검사 순서 6번(대상 확인 뒤). 그 밖의 쓰기 제한(사용자당 분당 30회, 1.8)이다.
+    # 그 밖의 쓰기 제한(사용자당 분당 30회, 1.8)을 용어 확인보다 먼저 센다. 없는 term_id로 404만 받는 요청도
+    # 세어 DB 쓰기 시도를 무제한으로 만들지 못한다(명세 1.2 순서의 예외, 2026-11-02 김준성 결정, spec 10.5).
     limiter.check(WRITE, f"user:{user.user_id}")
     if not supabase.record_term_view(user.user_id, body.term_id, study_date()):
-        # 확인과 기록 사이에 용어가 지워졌다.
+        # 용어가 없다. 따로 조회하지 않고 외래 키 결과로 판정한다.
         raise ApiError("not_found", stage="db")
     return {"recorded": True}

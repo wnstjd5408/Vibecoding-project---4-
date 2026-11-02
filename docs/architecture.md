@@ -214,7 +214,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 |---|---|---|---|
 | `SUPABASE_URL` | Supabase 프로젝트 주소 | 필수 | 백엔드(로컬·Vercel) |
 | `SUPABASE_SECRET_KEY` | 백엔드 전용 secret key. RLS를 우회하므로 프런트엔드·로그·URL에 넣지 않는다 | 필수. 용도별로 키를 따로 만든다 | 백엔드(로컬·Vercel) |
-| `NOTE_IMAGE_BUCKET` | 노트 이미지 비공개 버킷 이름. 노트 읽기(E05)가 이 버킷의 서명 URL을 발급한다 | 이미지가 있는 노트를 읽을 때만 필요하다. 비어 있거나 영문·숫자·`_`·`-` 밖의 글자가 있으면 그 요청이 500이다. 이름이 틀려도 Storage가 오류를 주지 않아 이미지만 빠지고 `stage=storage ... unsigned_images` ERROR 로그가 남는다(MEG-73) | 백엔드(로컬·Vercel) |
+| `NOTE_IMAGE_BUCKET` | 노트 이미지 비공개 버킷 이름. 노트 읽기(E05)가 이 버킷의 서명 URL을 발급한다 | 이미지가 있는 노트를 읽을 때만 필요하다. 비어 있거나 영문·숫자·`.`·`_`·`-` 밖의 글자가 있으면 그 요청이 500이다. 이름이 틀려도 Storage가 오류를 주지 않아 이미지만 빠지고 `stage=storage ... unsigned_images` ERROR 로그가 남는다(MEG-73) | 백엔드(로컬·Vercel) |
 | `GLOSSARY_IMAGE_BUCKET` | 사전 이미지 공개 읽기 버킷 이름. 사전 읽기(E06)가 이 버킷의 공개 주소를 만든다(발급 요청 없음) | 이미지가 있는 용어를 읽을 때만 필요하다. 비어 있거나 영문·숫자·`.`·`_`·`-` 밖의 글자가 있으면 그 요청이 500이다. 버킷이 공개가 아니거나 이름이 틀리면 주소만 열리지 않는다(MEG-75) | 백엔드(로컬·Vercel) |
 | `NOTION_TOKEN` | 가져오기 전용 읽기 통합 토큰 | 가져오기 때만. 끝나면 폐기한다(2절 5번) | 운영자 로컬 |
 | `NOTION_DATABASE_ID` | 가져올 노트 데이터베이스 | 가져오기 때만 | 운영자 로컬 |
