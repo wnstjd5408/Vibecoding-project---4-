@@ -147,6 +147,8 @@ function NoteRead({ noteId }: { noteId: string }) {
     document.getSelection()?.removeAllRanges()
     setPick(null)
     if (auth.role === 'visitor') return openLoginPrompt()
+    // 패널은 한 번에 하나만 연다(PC 폭에서는 모달이 아니라 용어 패널이 열린 채 AI 설명을 누를 수 있다).
+    setOpenTerm(null)
     openCount.current += 1
     setOpenAi({ target: { noteId: note.id, revision: note.revision, ...toCodePointRange(note.body_markdown, pick.start, pick.end) }, text, openId: openCount.current })
   }
@@ -164,11 +166,12 @@ function NoteRead({ noteId }: { noteId: string }) {
   }, [])
   const showTerm = (termId: number, link: HTMLElement) => {
     lastTermLink.current = link
+    setOpenAi(null)
     openCount.current += 1
     setOpenTerm({ termId, openId: openCount.current })
   }
   // 패널이 열려 있으면 본문 오른쪽 480px를 비워 패널이 본문을 가리지 않게 한다(PC 폭에서만).
-  const panelReserved = wide && (term !== undefined || loginPanelOpen)
+  const panelReserved = wide && (term !== undefined || openAi !== null || loginPanelOpen)
 
   return <div className={panelReserved ? `${styles.page} ${styles.panelOpen}` : styles.page}>
     <AppHeader title="CS 학습 노트" backTo={userPaths.noteList} backLabel="목록" wide stickyOnWide actions={
@@ -198,7 +201,7 @@ function NoteRead({ noteId }: { noteId: string }) {
               : null}
           </article>}
     </main>
-    <AiExplainSheet open={openAi !== null} onClose={() => setOpenAi(null)} openId={openAi?.openId ?? 0} target={openAi?.target ?? null} text={openAi?.text ?? ''} onLoginRequired={onAiLoginRequired} onReloadNote={onReloadNote} />
+    <AiExplainSheet open={openAi !== null} onClose={() => setOpenAi(null)} openId={openAi?.openId ?? 0} target={openAi?.target ?? null} text={openAi?.text ?? ''} onLoginRequired={onAiLoginRequired} onReloadNote={onReloadNote} returnFocus={() => articleRef.current} />
     {/* 용어를 누르면 열리는 시트(F1-3). 시트 안 즐겨찾기 버튼(MEG-90)과 로그인 안내 연결(MEG-77)이 이 안에 있다. */}
     <TermSheet open={term !== undefined} onClose={() => setOpenTerm(null)} openId={openTerm?.openId ?? 0} termId={openTerm?.termId ?? null} label={term?.label ?? ''} onLoginRequired={onFavoriteLoginRequired}
       panelId={panelId} returnFocus={() => lastTermLink.current} />

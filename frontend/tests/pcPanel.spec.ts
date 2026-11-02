@@ -194,3 +194,86 @@ test.describe('PC 폭 로그인 안내', () => {
     expect(await loginDialog(page).evaluate((element) => element.matches(':modal'))).toBe(true)
   })
 })
+
+// AI 설명 패널(F2-2a PC): 로그인한 사용자가 단어를 골라 연다. 가짜 응답(E09 예시 3)이고 실제 E09 연동은 확인하지 못한다.
+const aiPanel = (page: Page) => page.getByRole('dialog', { name: 'UnknownWord' })
+const reportDialog = (page: Page) => page.getByRole('dialog', { name: '오류 신고' })
+
+async function loginAsMember(page: Page) {
+  await page.goto('/login')
+  await page.getByLabel('이메일').fill('member@example.test')
+  await page.getByLabel('비밀번호').fill('example-password')
+  await page.getByRole('button', { name: '로그인' }).click()
+  await expect(page).toHaveURL(/\/quiz$/)
+  // 가짜 로그인 상태는 메모리에만 있어 새로 고치지 않고 앱 안에서 경로를 옮긴다
+  await page.evaluate(() => {
+    history.pushState({}, '', '/notes/11')
+    dispatchEvent(new PopStateEvent('popstate'))
+  })
+  await page.locator('[data-note-body]').waitFor()
+}
+
+async function openAiPanel(page: Page) {
+  await selectText(page, 'UnknownWord')
+  await page.getByRole('button', { name: 'AI 설명', exact: true }).click()
+  await expect(aiPanel(page)).toBeVisible()
+}
+
+test.describe('PC 폭 AI 설명 패널', () => {
+  test.use({ viewport: PC })
+
+  test('AC-5 AI 설명이 오른쪽 480px 비모달 패널로 열리고 버튼 줄에 "오류 신고"만 있다(즐겨찾기 별 없음)', async ({ page }) => {
+    await loginAsMember(page)
+    await openAiPanel(page)
+    const rect = await box(aiPanel(page))
+    expect(Math.round(rect.width)).toBe(480)
+    expect(Math.round(rect.x + rect.width)).toBe(PC.width)
+    expect(Math.round(rect.y)).toBe(57)
+    expect(await aiPanel(page).evaluate((element) => element.matches(':modal'))).toBe(false)
+    await expect(aiPanel(page).getByText('AI 생성·검수 전')).toBeVisible()
+    await expect(aiPanel(page).getByRole('group', { name: 'AI 생성 설명' }).getByText('합성 AI 설명입니다.')).toBeVisible()
+    await expect(aiPanel(page).getByRole('button', { name: '오류 신고' })).toBeVisible()
+    // AI 설명 즐겨찾기는 이번 범위가 아니라 별 버튼을 그리지 않는다
+    await expect(aiPanel(page).getByRole('button', { name: /즐겨찾기/ })).toHaveCount(0)
+    // 본문은 패널에 가려지지 않는다
+    expect(Math.round((await box(page.locator('article'))).x)).toBe(40)
+    expect(await page.evaluate(() => document.body.style.overflow)).not.toBe('hidden')
+  })
+
+  test('AC-5 "오류 신고"를 누르면 기존 입력 모달이 패널 위에 열리고, Esc는 모달만 닫은 뒤 패널을 닫는다', async ({ page }) => {
+    await loginAsMember(page)
+    await openAiPanel(page)
+    await aiPanel(page).getByRole('button', { name: '오류 신고' }).click()
+    await expect(reportDialog(page)).toBeVisible()
+    expect(await reportDialog(page).evaluate((element) => element.matches(':modal'))).toBe(true)
+    await expect(aiPanel(page)).toBeVisible() // 패널은 그대로 아래에 있다
+    await page.keyboard.press('Escape')
+    await expect(reportDialog(page)).toBeHidden()
+    await expect(aiPanel(page)).toBeVisible() // 모달만 닫혔다
+    await page.keyboard.press('Escape')
+    await expect(aiPanel(page)).toBeHidden()
+  })
+
+  test('AI 설명 패널을 닫으면 포커스가 본문으로 돌아온다', async ({ page }) => {
+    await loginAsMember(page)
+    await openAiPanel(page)
+    await expect(aiPanel(page).getByRole('heading', { name: 'UnknownWord' })).toBeFocused() // 처음 열 때 제목으로
+    await aiPanel(page).getByRole('button', { name: '닫기' }).click()
+    await expect(aiPanel(page)).toBeHidden()
+    await expect(page.locator('article')).toBeFocused()
+  })
+
+  test('패널은 한 번에 하나만 열린다: 용어 패널이 열린 채 AI 설명을 열면 용어 패널이 닫히고, 반대도 같다', async ({ page }) => {
+    await loginAsMember(page)
+    await term(page).click()
+    await expect(panel(page)).toBeVisible()
+    await openAiPanel(page)
+    await expect(panel(page)).toBeHidden()
+    await expect(page.getByRole('dialog')).toHaveCount(1) // 열린 패널은 AI 설명 하나
+    // 반대로 AI 패널이 열린 채 용어를 누르면 AI 패널이 닫히고 용어 패널이 열린다
+    await term(page).click()
+    await expect(panel(page)).toBeVisible()
+    await expect(aiPanel(page)).toBeHidden()
+    await expect(term(page)).toHaveAttribute('aria-expanded', 'true')
+  })
+})

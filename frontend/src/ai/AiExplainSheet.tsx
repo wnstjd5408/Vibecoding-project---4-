@@ -5,8 +5,8 @@ import type { ExplainResponse } from '../api/types.ts'
 import { AiBadge } from '../components/AiBadge.tsx'
 import { AiBox } from '../components/AiBox.tsx'
 import { Badge } from '../components/Badge.tsx'
-import { BottomSheet } from '../components/BottomSheet.tsx'
 import { Button } from '../components/Button.tsx'
+import { ResponsiveSheet } from '../components/ResponsiveSheet.tsx'
 import { StateMessage } from '../components/StateMessage.tsx'
 import { NoteBody } from '../notes/NoteBody.tsx'
 import { ReportControl } from '../reports/ReportControl.tsx'
@@ -71,11 +71,13 @@ type AiExplainSheetProps = {
   onLoginRequired: (error: unknown) => boolean
   // 노트가 바뀌었다(409 stale_revision)는 안내에서 "노트 다시 불러오기"를 눌렀을 때 부른다.
   onReloadNote: () => void
+  // PC 폭의 사이드 패널을 닫을 때 포커스를 돌려줄 요소(본문)
+  returnFocus?: () => HTMLElement | null
 }
 
-// AI 설명 시트(F2-2a). 열릴 때 E09를 한 번 부르고, 응답 세 갈래(AI 설명·사전 설명·1회용 설명)를 그린다.
+// AI 설명 시트(F2-2a). 1024px 이상에서는 같은 내용을 오른쪽 사이드 패널로 보인다(ResponsiveSheet). 열릴 때 E09를 한 번 부르고, 응답 세 갈래(AI 설명·사전 설명·1회용 설명)를 그린다.
 // 시트는 기존 BottomSheet를 그대로 쓴다. 제목 포커스, Esc·닫기·막 누르기, 연 요소로의 포커스 복귀는 BottomSheet가 맡는다.
-export function AiExplainSheet({ open, onClose, openId, target, text, onLoginRequired, onReloadNote }: AiExplainSheetProps) {
+export function AiExplainSheet({ open, onClose, openId, target, text, onLoginRequired, onReloadNote, returnFocus }: AiExplainSheetProps) {
   // 제목 위 표시(목업 F2-2a). 응답이 오면 갈래에 따라 정해지고, 시트를 새로 열면 비운다. 렌더 중에 열림 번호 변화를 알아채 바꾸는 것이 React가 권하는 방식이다.
   const [badge, setBadge] = useState<ReactNode>(null)
   const [badgeFor, setBadgeFor] = useState(openId)
@@ -84,9 +86,9 @@ export function AiExplainSheet({ open, onClose, openId, target, text, onLoginReq
     setBadge(null)
   }
   return (
-    <BottomSheet open={open} onClose={onClose} badge={badge} title={shortTitle(text)}>
+    <ResponsiveSheet open={open} onClose={onClose} badge={badge} title={shortTitle(text)} returnFocus={returnFocus}>
       {open && target !== null ? <AiExplainContent key={openId} target={target} onBadge={setBadge} onLoginRequired={onLoginRequired} onReloadNote={onReloadNote} /> : null}
-    </BottomSheet>
+    </ResponsiveSheet>
   )
 }
 
