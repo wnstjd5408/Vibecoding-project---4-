@@ -72,3 +72,11 @@ JSON·세 요약·출처 ID는 기계적으로 검증한다. 사실·핵심 개�
 Vercel Functions에서는 요청의 `x-vercel-oidc-token`을 요청 단위로 STS에 전달한다. 빌드 시 `VERCEL_OIDC_TOKEN`을 런타임에 재사용하거나 전역 환경변수로 옮기지 않는다. 로컬 환경변수 경로는 Vercel 밖에서만 허용한다. 근거: https://vercel.com/docs/oidc
 
 `eval_auth code=` 로그에는 role_missing, token_missing 또는 허용 목록의 STS 오류 코드만 기록한다. 토큰·ARN·원격 오류 메시지는 남기지 않는다. AccessDenied이면 역할의 issuer/aud/sub 조건을, InvalidIdentityToken/ExpiredToken이면 공급자·토큰 유효성을 확인한다. 실제 신뢰 정책의 정상 여부는 배포 후 무과금 preflight로 확인한다.
+
+## 프롬프트 v2 (MEG-151)
+
+`live_output.OUTPUT_RULES`의 explanation-v2는 문맥으로 설명 가능한 경우 외부 출처 부재만으로 한계 안내를 생성하지 않도록 한다. 실제 모호성·교정 근거 부재는 표시하고 용어 설명을 유지한다. JSON 계약은 그대로다.
+
+요청 전체의 requests_hash가 변경되므로 이전 원장 승인은 일치하지 않으며 이전 실행 재개도 거부된다. 새 평가에는 새 run_id와 승인 행이 필요하다. 기존 승인 원장·봉인 셋·기존 점수는 변경하지 않는다.
+
+`test_eval_prompt_v2.py`는 별도 합성 문맥 6개로 요청 자료 격리와 출력 형식·인용 거부, 변경된 프롬프트의 재개 차단을 무과금으로 확인한다. 예시 응답은 사람이 작성한 정적 fixture이며 모델 행동·설명 품질 개선의 증거가 아니다. 모델 호출은 하지 않는다. 불필요한 안내 감소, 조건 보존, 실제 토큰 증분은 후속 승인된 모델 평가 전까지 미검증이다.
