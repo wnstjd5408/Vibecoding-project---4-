@@ -1572,6 +1572,299 @@ test('A가 429 대기 중일 때 같은 표시 이름의 B로 로그인하면 B�
   await expect(page.getByText('초 뒤에 다시 시도할 수 있어요')).toHaveCount(0)
 })
 
+// ---- MEG-107 오류 신고(E10). 실제 AI 설명 시트와 퀴즈 카드에서 브라우저 fetch 경로와 합성 HTTP 응답으로 시험한다. ----
+// 실제 백엔드의 E10 저장, 서버의 중복 방지, 운영자 신고 목록은 확인하지 못한다.
+
+type ReportCall = { target: { type: string; id: number }; body: string }
+type ReportReply = { status: number; json: unknown } | 'abort'
+
+async function setupReport(page: Page, respond: (call: ReportCall, n: number) => ReportReply | Promise<ReportReply>, ai: { explain?: unknown } = {}) {
+  const calls: ReportCall[] = []
+  await setupAi(page, { member: true, respond: () => ({ status: 200, json: ai.explain ?? aiSuccess }) })
+  await page.route('**/api/reports', async (route) => {
+    calls.push(route.request().postDataJSON())
+    const reply = await respond(calls[calls.length - 1], calls.length)
+    if (reply === 'abort') return route.abort()
+    return route.fulfill(reply)
+  })
+  return calls
+}
+
+const reportSheet = (page: Page) => page.getByRole('dialog', { name: '오류 신고' })
+const reportOpen = (page: Page) => page.getByRole('dialog', { name: 'UnknownWord' }).getByRole('button', { name: '오류 신고' })
+const reportSubmit = (page: Page) => reportSheet(page).getByRole('button', { name: '신고 보내기' })
+const reportInput = (page: Page) => reportSheet(page).getByLabel('신고 내용')
+const created = (): ReportReply => ({ status: 201, json: { id: 5, status: 'open' } })
+
+async function openReportFromAi(page: Page, text = '합성 신고 내용') {
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('합성 AI 설명입니다.')).toBeVisible()
+  await reportOpen(page).click()
+  await expect(reportSheet(page)).toBeVisible()
+  if (text) await reportInput(page).fill(text)
+}
+
+test('AC-1 AI 설명 시트에서 신고를 보내면 target과 본문이 전달되고 201 뒤 입력 화면이 닫히며 접수 안내가 보인다', async ({ page }) => {
+  const calls = await setupReport(page, () => created())
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSheet(page)).toBeHidden()
+  await expect(page.getByRole('status').filter({ hasText: '신고가 접수됐어요' })).toBeVisible()
+  expect(calls).toEqual([{ target: { type: 'ai_explanation', id: 31 }, body: '합성 신고 내용' }])
+  await expect(page.getByRole('status').filter({ hasText: '이미 접수된 신고예요' })).toHaveCount(0)
+})
+
+test('AC-1 퀴즈 카드에서 신고를 보내면 quiz_item 문항 id와 본문이 전달된다', async ({ page }) => {
+  const calls: ReportCall[] = []
+  await setupQuiz(page, { respond: () => ok({ status: 'ready', quiz_date: '2026-10-23', items: quizItems }) })
+  await page.route('**/api/reports', (route) => {
+    calls.push(route.request().postDataJSON())
+    return route.fulfill({ status: 201, json: { id: 6, status: 'open' } })
+  })
+  await page.goto('/quiz')
+  const second = page.getByRole('main').getByRole('listitem').nth(1)
+  await second.getByRole('button', { name: '오류 신고' }).click()
+  await reportInput(page).fill('질문이 이상해요')
+  await reportSubmit(page).click()
+  await expect(reportSheet(page)).toBeHidden()
+  await expect(second.getByRole('status').filter({ hasText: '신고가 접수됐어요' })).toBeVisible()
+  await expect(page.getByRole('main').getByRole('listitem').first().getByRole('status')).toHaveText('') // 다른 카드에는 안내가 없다
+  expect(calls).toEqual([{ target: { type: 'quiz_item', id: 42 }, body: '질문이 이상해요' }])
+})
+
+test('reportable이 false인 1회용 AI 설명에는 신고 버튼이 없다', async ({ page }) => {
+  await setupReport(page, () => created(), { explain: { source: 'ai', term: null, explanation: { id: null, body: '합성 1회용 AI 설명입니다.' }, reportable: false } })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('합성 1회용 AI 설명입니다.')).toBeVisible()
+  await expect(page.getByRole('button', { name: '오류 신고' })).toHaveCount(0)
+})
+
+test('reportable이 true여도 explanation.id가 없으면 신고 버튼이 없다', async ({ page }) => {
+  await setupReport(page, () => created(), { explain: { ...aiSuccess, explanation: { ...aiSuccess.explanation, id: null } } })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('합성 AI 설명입니다.')).toBeVisible()
+  await expect(page.getByRole('button', { name: '오류 신고' })).toHaveCount(0)
+})
+
+test('AC-3 기존 신고가 200으로 돌아오면 오류가 아니라 성공이고 "이미 접수된 신고예요"가 보인다', async ({ page }) => {
+  await setupReport(page, () => ({ status: 200, json: { id: 5, status: 'open' } }))
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSheet(page)).toBeHidden()
+  await expect(page.getByRole('status').filter({ hasText: '신고가 접수됐어요' })).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: '이미 접수된 신고예요' })).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+})
+
+test('AC-2 404는 공통 안내를 보이고 입력한 내용을 유지한다(사유를 추측하지 않는다)', async ({ page }) => {
+  await setupReport(page, () => ({ status: 404, json: aiError('not_found') }))
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSheet(page).getByRole('alert')).toContainText('신고할 대상을 찾을 수 없어요')
+  await expect(reportSheet(page)).toBeVisible()
+  await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+})
+
+test('AC-2 422는 fields[].reason에 따라 내용 칸 아래에 안내하고 입력을 유지한다', async ({ page }) => {
+  await setupReport(page, () => ({ status: 422, json: { error: { ...aiError('validation_failed').error, fields: [{ name: 'body', reason: 'too_long', message: 'Value is too long' }] } } }))
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSheet(page).getByRole('alert')).toContainText('1,000자 이하')
+  await expect(reportInput(page)).toHaveAttribute('aria-invalid', 'true')
+  await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+  await expect(reportSheet(page)).toBeVisible()
+})
+
+test('AC-2 401 login_required는 로그인 안내를 열고, 안내를 닫아도 작성한 신고 내용이 남는다', async ({ page }) => {
+  await setupReport(page, () => ({ status: 401, json: aiError('login_required') }))
+  await openReportFromAi(page, '로그인이 풀리기 전에 쓴 내용')
+  await reportSubmit(page).click()
+  await expect(aiLoginSheet(page)).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(aiLoginSheet(page)).toBeHidden()
+  await expect(reportSheet(page)).toBeVisible()
+  await expect(reportInput(page)).toHaveValue('로그인이 풀리기 전에 쓴 내용')
+})
+
+test('AC-2 429는 입력을 유지하고 retry_after_seconds가 지난 뒤에만 다시 보낼 수 있다', async ({ page }) => {
+  await page.clock.install()
+  const calls = await setupReport(page, (_call, n) => n === 1
+    ? { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 30 } } }
+    : created())
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSheet(page).getByRole('alert')).toContainText('30초 뒤에 다시 보낼 수 있어요')
+  await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+  await reportSubmit(page).click({ force: true })
+  await page.waitForTimeout(200)
+  expect(calls).toHaveLength(1) // 기한 전에는 다시 보내지 않는다
+  await page.clock.fastForward(31_000)
+  await expect(reportSubmit(page)).not.toHaveAttribute('aria-disabled', 'true')
+  await reportSubmit(page).click()
+  await expect(reportSheet(page)).toBeHidden()
+  expect(calls).toHaveLength(2)
+})
+
+test('AC-2 네트워크 오류 뒤에는 입력을 유지하고 바로 다시 보낼 수 있다', async ({ page }) => {
+  const calls = await setupReport(page, (_call, n) => n === 1 ? 'abort' : created())
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSheet(page).getByRole('alert')).toContainText('신고를 보내지 못했어요')
+  await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+  await reportSubmit(page).click()
+  await expect(reportSheet(page)).toBeHidden()
+  expect(calls).toHaveLength(2)
+})
+
+test('입력 경계: 빈 본문도 보내고, 현재 글자 수와 상한을 보이며, 상한을 넘는 입력은 1,000자로 줄인다', async ({ page }) => {
+  const calls = await setupReport(page, () => created())
+  await openReportFromAi(page, '')
+  await expect(reportSheet(page).getByText('0 / 1,000자')).toBeVisible()
+  await reportInput(page).fill('😀'.repeat(1200)) // 😀는 UTF-16으로 두 칸이지만 코드포인트로는 하나다. 글자 수는 코드포인트로 센다
+  await expect(reportSheet(page).getByText('1,000 / 1,000자')).toBeVisible()
+  expect([...(await reportInput(page).inputValue())]).toHaveLength(1000)
+  await reportInput(page).fill('')
+  await reportSubmit(page).click()
+  await expect(reportSheet(page)).toBeHidden()
+  expect(calls).toEqual([{ target: { type: 'ai_explanation', id: 31 }, body: '' }])
+})
+
+test('보내는 동안에는 보내기 버튼이 막혀 같은 신고가 두 번 나가지 않는다', async ({ page }) => {
+  const held = gate()
+  const calls = await setupReport(page, async () => {
+    await held.promise
+    return created()
+  })
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSubmit(page)).toHaveAttribute('aria-disabled', 'true')
+  await reportSubmit(page).click({ force: true })
+  await page.waitForTimeout(200)
+  expect(calls).toHaveLength(1)
+  held.release()
+  await expect(reportSheet(page)).toBeHidden()
+})
+
+// 독립 리뷰 보완: 보내는 중 시트를 닫은 뒤 늦게 429가 와도 다시 열면 이유가 보이고, 보내는 동안에는 입력칸이 잠긴다.
+test('보내는 중 시트를 닫은 뒤 늦게 429가 와도 다시 열면 대기 안내가 보이고 보내기가 막혀 있다', async ({ page }) => {
+  const held = gate()
+  const calls = await setupReport(page, async () => {
+    await held.promise
+    return { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 600 } } }
+  })
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await page.keyboard.press('Escape')
+  await expect(reportSheet(page)).toBeHidden()
+  held.release()
+  await page.waitForTimeout(300)
+  await reportOpen(page).click()
+  await expect(reportSheet(page).getByRole('alert')).toContainText('600초 뒤에 다시 보낼 수 있어요')
+  await expect(reportSubmit(page)).toHaveAttribute('aria-disabled', 'true')
+  await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+  expect(calls).toHaveLength(1)
+})
+
+test('보내는 동안에는 입력칸이 읽기 전용이라 그 사이에 고친 내용이 성공 뒤 조용히 사라지지 않는다', async ({ page }) => {
+  const held = gate()
+  await setupReport(page, async () => {
+    await held.promise
+    return created()
+  })
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportInput(page)).toHaveAttribute('aria-disabled', 'true')
+  await expect(reportInput(page)).toHaveAttribute('readonly', '')
+  held.release()
+  await expect(reportSheet(page)).toBeHidden()
+})
+
+test('신고 시트에서 Esc나 닫기를 눌러도 바깥 AI 설명 시트는 열려 있다(겹친 시트는 안쪽만 닫힌다)', async ({ page }) => {
+  await setupReport(page, () => created())
+  await openReportFromAi(page, '')
+  await page.keyboard.press('Escape')
+  await expect(reportSheet(page)).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' })).toBeVisible()
+  await reportOpen(page).click()
+  await reportSheet(page).getByRole('button', { name: '닫기' }).click()
+  await expect(reportSheet(page)).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' })).toBeVisible()
+  await expect(page.getByText('합성 AI 설명입니다.')).toBeVisible()
+})
+
+// 준성님 답변(2026-11-02) 반영: 422의 target 오류와 알 수 없는 필드·reason도 안내와 입력 유지, 1,000자는 코드포인트 기준(조합 이모지 포함).
+const validation = (fields: { name: string; reason: string }[]): ReportReply => ({
+  status: 422,
+  json: { error: { ...aiError('validation_failed').error, fields: fields.map((field) => ({ ...field, message: 'synthetic english message' })) } },
+})
+
+for (const [name, reply] of [
+  ['target required', validation([{ name: 'target', reason: 'required' }])],
+  ['target.type invalid_value', validation([{ name: 'target.type', reason: 'invalid_value' }])],
+] as const) {
+  test(`AC-2 422 ${name}는 대상 안내를 보이고 입력을 유지한다`, async ({ page }) => {
+    await setupReport(page, () => reply)
+    await openReportFromAi(page)
+    await reportSubmit(page).click()
+    await expect(reportSheet(page).getByRole('alert')).toContainText('신고할 대상을 찾을 수 없어요')
+    await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+  })
+}
+
+test('AC-2 알 수 없는 422 필드·reason도 안내를 보이고 입력을 유지한다(message로 분기하지 않는다)', async ({ page }) => {
+  await setupReport(page, () => validation([{ name: 'something_new', reason: 'unknown_reason' }]))
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSheet(page).getByRole('alert')).toContainText('신고를 보내지 못했어요')
+  await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+  await expect(reportSheet(page)).toBeVisible()
+})
+
+test('입력 경계: 1,000자는 코드포인트 기준이다(조합 이모지는 화면에 하나여도 여러 글자로 센다)', async ({ page }) => {
+  const calls = await setupReport(page, () => created())
+  await openReportFromAi(page, '')
+  const family = '👨‍👩‍👧' // 코드포인트 5개(사람 3 + 이음 문자 2)
+  expect([...family]).toHaveLength(5)
+  await reportInput(page).fill(family.repeat(200)) // 정확히 1,000 코드포인트: 줄이지 않고 그대로 보낸다
+  await expect(reportSheet(page).getByText('1,000 / 1,000자')).toBeVisible()
+  await reportSubmit(page).click()
+  await expect(reportSheet(page)).toBeHidden()
+  expect(calls[0].body).toBe(family.repeat(200))
+  await reportOpen(page).click()
+  await reportInput(page).fill(family.repeat(201)) // 1,005 코드포인트: 서버가 거부하기 전에 화면이 1,000으로 줄인다
+  await expect(reportSheet(page).getByText('1,000 / 1,000자')).toBeVisible()
+  expect([...(await reportInput(page).inputValue())]).toHaveLength(1000)
+})
+
+// PR #88 Codex 리뷰 P2: 겹쳐 열린 BottomSheet가 각자 저장한 overflow를 복원하다가 로그인 페이지로 이동한 뒤에도 스크롤 잠금이 남았다.
+// 마지막 모달이 닫힐 때 원래 값으로 돌아가야 한다.
+const bodyOverflow = (page: Page) => page.evaluate(() => document.body.style.overflow)
+
+test('신고 중 401로 로그인 안내를 열고 로그인 링크로 이동하면 페이지 스크롤 잠금이 풀린다', async ({ page }) => {
+  await setupReport(page, () => ({ status: 401, json: aiError('login_required') }))
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(aiLoginSheet(page)).toBeVisible()
+  expect(await bodyOverflow(page)).toBe('hidden')
+  await aiLoginSheet(page).getByRole('link', { name: '로그인' }).click()
+  await expect.poll(() => bodyOverflow(page)).toBe('')
+})
+
+test('겹친 시트는 안쪽만 닫아도 바깥 시트가 열려 있는 동안 스크롤 잠금을 유지하고, 모두 닫히면 푼다', async ({ page }) => {
+  await setupReport(page, () => created())
+  await openReportFromAi(page, '')
+  expect(await bodyOverflow(page)).toBe('hidden')
+  await page.keyboard.press('Escape') // 신고 시트만 닫는다
+  await expect(reportSheet(page)).toBeHidden()
+  expect(await bodyOverflow(page)).toBe('hidden') // AI 설명 시트가 아직 열려 있다
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' })).toBeHidden()
+  expect(await bodyOverflow(page)).toBe('')
+})
+
 // ---- MEG-137 AI 설명(E09) 요청·재시도 키·대기를 로그인 세션별로 분리. 실제 로그아웃·로그인 흐름과 합성 HTTP 응답으로 시험한다. ----
 // 같은 노트·개정·선택을 다른 계정(표시 이름이 같아도 된다)이 요청해도 이전 세션의 진행 중 요청·응답·오류·대기·재시도 키를 이어받으면 안 된다.
 // 실제 백엔드의 E09·세션 만료·권한/열람 기록은 확인하지 못한다.
