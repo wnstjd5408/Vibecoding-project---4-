@@ -297,8 +297,8 @@ def converse_text(
     text = "".join(
         block["text"] for block in blocks if isinstance(block, Mapping) and isinstance(block.get("text"), str)
     )
-    # 응답은 end_turn이고 text가 있을 때만 쓴다. 추론이 예산을 다 쓰면 text 없이 끝난다.
-    if stop_reason != "end_turn" or not text:
+    # 응답은 end_turn이고 text가 있을 때만 쓴다. 추론이 예산을 다 쓰면 text 없이 끝난다. 공백뿐인 text도 없는 것이다.
+    if stop_reason != "end_turn" or not text.strip():
         raise AiCallError(
             "response", stop_reason or "NoText", input_tokens=input_tokens, output_tokens=output_tokens
         )

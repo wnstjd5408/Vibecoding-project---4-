@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app import accounts, eval_staging, glossary, notes
+from app import accounts, ai_explain, eval_staging, glossary, notes
 from app.common import install_common_layer
 
 app = FastAPI(title="Vibecoding project 4 API")
@@ -10,6 +10,7 @@ app.include_router(accounts.router)
 app.include_router(eval_staging.router)
 app.include_router(notes.router)
 app.include_router(glossary.router)
+app.include_router(ai_explain.router)
 
 
 @app.get("/health", include_in_schema=False)
