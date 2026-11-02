@@ -14,7 +14,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 # 요청 파일 상한 4MB(Vercel 본문 한도 4.5MB 아래, 기술 검토 구조 결정 9번)
 MAX_UPLOAD_BYTES = 4 * 1024 * 1024
-# 재인코딩 결과 상한. 버킷 file_size_limit(마이그레이션 20261102150000)과 같다.
+# 재인코딩 결과 상한. 버킷 file_size_limit(마이그레이션 20261102160000)과 같다.
 MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 MAX_SIDE = 8_000
 MAX_PIXELS = 25_000_000

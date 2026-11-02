@@ -473,7 +473,7 @@ class SupabaseClient:
             raise SupabaseConfigError("glossary image storage_path has an empty or dot segment")
         return f"{self._url}/storage/v1/object/public/{bucket}/{quote(storage_path, safe='/')}"
 
-    # --- E19~E23 운영자 사전 (MEG-81). 여러 문장을 묶는 쓰기는 SQL 함수(마이그레이션 20261102150000)로 한다. ---
+    # --- E19~E23 운영자 사전 (MEG-81). 여러 문장을 묶는 쓰기는 SQL 함수(마이그레이션 20261102160000)로 한다. ---
 
     def list_admin_glossary_terms(self, limit: int, before_id: int | None) -> list[dict[str, Any]]:
         """사전 용어(glossary_entries 행이 있는 terms)의 id·key·label을 id 내림차순으로 limit개까지 준다.
