@@ -1,5 +1,21 @@
 # 소량 실제 호출 준비 상태
 
+> 2026-11-02 개정: GPT-6 Luna 유지. 아래 과거의 tokenizer 필수 차단 설명은 `luna-service-envelope-2026-11-02` 정책에는 적용하지 않는다. 실제 토큰 수를 사전에 주장하지 않고 공식 서비스 컨텍스트 전체와 장문 최대 입력 단가로 예약한다. 승인 금액은 비공개 설정에 둔다.
+
+## CountTokens 없는 비용 예약
+
+`luna_budget.py`는 Global Standard Luna만 허용한다. 모델 공식 컨텍스트 1,050,000 전체를 입력 상한으로 보고 장문 캐시 쓰기 단가를 적용하고, 출력 상한을 별도로 더한다. 이는 실제 입력량 추정이 아니라 서비스 최대치에 기반한 보수적 예약이다. 입력 payload는 UTF-8 16,000 bytes로 제한하되 이를 토큰 수로 환산하지 않는다. payload 초과 시 원문을 자르지 않고 거부한다.
+
+설정은 `max_input=1050000`, `max_output=8192`, `tokenizer_version`과 `price_version` 모두 `luna-service-envelope-2026-11-02`로 고정한다. `input_price`·`output_price`는 정책의 장문 단가와 일치해야 한다. 사용량 정산은 실측 입력 규모에 따라 단가를 고르고 캐시 항목을 보존한다. 캐시 usage 의미가 공급자 청구와 일치하는지는 첫 실측 때 대조하며 현재 비용 값은 추정치다. 모델 별칭·가격 변경 시 재확인이 필요하다. 세금·DB/배포 비용은 모델 호출 원장 범위 밖이다.
+
+## 공유 원장 연결 현황
+
+`shared_ledger.py`와 `sql/shared_ledger.sql`을 추가했다. SQL은 staging에 **아직 적용하지 않았다**. 기존 제품 원장을 변경하지 않는 평가 전용 테이블/RPC다. 사람이 검토해 적용한 후 승인 행을 하나만 등록한다. 필드: 승인 ID, 고정 run_id, 실행 identity 해시, 허용 슬롯 3개, 예산, 회당 예약액. `EVAL_APPROVAL_ID`는 이 승인 ID를 가리킨다.
+
+`SharedLedger.from_env()`로 원장을 만들고 `calibration(..., ledger=ledger)`에 전달한다. 실제 BedrockTransport는 이 원장 없이 거부된다. DB에서 승인 행을 잠근 후 예약/횟수 증가를 원자 처리한다. 중복 슬롯·변경된 실행 해시·동시 호출·unknown은 거부하고 예약액은 자동 반환하지 않는다. 로컬 결과 파일을 잃었어도 DB의 중복 예약이 호출을 차단한다. 서버리스의 로컬 파일은 보조 결과 사본이며 비용 권한의 원본은 DB다.
+
+임시 PostgreSQL 검증: `tests/eval_ledger_checks.sql`. 외부 DB 적용·OIDC·실제 공급자 호출은 별도 검증 대상이다. 테이블/RPC 적용과 승인 행 생성까지 확인하기 전에는 실행하지 않는다.
+
 `live.py`는 Bedrock Converse 어댑터와 최대 3개 개발 슬롯의 예약·저장·재개 경계를 구현한다. 기존 fake 실행기와 제품 API는 바꾸지 않는다. 현재는 실행 가능한 live CLI를 제공하지 않는다.
 
 ## 실행 차단 조건

@@ -11,6 +11,7 @@ from .dataset import _digest, freeze_dataset
 from .runner import atomic, prepare, private_path, price
 from .schema import DatasetError
 from .live_output import OUTPUT_RULES, validate_output
+from . import luna_budget
 
 MODEL = "global.openai.gpt-6-luna"
 SDK_CONFIG = Config(retries={"total_max_attempts": 1, "mode": "standard"},
@@ -41,7 +42,7 @@ def request_for(case, config):
             "additionalModelRequestFields": {"reasoning": {"effort": "none"}}}
 
 
-def calibration(cases, manifest, config, directory, case_ids, transport):
+def calibration(cases, manifest, config, directory, case_ids, transport, *, ledger=None):
     """One approval ledger directory must be reused; never retry uncertain attempts.
 
     Token bound is deliberately unavailable until a reviewed implementation exists.
@@ -59,13 +60,19 @@ def calibration(cases, manifest, config, directory, case_ids, transport):
     if any(k not in lookup for k in case_ids):
         raise DatasetError("live: development_only")
     requests = {k: request_for(lookup[k], config) for k in case_ids}
-    for request in requests.values():
-        count = input_bound(request)
-        if type(count) is not int or not 0 <= count <= config.max_input:
-            raise DatasetError("live: input_limit")
-    reserve = price(config, config.max_input, config.max_output)
+    envelope = config.tokenizer_version == luna_budget.POLICY
+    if envelope:
+        reserve = luna_budget.reservation(config, requests)
+    else:
+        for request in requests.values():
+            count = input_bound(request)
+            if type(count) is not int or not 0 <= count <= config.max_input:
+                raise DatasetError("live: input_limit")
+        reserve = price(config, config.max_input, config.max_output)
     if reserve * len(requests) > Decimal(config.budget) or reserve <= 0:
         raise DatasetError("live: budget_exceeded")
+    if isinstance(transport, BedrockTransport) and (not envelope or ledger is None):
+        raise DatasetError("live: durable_ledger_required")
     directory = private_path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     lock = directory / ".lock"
@@ -96,6 +103,10 @@ def calibration(cases, manifest, config, directory, case_ids, transport):
             state["slots"][key] = row
             state["provider_calls"] += 1
             atomic(path, state)
+            if ledger is not None:
+                # Must atomically reserve against one shared approval, never a new run budget.
+                # An uncertain reservation failure is not retried by this runner.
+                ledger.reserve(config.run_id, key, _digest(identity), str(reserve))
             start = time.monotonic()
             try:
                 response = transport(request)
@@ -116,6 +127,8 @@ def calibration(cases, manifest, config, directory, case_ids, transport):
                     inp, out, read, write = values
                     # Conservative charge: cache reads at full input rate; writes at 1.25x.
                     cost = price(config, inp + read, out) + Decimal(config.input_price) * write * Decimal("1.25") / 1000000
+                    if envelope:
+                        cost = luna_budget.usage_estimate(inp, out, read, write)
                     row.update(cost_upper_estimate=str(cost), input_tokens=inp, output_tokens=out)
                     output = response.get("output")
                     message = output.get("message") if isinstance(output, dict) else None
@@ -133,6 +146,8 @@ def calibration(cases, manifest, config, directory, case_ids, transport):
                     if inp + read + write > config.max_input or out > config.max_output or cost > reserve:
                         row["status"] = "over_limit"
             atomic(path, state)
+            if ledger is not None:
+                ledger.finish(config.run_id, key, row)
             if row["status"] in ("unknown", "over_limit"):
                 break
         return state
