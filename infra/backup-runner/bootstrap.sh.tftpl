@@ -39,10 +39,14 @@ curl --fail --silent --show-error --location --retry 5 \
   https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o "$aws_cli_dir/awscliv2.zip"
 unzip -q "$aws_cli_dir/awscliv2.zip" -d "$aws_cli_dir"
 "$aws_cli_dir/aws/install" --update
+# The private bootstrap umask also makes the installer-created tree root-only.
+# Only public CLI distribution files are shared; credentials and backups stay private.
+chmod -R a+rX /usr/local/aws-cli
 rm -rf -- "$aws_cli_dir"
 systemctl enable --now docker
 id runner >/dev/null 2>&1 || useradd --create-home --shell /bin/bash runner
 usermod -aG docker runner
+sudo -u runner /usr/local/bin/aws --version >/dev/null
 install -d -o runner -g runner -m 700 /opt/actions-runner
 curl --fail --silent --show-error --location --retry 5 \
   'https://github.com/actions/runner/releases/download/v${runner_version}/actions-runner-linux-x64-${runner_version}.tar.gz' \
