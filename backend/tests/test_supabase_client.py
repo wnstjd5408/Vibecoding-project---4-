@@ -794,3 +794,46 @@ def test_create_report_without_a_live_target_is_none_and_other_rejections_are_co
             USER_ID, "ai_explanation", 31, "x")
     with pytest.raises(SupabaseUnavailable):
         client_with(lambda r: httpx.Response(503)).create_report(USER_ID, "ai_explanation", 31, "x")
+
+
+QUIZ_DUP = {"code": "23505", "message": 'duplicate key value violates unique constraint "reports_open_quiz_item_idx"'}
+QUIZ_FK = {"code": "23503", "message": 'violates foreign key constraint "reports_quiz_item_id_fkey"'}
+
+
+def test_create_report_for_a_quiz_item_uses_the_quiz_item_column_everywhere():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, dict(request.url.params)))
+        if request.method == "POST":
+            return httpx.Response(409, json=QUIZ_DUP)
+        return httpx.Response(200, json=[{"id": 8, "status": "open"}])
+
+    row, created = client_with(handler).create_report(USER_ID, "quiz_item", 41, "x")
+
+    assert (row["id"], created) == (8, False)
+    assert calls[1][1]["quiz_item_id"] == "eq.41" and "ai_explanation_id" not in calls[1][1]
+    assert client_with(lambda r: httpx.Response(409, json=QUIZ_FK)).create_report(USER_ID, "quiz_item", 41, "x") is None
+
+
+@pytest.mark.parametrize(
+    ("target_type", "error"),
+    [
+        # 열이 엇갈린 제약, 열린 신고가 아닌 유일 제약은 대상 없음·중복이 아니라 설정 오류다
+        ("quiz_item", FK),
+        ("ai_explanation", QUIZ_FK),
+        ("ai_explanation", {"code": "23505", "message": 'duplicate key value violates unique constraint "reports_pkey"'}),
+    ],
+    ids=["fk-of-another-column", "fk-of-the-other-target", "other-unique-constraint"],
+)
+def test_create_report_does_not_misread_other_constraint_violations(target_type, error):
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(409, json=error)).create_report(USER_ID, target_type, 31, "x")
+
+
+def test_create_report_that_conflicts_twice_without_an_open_report_is_a_503_not_a_config_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json=DUP) if request.method == "POST" else httpx.Response(200, json=[])
+
+    with pytest.raises(SupabaseUnavailable):
+        client_with(handler).create_report(USER_ID, "ai_explanation", 31, "x")

@@ -8,7 +8,8 @@
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Response
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
+from pydantic_core import PydanticCustomError
 
 from app.auth import SessionUser, require_login
 from app.errors import ApiError
@@ -36,6 +37,19 @@ class ReportRequest(BaseModel):
     # 본문은 비어 있어도 된다(스키마 default '').
     body: Annotated[str, Field(max_length=REPORT_BODY_LIMIT)] = ""
 
+    @field_validator("body")
+    @classmethod
+    def storable_text(cls, value: str) -> str:
+        # Postgres text는 NUL(U+0000)을 담지 못하고, 짝 없는 서로게이트는 UTF-8로 인코딩되지 않는다. DB나 전송이
+        # 거절하면 500이 되므로 형식 오류(422)로 먼저 막는다(admin_glossary와 같은 방식).
+        if "\x00" in value:
+            raise PydanticCustomError("invalid_characters", "Value contains a NUL character")
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            raise PydanticCustomError("invalid_characters", "Value is not valid Unicode text") from None
+        return value
+
 
 @router.post("/reports", summary="E10 report a wrong AI explanation or quiz item")
 def send_report(
@@ -53,6 +67,8 @@ def send_report(
     # DB 읽기·쓰기 시도를 무제한으로 만들지 못한다(E07과 같은 방식, 명세 1.2 순서의 예외).
     limiter.check(WRITE, f"user:{user.user_id}")
     target = report.target
+    # 확인과 저장은 별도 요청이다. 확인 뒤 저장 전에 설명이 무효화되면 무효 설명에 대한 신고가 하나 저장될 수 있다
+    # (운영자 목록에 남는 정도이고 사용자에게 보이지 않는다, MEG-88 리뷰에서 수용). 퀴즈 문항 삭제는 외래 키가 막는다.
     if not supabase.report_target_exists(target.type, target.id, user.user_id):
         raise ApiError("not_found", stage="db")
     created = supabase.create_report(user.user_id, target.type, target.id, report.body)

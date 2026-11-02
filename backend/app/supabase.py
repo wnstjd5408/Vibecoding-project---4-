@@ -457,7 +457,8 @@ class SupabaseClient:
                     return rows[0], False
                 continue
             raise SupabaseConfigError(f"reports insert status {response.status_code}")
-        raise SupabaseConfigError("reports insert kept conflicting without an open report")
+        # 두 번 연달아 같은 경합이면 사용자 입력이나 설정 문제가 아니다. 다시 보내 볼 수 있게 503으로 낸다.
+        raise SupabaseUnavailable("reports insert kept conflicting without an open report")
 
     def get_note_for_explain(self, note_id: int, include_unpublished: bool) -> dict[str, Any] | None:
         """E09가 읽는 노트의 열(id, revision, is_published, body_markdown). 없거나 볼 수 없으면 None이다.

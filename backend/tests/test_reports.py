@@ -239,6 +239,29 @@ def test_malformed_requests_are_422_with_the_field_and_reason_before_any_db_work
     assert fake.target_checks == [] and fake.rpc_calls == []
 
 
+@pytest.mark.parametrize("body", ["a" + chr(0) + "b", chr(0)], ids=["nul-inside", "nul-only"])
+def test_a_nul_character_in_the_body_is_a_422_not_a_500(client, fake, body):
+    response = report(client, {"type": "ai_explanation", "id": EXPLANATION}, body=body)
+
+    assert_error(response, 422, "validation_failed")
+    assert response.json()["error"]["fields"][0] == {
+        "name": "body", "reason": "invalid_format", "message": FIELD_MESSAGES["invalid_format"]}
+    assert fake.target_checks == [] and fake.report_rows == [] and fake.rpc_calls == []
+
+
+def test_a_lone_surrogate_in_the_body_is_a_422_not_a_500(client, fake):
+    # JSON 이스케이프(백슬래시 u d800)로만 보낼 수 있다. httpx의 json=은 짝 없는 서로게이트를 인코딩하지 못한다.
+    raw = ('{"target":{"type":"ai_explanation","id":%d},"body":"앞' % EXPLANATION + chr(92) + 'ud800뒤"}').encode("utf-8")
+    headers = {**origin(), **cookie("member-token"), "Content-Type": "application/json"}
+
+    response = client.post("/api/reports", content=raw, headers=headers)
+
+    assert_error(response, 422, "validation_failed")
+    assert response.json()["error"]["fields"][0] == {
+        "name": "body", "reason": "invalid_format", "message": FIELD_MESSAGES["invalid_format"]}
+    assert fake.target_checks == [] and fake.report_rows == [] and fake.rpc_calls == []
+
+
 def test_extra_fields_are_rejected(client):
     raw = {"target": {"type": "ai_explanation", "id": 31}, "body": "x", "status": "resolved"}
 
