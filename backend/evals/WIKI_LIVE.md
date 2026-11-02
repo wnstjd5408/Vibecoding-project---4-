@@ -88,6 +88,20 @@ Human example review checks actor/context, concrete data/task, problem and
 application to that same data/task. These are semantic checks, not exact answer
 matching or keyword presence. A mechanically valid output can still fail this review.
 
+## Offline CI regression gate
+
+`Wiki eval offline regression` runs public synthetic fixtures on pull requests,
+without provider credentials, private outputs or sealed cases. It tests malformed
+JSON, missing/empty sections, unknown citations, summary count, request/approval
+boundaries and paired style diagnostics. `style_warnings` records literal review
+labels and narrowly detected unintroduced numeric disclaimers for human review;
+these heuristics can miss paraphrases and are not semantic pass/fail judgments.
+Abstract but structurally valid prose is deliberately tested as format-valid,
+not quality-approved. CI green means validators still work; it does not establish
+that the current prompt generates good answers. Live repetition and human review
+remain separate release evidence. Required-check configuration is a separate
+repository setting, not automatically established by adding this workflow.
+
 ## Grounding and output contract
 
 The single stack demonstration sources contain technical facts, not an editor

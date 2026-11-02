@@ -17,6 +17,7 @@ from .runner import atomic, private_path
 from .schema import DatasetError
 from .wiki_dev import manifest
 from .wiki_examples import example_messages
+from .wiki_quality import style_warnings
 
 VERSION = "wiki-live-v6-grounding"
 MAX_OUTPUT = 3000
@@ -233,6 +234,7 @@ def _validate_wiki(text, sources):
         body = re.sub(r"\[\d+\]|[\s*#-]", "", explanation[match.end():end])
         if not body:
             raise DatasetError("wiki_live: empty_section")
+    checked["style_warnings"] = style_warnings(explanation)
     return checked
 
 
