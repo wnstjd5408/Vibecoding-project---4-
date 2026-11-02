@@ -1,8 +1,10 @@
 """Operator-only experiment endpoints, disabled outside staging Preview."""
 import json
 import os
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import HTMLResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from app.auth import require_operator
@@ -21,6 +23,19 @@ def require_staging():
 
 router = APIRouter(prefix="/api/internal/evals", include_in_schema=False,
                    dependencies=[Depends(require_staging), Depends(require_operator)])
+
+
+@router.get("/console", response_class=HTMLResponse)
+def console():
+    return HTMLResponse((Path(staging.__file__).parent / "console.html").read_text(encoding="utf-8"),
+        headers={"Content-Security-Policy": "default-src 'none'; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+                 "X-Content-Type-Options": "nosniff"})
+
+
+@router.get("/console.js")
+def console_script():
+    return Response((Path(staging.__file__).parent / "console.js").read_text(encoding="utf-8"),
+                    media_type="text/javascript", headers={"X-Content-Type-Options": "nosniff"})
 
 
 async def bundle_from(request):

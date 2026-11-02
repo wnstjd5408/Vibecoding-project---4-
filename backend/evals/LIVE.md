@@ -22,6 +22,10 @@ uv run python -m evals.staging --dataset <cases.jsonl> --manifest <manifest.json
 
 ## 비공개 HTTP 계약
 
+로그인한 staging 운영자는 `/api/internal/evals/console`에서 요청 JSON 파일을 선택하고 무과금 사전 점검을 제출한다. 통과한 다음 슬롯만 실행 버튼이 열린다. 실행 후 결과를 확인하고 다음 슬롯 전 사전 점검을 다시 수행한다. 결과 조회는 추론을 만들지 않으며 state JSON을 다운로드할 수 있다. 파일 선택/화면 진입만으로 호출되지 않는다. 결과는 텍스트로 표시하고 브라우저 저장소에 보관하지 않는다. 오류 시 자동 재시도 없이 원장을 확인한다.
+
+화면과 스크립트 GET에도 staging/운영자 조건이 적용된다. 제품 메뉴에는 연결하지 않는다. 무과금 JS 시험은 backend에서 `node tests/eval_console_checks.cjs`로 실행한다. 아래 실행 API는 POST다.
+
 모든 경로는 POST, 동일 요청 파일을 JSON 본문으로 받는다. 활성 운영자의 기존 세션 쿠키와 허용된 staging Origin 헤더가 필요하다. Swagger에는 표시하지 않는다. `VERCEL_ENV=preview`, `VERCEL_GIT_COMMIT_REF=staging`, 승인 ID, OIDC 모드가 맞지 않으면 404다. URL을 숨기는 것은 인증을 대신하지 않는다.
 
 | 경로 | 동작 |
