@@ -157,6 +157,8 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 
 **E09 구현(MEG-87):** `POST /api/ai/explanations`는 `backend/app/ai_explain.py`가 API spec 5.5절 순서대로 처리한다. 사전과 공유 캐시(유효한 `ai_explanations`)를 먼저 읽고, 없을 때만 `run_ai_call`로 부른다. 선택 범위는 노트 본문의 유니코드 코드포인트 위치이고, 용어(80자)와 문장(500자)은 서버가 저장된 본문에서 자른다. 원장 키는 `{user_id}:{Idempotency-Key}:{attempt_no}`다. 같은 키의 재전송은 끝난 공유 설명이면 캐시로 같은 결과를 주고, 1회용 설명이나 AI 실패면 409 `result_unavailable`, `reserved`가 10분 안이면 409 `in_progress`(`Retry-After` 60초)다. 결과 저장(용어 삽입과 설명 삽입, 노트가 아직 공개이고 revision이 같은지 다시 확인)은 SQL 함수 `ai_store_explanation`이 한 트랜잭션으로 한다. 사용자별 분당 요청 제한(`AI_EXPLAIN`, 10회/60초)은 사전·캐시 응답도 센다. 연결·인증 실패는 `released`라 원장 한도에 안 잡히므로 이 제한이 호출 폭주를 막는다(MEG-145). 숫자는 제안값이다.
 
+**E11 구현(MEG-91):** `POST /api/quiz/today`는 `backend/app/quiz.py`가 API spec 6절 순서대로 처리한다. 08:30 KST 전에는 DB·AI 없이 `not_open`이다(시계는 `session.now`로 고정할 수 있다). 그 뒤에는 이미 만든 세트(`ready`)를 AI 없이 주고, 없으면 전날 열어 본·즐겨찾기한 용어에서 후보를 고른다(전날 세트에 나온 용어·자료 없는 용어 제외, 한 용어에 문항 하나, 10개 초과 때 즐겨찾기 먼저·용어 id 순). 후보가 없으면 행 없이 `none`이다. 선점과 첫 예약은 SQL 함수 `ai_claim_quiz_set`이 한 트랜잭션으로 하고, 선점에 실패한 요청은 AI 없이 `generating`(`retry_after_seconds` 5)·`failed`를 받는다. 선점한 요청만 `run_ai_call`로 Bedrock을 부르고, 응답 구조를 검증한 뒤 SQL 함수 `quiz_store_items`가 문항·후보 스냅샷 저장과 `ready` 전환을 한 트랜잭션으로 한다(선점 때의 `attempt`와 같을 때만 저장). AI·저장이 실패하면 선점을 풀어 다음 호출이 시도가 남은 만큼 바로 다시 선점한다. 한도 소진은 429가 아니라 200 `ai_limit_reached`다. 사용자별 분당 요청 제한은 `WRITE`(30회/60초)이고 `not_open`은 세지 않는다. 숫자는 제안값이다.
+
 **공유 캐시**
 
 - 같은 용어의 AI 설명은 저장해 모든 사용자가 다시 쓴다. 캐시 응답은 AI를 부르지 않고 한도에도 세지 않는다.

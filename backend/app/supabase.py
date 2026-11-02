@@ -519,6 +519,100 @@ class SupabaseClient:
         row = rows[0] if isinstance(rows, list) else rows
         return {name.removeprefix("out_"): value for name, value in row.items()}
 
+    def get_quiz_set(self, user_id: str, quiz_date: str) -> dict[str, Any] | None:
+        """E11: 그 사용자의 그날 세트 행(id, status, attempt, lease_expires_at). 없으면 None이다. 날짜는 KST ISO 문자열이다."""
+        rows = self._select(
+            "quiz_sets",
+            {
+                "user_id": f"eq.{uuid.UUID(user_id)}",
+                "quiz_date": f"eq.{quiz_date}",
+                "select": "id,status,attempt,lease_expires_at",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    def list_quiz_source_terms(self, user_id: str, source_date: str, previous_quiz_date: str) -> dict[str, list[int]]:
+        """E11 6.2절 후보의 재료. 어제 연 용어(viewed), 어제 즐겨찾기한 용어(favorited), 전날 세트에 나온 용어(excluded)의 id.
+
+        즐겨찾기는 favorite_events라서 나중에 해제해도 남는다. 전날 세트는 quiz_date = 어제인 그 사용자의 세트다.
+        용어가 지워져 term_id가 null인 문항은 건너뛴다. 모두 id 오름차순이다. 쪽 나누기가 없어 API 최대 행(max_rows = 1000)을
+        넘으면 조용히 잘린다. 한 사용자가 하루에 그만큼 용어를 여는 일은 예상하지 않는다(1.5와 같은 한계).
+        """
+        user = f"eq.{uuid.UUID(user_id)}"
+        day = {"user_id": user, "study_date": f"eq.{source_date}", "select": "term_id", "order": "term_id.asc"}
+        excluded: list[int] = []
+        previous_set = self.get_quiz_set(user_id, previous_quiz_date)
+        if previous_set is not None:
+            excluded = [
+                int(row["term_id"])
+                for row in self._select(
+                    "quiz_items",
+                    {
+                        "set_id": f"eq.{int(previous_set['id'])}",
+                        "term_id": "not.is.null",
+                        "select": "term_id",
+                        "order": "term_id.asc",
+                    },
+                )
+            ]
+        return {
+            "viewed": [int(row["term_id"]) for row in self._select("term_views", day)],
+            "favorited": [int(row["term_id"]) for row in self._select("favorite_events", day)],
+            "excluded": excluded,
+        }
+
+    def list_quiz_terms(self, term_ids: list[int]) -> list[dict[str, Any]]:
+        """후보 용어와 문항의 자료. 사전 설명(glossary_entries, 사전 용어일 때만 객체)과 유효한 AI 설명(배열)을 함께 준다."""
+        if not term_ids:
+            return []
+        ids = ",".join(str(int(term_id)) for term_id in term_ids)
+        return self._select(
+            "terms",
+            {
+                "id": f"in.({ids})",
+                "select": "id,key,label,glossary_entries(body_markdown),ai_explanations(body)",
+                "ai_explanations.invalidated_at": "is.null",
+                "order": "id.asc",
+            },
+        )
+
+    def list_quiz_items(self, set_id: int) -> list[dict[str, Any]]:
+        """한 세트의 문항을 id 순으로 준다. 정답·해설과 이 사용자의 답·꼬리 질문 행을 함께 읽는다(응답에서 가려낸다)."""
+        return self._select(
+            "quiz_items",
+            {
+                "set_id": f"eq.{int(set_id)}",
+                "select": "id,difficulty,question,answer,explanation,"
+                "quiz_answers(user_answer),quiz_followups(seq,question,user_answer)",
+                "order": "id.asc",
+                "quiz_followups.order": "seq.asc",
+            },
+        )
+
+    def store_quiz_items(self, set_id: int, attempt: int, items: list[dict[str, Any]]) -> str:
+        """quiz_store_items 함수를 부른다(6.4절 7번). 'stored' 또는 'stale'(선점이 바뀌어 저장하지 않음)이다."""
+        result = self.rpc("quiz_store_items", {"p_set_id": set_id, "p_attempt": attempt, "p_items": items})
+        if result not in ("stored", "stale"):
+            raise SupabaseConfigError("rpc quiz_store_items returned an unexpected value")
+        return result
+
+    def release_quiz_claim(self, set_id: int, attempt: int) -> None:
+        """생성에 실패한 선점을 풀어 다음 호출이 바로 다시 선점하게 한다(failed, 선점 만료 시각 없음).
+
+        내 attempt이고 아직 generating인 행만 바꾼다. 그 사이 다른 요청이 다시 선점했거나 ready가 됐다면 건드리지 않는다.
+        시도 횟수(attempt)는 그대로라서 2회를 다 쓰면 다음 선점 함수가 failed로 끝낸다.
+        """
+        response = self._request(
+            "PATCH",
+            "/rest/v1/quiz_sets",
+            params={"id": f"eq.{int(set_id)}", "attempt": f"eq.{int(attempt)}", "status": "eq.generating"},
+            json={"status": "failed", "lease_expires_at": None},
+            headers={**self._headers(), "Prefer": "return=minimal"},
+        )
+        if response.status_code not in (200, 204):
+            raise SupabaseConfigError(f"quiz_sets update status {response.status_code}")
+
     def _glossary_bucket(self) -> str:
         bucket = self._glossary_image_bucket
         if not bucket or not _BUCKET_SHAPE.fullmatch(bucket):
