@@ -66,3 +66,9 @@ JSON·세 요약·출처 ID는 기계적으로 검증한다. 사실·핵심 개�
 ## 검증 한계와 해제
 
 로컬 모의 테스트는 인증 거부·staging 제한·원장 장애·중복/동시 요청·3슬롯 개별 실행·결과 조회·unknown/잘림/상한 초과 후 차단을 검증한다. 실제 staging DB 권한·OIDC trust·모델 접근·플랫폼 실행 시간은 배포 후 확인해야 한다. 원격 SQL은 사람이 적용한다. 평가 후 staging EVAL_APPROVAL_ID를 제거하고 재배포해 경로를 닫는다. 원장과 봉인 자료는 삭제하지 않는다.
+
+## 런타임 OIDC 진단
+
+Vercel Functions에서는 요청의 `x-vercel-oidc-token`을 요청 단위로 STS에 전달한다. 빌드 시 `VERCEL_OIDC_TOKEN`을 런타임에 재사용하거나 전역 환경변수로 옮기지 않는다. 로컬 환경변수 경로는 Vercel 밖에서만 허용한다. 근거: https://vercel.com/docs/oidc
+
+`eval_auth code=` 로그에는 role_missing, token_missing 또는 허용 목록의 STS 오류 코드만 기록한다. 토큰·ARN·원격 오류 메시지는 남기지 않는다. AccessDenied이면 역할의 issuer/aud/sub 조건을, InvalidIdentityToken/ExpiredToken이면 공급자·토큰 유효성을 확인한다. 실제 신뢰 정책의 정상 여부는 배포 후 무과금 preflight로 확인한다.
