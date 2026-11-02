@@ -270,6 +270,28 @@ test.describe('PC 폭 AI 설명 패널', () => {
     await expect(aiPanel(page)).toBeHidden()
   })
 
+  test('AC-5 창 폭을 1280→800→1280으로 바꿔도 오류 신고 입력은 모달이고, 첫 Esc는 신고창만 닫으며 패널과 입력 내용이 남는다', async ({ page }) => {
+    await loginAsMember(page)
+    await openAiPanel(page)
+    await aiPanel(page).getByRole('button', { name: '오류 신고' }).click()
+    await expect(reportDialog(page)).toBeVisible()
+    const field = reportDialog(page).getByRole('textbox')
+    await field.fill('합성 신고 내용')
+    for (const width of [800, 1280]) {
+      await page.setViewportSize({ width, height: PC.height })
+      await expect(reportDialog(page)).toBeVisible()
+      expect(await reportDialog(page).evaluate((element) => element.matches(':modal'))).toBe(true)
+      await expect(field).toHaveValue('합성 신고 내용')
+      await expect(field).toBeFocused() // 입력하던 칸의 포커스도 유지된다
+    }
+    await page.keyboard.press('Escape')
+    await expect(reportDialog(page)).toBeHidden()
+    await expect(aiPanel(page)).toBeVisible() // 신고창만 닫혔다
+    expect(await aiPanel(page).evaluate((element) => element.matches(':modal'))).toBe(false)
+    await page.keyboard.press('Escape')
+    await expect(aiPanel(page)).toBeHidden()
+  })
+
   test('AI 설명 패널을 닫으면 포커스가 본문으로 돌아온다', async ({ page }) => {
     await loginAsMember(page)
     await openAiPanel(page)
