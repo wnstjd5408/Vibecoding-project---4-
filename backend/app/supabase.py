@@ -1,7 +1,7 @@
 """Supabase 호출 최소 래퍼. FastAPI만 secret key로 부른다(D-007).
 
-이 파일이 하는 일: 로그인·세션 갱신·로그아웃·세션 토큰 확인(Auth), profiles·과목·노트·사전 용어 조회(REST),
-노트 이미지 서명 URL 발급(Storage), SQL 함수 호출(RPC).
+이 파일이 하는 일: 로그인·세션 갱신·로그아웃·세션 토큰 확인(Auth), profiles·과목·노트·사전 용어 조회와 열람 기록(REST),
+노트 이미지 서명 URL 발급과 사전 이미지 공개 주소(Storage), SQL 함수 호출(RPC).
 """
 
 import hashlib
@@ -103,13 +103,18 @@ _AUTH_REJECTED = frozenset({400, 401, 403, 422})
 _AUTH_CONFIG_ERRORS = frozenset({"email_provider_disabled", "provider_disabled"})
 
 
-def _auth_error_code(response: httpx.Response) -> str | None:
-    """Auth 오류 본문의 error_code. 본문이 JSON이 아니면 None이다. 메시지 원문은 쓰지 않는다."""
+def _error_field(response: httpx.Response, key: str) -> str | None:
+    """오류 본문(JSON 객체)의 문자열 필드 하나. 본문이 JSON 객체가 아니거나 값이 문자열이 아니면 None이다."""
     try:
-        code = response.json().get("error_code")
+        value = response.json().get(key)
     except (ValueError, AttributeError):
         return None
-    return code if isinstance(code, str) else None
+    return value if isinstance(value, str) else None
+
+
+def _auth_error_code(response: httpx.Response) -> str | None:
+    """Auth 오류 본문의 error_code. 메시지 원문은 쓰지 않는다."""
+    return _error_field(response, "error_code")
 
 
 def _is_user_rejection(response: httpx.Response, operation: str, extra: frozenset[int] = frozenset()) -> bool:
@@ -130,12 +135,18 @@ def _is_user_rejection(response: httpx.Response, operation: str, extra: frozense
 
 class SupabaseClient:
     def __init__(
-        self, url: str, secret_key: str, http: httpx.Client | None = None, note_image_bucket: str | None = None
+        self,
+        url: str,
+        secret_key: str,
+        http: httpx.Client | None = None,
+        note_image_bucket: str | None = None,
+        glossary_image_bucket: str | None = None,
     ):
         self._url = url.rstrip("/")
         self._secret_key = secret_key
         self._http = http or httpx.Client(timeout=_TIMEOUT)
         self._note_image_bucket = note_image_bucket
+        self._glossary_image_bucket = glossary_image_bucket
 
     @classmethod
     def from_env(cls) -> "SupabaseClient":
@@ -143,8 +154,14 @@ class SupabaseClient:
         key = os.environ.get("SUPABASE_SECRET_KEY")
         if not url or not key:
             raise SupabaseConfigError("SUPABASE_URL or SUPABASE_SECRET_KEY is not set")
-        # 이미지가 있는 노트를 읽을 때만 필요하다. 비어 있어도 앱은 뜨고 그때 500이 된다(2026-10-30 결정).
-        return cls(url, key, note_image_bucket=os.environ.get("NOTE_IMAGE_BUCKET", "").strip() or None)
+        # 이미지 버킷은 이미지가 있는 노트·용어를 읽을 때만 필요하다. 비어 있어도 앱은 뜨고 그때 500이 된다
+        # (노트 2026-10-30 결정, 사전은 같은 방식).
+        return cls(
+            url,
+            key,
+            note_image_bucket=os.environ.get("NOTE_IMAGE_BUCKET", "").strip() or None,
+            glossary_image_bucket=os.environ.get("GLOSSARY_IMAGE_BUCKET", "").strip() or None,
+        )
 
     def _headers(self, bearer: str | None = None) -> dict[str, str]:
         return {"apikey": self._secret_key, "Authorization": f"Bearer {bearer or self._secret_key}"}
@@ -337,6 +354,61 @@ class SupabaseClient:
     def list_glossary_terms(self) -> list[dict[str, Any]]:
         """사전 용어(glossary_entries 행이 있는 terms, S8)의 id·key·label. API 최대 행(1000)을 넘으면 잘린다."""
         return self._select("terms", {"select": "id,key,label,glossary_entries!inner(term_id)", "order": "id.asc"})
+
+    def get_glossary_entry(self, term_id: int, user_id: str | None = None) -> dict[str, Any] | None:
+        """E06 사전 용어 하나: terms 열, 사전 설명, 이미지 행(id 오름차순). 사전 용어가 아니면 None이다.
+
+        glossary_entries가 없는 용어(AI로만 설명된 용어 포함)는 !inner 내장이 행을 거른다(S8).
+        glossary_entries는 term_id가 기본 키라 내장 결과가 배열이 아니라 객체 하나다(2026-11-02 로컬 확인).
+        user_id를 주면 그 사용자의 즐겨찾기 행만 favorites 배열로 함께 읽는다(빈 배열이면 즐겨찾기 아님).
+        한 번의 요청으로 끝내 로그인 사용자의 바텀시트 열기가 DB 왕복을 두 번 하지 않게 한다.
+        """
+        select = "id,key,label,glossary_entries!inner(body_markdown),glossary_images(id,storage_path,alt)"
+        params = {"id": f"eq.{int(term_id)}", "glossary_images.order": "id.asc", "limit": "1"}
+        if user_id is not None:
+            select += ",favorites(term_id)"
+            params["favorites.user_id"] = f"eq.{uuid.UUID(user_id)}"
+        rows = self._select("terms", {**params, "select": select})
+        return rows[0] if rows else None
+
+    def record_term_view(self, user_id: str, term_id: int, study_date: str) -> bool:
+        """term_views에 (사용자, 용어, KST 날짜) 한 건을 넣는다. 이미 있으면 그대로 둔다(기본 키 충돌 무시).
+
+        넣었거나 이미 있었으면 True, 용어가 없어 외래 키(term_views_term_id_fkey)에 걸렸으면 False다.
+        사용자 쪽 외래 키(profiles 행이 그 사이 지워짐) 같은 다른 거절은 설정 오류(500)로 낸다.
+        """
+        user_id = str(uuid.UUID(user_id))
+        response = self._request(
+            "POST",
+            "/rest/v1/term_views",
+            json={"user_id": user_id, "term_id": int(term_id), "study_date": study_date},
+            headers={**self._headers(), "Prefer": "resolution=ignore-duplicates,return=minimal"},
+        )
+        if response.status_code in (200, 201, 204):
+            return True
+        # 제약 이름은 v05 마이그레이션이 만든 기본 이름이다. 마이그레이션에서 이 외래 키 이름을 바꾸면
+        # 없는 용어가 404가 아니라 500이 되므로 여기와 시험(TERM_FK)을 함께 고친다.
+        if (
+            response.status_code == 409
+            and _error_field(response, "code") == "23503"
+            and "term_views_term_id_fkey" in (_error_field(response, "message") or "")
+        ):
+            return False
+        raise SupabaseConfigError(f"term_views insert status {response.status_code}")
+
+    def glossary_image_url(self, storage_path: str) -> str:
+        """사전 이미지 공개 버킷의 주소(기술 검토 Q7 결정 (a), 2026-11-02). 발급 요청 없이 만든다.
+
+        버킷 이름은 GLOSSARY_IMAGE_BUCKET이다. 없거나 모양이 틀리면 설정 오류(500)다. 주소 안에 버킷 이름과
+        경로가 들어가는 것은 E06의 예외로 받아들였다(2026-11-02 김준성, API spec 1.9·10.5).
+        경로에 빈 구간·`.`·`..`가 있으면 브라우저가 주소를 정규화해 다른 버킷을 가리킬 수 있어 설정 오류로 막는다.
+        """
+        bucket = self._glossary_image_bucket
+        if not bucket or not _BUCKET_SHAPE.fullmatch(bucket):
+            raise SupabaseConfigError("GLOSSARY_IMAGE_BUCKET is not set or invalid")
+        if any(segment in ("", ".", "..") for segment in storage_path.split("/")):
+            raise SupabaseConfigError("glossary image storage_path has an empty or dot segment")
+        return f"{self._url}/storage/v1/object/public/{bucket}/{quote(storage_path, safe='/')}"
 
     def sign_note_images(self, paths: list[str], expires_in: int) -> dict[str, str]:
         """노트 이미지 비공개 버킷의 서명 URL을 한 번에 받는다. 파일이 없어 발급되지 않은 경로는 결과에서 빠진다.
