@@ -66,51 +66,70 @@ function themeVariables(colors: DiagramColors) {
 
 // 노트 작성자가 설정 지시문(%%{init: …}%%)·머리말(--- config: … ---)·스타일 문법으로 모양·테마·색을 바꾸지 못하게 지운다.
 // 모양과 색은 디자인 토큰으로 고정한다. 그림은 스타일만 빠진 채 그려지고, 코드로 돌아가지 않는다.
-// 지우는 것: 설정 지시문, 머리말(title 같은 설정이 아닌 값도 함께 사라진다), classDef·linkStyle·style·cssClass 줄,
-//   노드에 클래스를 붙이는 `class A,B name` 줄(클래스 다이어그램의 `class Foo`·`class Foo {`는 인자가 하나라 그대로 둔다), `:::name`,
-//   시퀀스 다이어그램 `rect`·`box`에 지정한 색.
-// 알려진 한계: `box Aqua 이름`처럼 색 이름을 쓴 경우와 mermaid가 앞으로 더하는 스타일 문법은 지우지 못한다.
+// 지우는 것: 설정 지시문, 머리말(title 같은 설정이 아닌 값도 함께 사라진다), classDef·linkStyle·style·cssClass 문장,
+//   노드에 클래스를 붙이는 `class A,B name` 문장(클래스 다이어그램의 `class Foo`·`class Foo {`는 인자가 하나라 그대로 둔다), `:::name`,
+//   시퀀스 다이어그램 `rect`의 색과 `box`의 색(rgb·hex·색 이름. 그룹 이름은 남긴다).
+// 처리는 따옴표("…") 밖의 글에만 적용한다. 따옴표 안은 라벨 내용이라 `:::`·`style …` 같은 글이 있어도 그대로 둔다(여러 줄 라벨 포함).
+// 알려진 한계: mermaid가 앞으로 더하는 스타일 문법과, 따옴표 짝이 맞지 않는 입력에서 따옴표 뒤의 스타일 문장은 지우지 못한다.
 export function withoutStyle(source: string): string {
-  return source
+  const text = source
     .replace(/%%\{[\s\S]*?\}%%/g, '')
     .replace(/^\s*---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '')
-    .split(/\r?\n/)
-    // 한 줄에 `;`로 이어 쓴 문장(`graph TD; A --> B; style A fill:#f00;`)도 문장마다 검사한다.
-    // 문장은 따옴표·괄호 밖의 `;`에서만 나누므로 라벨 안의 `;`는 그대로 남고, 지우는 문장 말고는 원문 그대로 다시 이어 붙인다.
-    .map((line) => statementsOf(line).filter((statement) => !isStyleStatement(statement)).map(cleanStatement).join(';'))
-    .join('\n')
-}
-
-// 줄을 따옴표("…")와 괄호([…]·(…)·{…}) 밖의 `;`에서 나눈다. 마지막 조각은 `;` 뒤의 나머지(없으면 빈 글)다.
-function statementsOf(line: string): string[] {
-  const parts: string[] = []
-  let depth = 0
+    .replace(/\r\n?/g, '\n')
+  // 문장을 따옴표 밖의 줄바꿈과 `;`에서 나눈다. 따옴표는 줄을 넘어 이어지므로 여러 줄 라벨은 한 문장으로 남는다.
+  // 괄호([…]·(…)·{…}) 안의 `;`는 문장 끝이 아니다. 줄이 바뀌면 괄호 깊이는 0으로 돌린다. 지우는 문장 말고는 원문 그대로 다시 이어 붙인다.
+  const out: string[] = []
+  let statement = ''
   let quoted = false
-  let start = 0
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index]
-    if (char === '"') quoted = !quoted
-    else if (quoted) continue
-    else if (char === '[' || char === '(' || char === '{') depth += 1
-    else if (depth > 0 && (char === ']' || char === ')' || char === '}')) depth -= 1
-    else if (char === ';' && depth === 0) {
-      parts.push(line.slice(start, index))
-      start = index + 1
-    }
+  let depth = 0
+  const flush = (separator: string) => {
+    out.push(isStyleStatement(statement) ? '' : cleanStatement(statement), separator)
+    statement = ''
   }
-  parts.push(line.slice(start))
-  return parts
+  for (const char of text) {
+    if (char === '"') quoted = !quoted
+    else if (!quoted) {
+      if (char === '\n') {
+        depth = 0
+        flush(char)
+        continue
+      }
+      if (char === '[' || char === '(' || char === '{') depth += 1
+      else if (depth > 0 && (char === ']' || char === ')' || char === '}')) depth -= 1
+      else if (char === ';' && depth === 0) {
+        flush(char)
+        continue
+      }
+    }
+    statement += char
+  }
+  flush('')
+  return out.join('')
 }
 
 function isStyleStatement(statement: string): boolean {
   return /^\s*(classDef|linkStyle|style|cssClass)\s/.test(statement) || /^\s*class\s+\S+\s+[^\s{<~":;]+\s*$/.test(statement)
 }
 
+function isCssColor(word: string): boolean {
+  return typeof CSS !== 'undefined' && CSS.supports('color', word)
+}
+
 function cleanStatement(statement: string): string {
-  return statement
-    .replace(/:::[^\s;,)\]}]+/g, '')
-    .replace(/^(\s*rect\s+).*$/, '$1transparent')
-    .replace(/^(\s*box\s+)(?:rgba?\([^)]*\)|#[0-9a-fA-F]{3,8})\s*/, '$1')
+  // rect는 색만 받는 문장이라 통째로 투명으로 바꾼다.
+  if (/^\s*rect\s/.test(statement)) return statement.replace(/^(\s*rect\s+)[\s\S]*$/, '$1transparent')
+  // 따옴표 안(홀수 번째 조각)은 라벨이라 건드리지 않는다.
+  const parts = statement.split('"')
+  const cleaned = parts.map((part, index) => (index % 2 === 1 ? part : part.replace(/:::[^\s;,)\]}]+/g, '')))
+  const box = /^(\s*box\s+)([\s\S]*)$/.exec(cleaned[0])
+  if (box) {
+    // box [색] [그룹 이름]: 색(rgb·hex·색 이름)만 지우고 그룹 이름은 남긴다.
+    let rest = box[2].replace(/^(?:rgba?\([^)]*\)|#[0-9a-fA-F]{3,8})\s*/, '')
+    const first = /^\S+/.exec(rest)?.[0]
+    if (first !== undefined && isCssColor(first)) rest = rest.slice(first.length).replace(/^\s+/, '')
+    cleaned[0] = box[1] + rest
+  }
+  return cleaned.join('"')
 }
 
 // 그려진 그림의 접근 가능한 이름과 설명. 그림이 되면 원래 코드(노드 이름·관계)가 사라지므로 전체 원문을 설명에 남긴다(자르지 않는다).

@@ -2349,3 +2349,36 @@ test('접근성: Mermaid의 accTitle·accDescr를 접근 가능한 이름·설�
   await expect(diagram(page)).toHaveAccessibleName('mermaid 다이어그램: 요청 흐름')
   await expect(diagram(page)).toHaveAccessibleDescription(/브라우저가 서버에 요청하고 응답을 받는다.*원문: /)
 })
+
+// PR #98 Codex 3차 리뷰 반영: 따옴표 안의 글(여러 줄 포함)은 스타일 처리에서 건드리지 않고, 이름으로 지정한 색도 지운다.
+const shownText = (page: Page, index = 0) => diagram(page).nth(index).evaluate((img: HTMLImageElement) => {
+  const text = decodeURIComponent(img.src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+  return [...new DOMParser().parseFromString(text, 'image/svg+xml').querySelectorAll('text')].map((element) => element.textContent ?? '').join('').replace(/\s+/g, '')
+})
+
+test('따옴표 안의 :::는 라벨 글자로 남고 그림이 그대로 그려진다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n A["Address :::example"] --> B[End]\n```')
+  await expect(diagram(page)).toBeVisible() // 닫는 따옴표가 지워져 문법 오류로 코드가 되면 이 시험이 알려 준다
+  expect(await shownText(page)).toContain('Address:::example')
+})
+
+test('여러 줄 따옴표 라벨 속 style·classDef·class로 시작하는 줄도 라벨 내용으로 남는다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n A["first line\nstyle guide\nclassDef notes\nclass these items\nlast line"] --> B[End]\n```')
+  await expect(diagram(page)).toBeVisible()
+  const shown = await shownText(page)
+  for (const piece of ['firstline', 'styleguide', 'classDefnotes', 'classtheseitems', 'lastline']) expect(shown).toContain(piece)
+})
+
+test('디자인 토큰: 시퀀스 box에 이름으로 지정한 색은 지우고 그룹 이름은 남긴다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nsequenceDiagram\nbox Aqua Server\n participant A\nend\nA->>A: hello\n```')
+  await expect(diagram(page)).toBeVisible()
+  const svg = decodeURIComponent((await diagram(page).getAttribute('src')) ?? '').toLowerCase()
+  expect(svg).not.toContain('aqua')
+  expect(await shownText(page)).toContain('Server')
+})
+
+test('box의 첫 글자가 색 이름이 아니면 그룹 이름을 그대로 둔다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nsequenceDiagram\nbox Backend Team\n participant A\nend\nA->>A: hello\n```')
+  await expect(diagram(page)).toBeVisible()
+  expect(await shownText(page)).toContain('BackendTeam')
+})
