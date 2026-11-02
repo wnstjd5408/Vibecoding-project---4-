@@ -6,6 +6,7 @@ import { gfmTable } from 'micromark-extension-gfm-table'
 import type { Nodes, PhrasingContent, Root, RootContent } from 'mdast'
 import type { NoteReadResponse } from '../api/types.ts'
 import { TermLink } from '../components/TermLink.tsx'
+import { MermaidBlock } from './MermaidBlock.tsx'
 import styles from './NoteBody.module.css'
 import { SRC_ATTR, SRC_END_ATTR, UNMAPPED_ATTR } from './selection.ts'
 import { alignText } from './sourceMap.ts'
@@ -104,7 +105,10 @@ function codeBlockOf(node: Extract<Nodes, { type: 'code' }>, context: Context): 
   const pieces: Piece[] | null = node.value === ''
     ? []
     : fenced ? [{ text: node.value, srcStart: contentStart, srcEnd: contentStart + node.value.length, exact: true }] : null
-  return <pre><code>{segments(node.value, pieces, context)}</code></pre>
+  const code = <pre><code>{segments(node.value, pieces, context)}</code></pre>
+  // 언어 표시가 mermaid인 울타리는 그림으로 보인다. 그릴 수 없으면 원래 코드 블록으로 돌아간다.
+  if (node.lang?.trim().toLowerCase() === 'mermaid') return <MermaidBlock source={node.value} fallback={code} />
+  return code
 }
 
 function safeHref(url: string): string | null {
