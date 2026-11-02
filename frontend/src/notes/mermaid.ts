@@ -75,22 +75,55 @@ export function withoutStyle(source: string): string {
     .replace(/%%\{[\s\S]*?\}%%/g, '')
     .replace(/^\s*---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '')
     .split(/\r?\n/)
-    .filter((line) => !/^\s*(classDef|linkStyle|style|cssClass)\s/.test(line) && !/^\s*class\s+\S+\s+[^\s{<~":;]+\s*;?\s*$/.test(line))
-    .map((line) => line
-      .replace(/:::[^\s;,)\]}]+/g, '')
-      .replace(/^(\s*rect\s+).*$/, '$1transparent')
-      .replace(/^(\s*box\s+)(?:rgba?\([^)]*\)|#[0-9a-fA-F]{3,8})\s*/, '$1'))
+    // 한 줄에 `;`로 이어 쓴 문장(`graph TD; A --> B; style A fill:#f00;`)도 문장마다 검사한다.
+    // 문장은 따옴표·괄호 밖의 `;`에서만 나누므로 라벨 안의 `;`는 그대로 남고, 지우는 문장 말고는 원문 그대로 다시 이어 붙인다.
+    .map((line) => statementsOf(line).filter((statement) => !isStyleStatement(statement)).map(cleanStatement).join(';'))
     .join('\n')
 }
 
-// 그려진 그림의 접근 가능한 이름. 그림이 되면 원래 코드(노드 이름·관계)가 사라지므로, 읽을 수 있는 원문을 한 줄로 이어 남긴다.
-// 너무 긴 원문은 코드포인트 기준으로 잘라 끝에 …을 붙인다.
-const DESCRIPTION_LIMIT = 1000
+// 줄을 따옴표("…")와 괄호([…]·(…)·{…}) 밖의 `;`에서 나눈다. 마지막 조각은 `;` 뒤의 나머지(없으면 빈 글)다.
+function statementsOf(line: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let quoted = false
+  let start = 0
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]
+    if (char === '"') quoted = !quoted
+    else if (quoted) continue
+    else if (char === '[' || char === '(' || char === '{') depth += 1
+    else if (depth > 0 && (char === ']' || char === ')' || char === '}')) depth -= 1
+    else if (char === ';' && depth === 0) {
+      parts.push(line.slice(start, index))
+      start = index + 1
+    }
+  }
+  parts.push(line.slice(start))
+  return parts
+}
 
-export function describeDiagram(source: string): string {
-  const flat = withoutStyle(source).split('\n').map((line) => line.trim()).filter(Boolean).join('; ')
-  const chars = Array.from(flat)
-  return `mermaid 다이어그램. 원문: ${chars.length > DESCRIPTION_LIMIT ? `${chars.slice(0, DESCRIPTION_LIMIT).join('')}…` : flat}`
+function isStyleStatement(statement: string): boolean {
+  return /^\s*(classDef|linkStyle|style|cssClass)\s/.test(statement) || /^\s*class\s+\S+\s+[^\s{<~":;]+\s*$/.test(statement)
+}
+
+function cleanStatement(statement: string): string {
+  return statement
+    .replace(/:::[^\s;,)\]}]+/g, '')
+    .replace(/^(\s*rect\s+).*$/, '$1transparent')
+    .replace(/^(\s*box\s+)(?:rgba?\([^)]*\)|#[0-9a-fA-F]{3,8})\s*/, '$1')
+}
+
+// 그려진 그림의 접근 가능한 이름과 설명. 그림이 되면 원래 코드(노드 이름·관계)가 사라지므로 전체 원문을 설명에 남긴다(자르지 않는다).
+// 이름은 짧게 두고(Mermaid의 accTitle이 있으면 반영), 설명에 accDescr와 원문을 한 줄로 이어 담는다. 설명은 눈에 보이지 않게 aria-describedby로 잇는다.
+export function describeDiagram(source: string): { label: string; description: string } {
+  const text = withoutStyle(source)
+  const title = /^\s*accTitle\s*:\s*(.+?)\s*$/m.exec(text)?.[1]
+  const described = /^\s*accDescr\s*:\s*(.+?)\s*$/m.exec(text)?.[1] ?? /^\s*accDescr\s*\{([\s\S]*?)\}/m.exec(text)?.[1]?.replace(/\s+/g, ' ').trim()
+  const flat = text.split('\n').map((line) => line.trim()).filter(Boolean).join('; ')
+  return {
+    label: title ? `mermaid 다이어그램: ${title}` : 'mermaid 다이어그램',
+    description: [described, `원문: ${flat}`].filter(Boolean).join(' '),
+  }
 }
 
 // SVG 글자를 정리해 데이터 주소로 만든다. 크기는 viewBox의 숫자로 정해 <img>가 그림 비율대로 줄어들게 한다.

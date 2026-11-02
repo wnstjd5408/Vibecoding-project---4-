@@ -2088,7 +2088,7 @@ test('AC-1 mermaid 블록이 든 노트를 열면 그 자리에 다이어그램 
   await expect(diagram(page)).toBeVisible()
   expect(await diagram(page).evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true)
   const body = page.locator('[data-note-body]')
-  await expect(body).not.toContainText('graph TD')
+  await expect(body.getByText('graph TD')).toBeHidden() // 원문은 눈에 보이지 않는 접근성 설명에만 있다
   await expect(body.locator('pre')).toHaveCount(0)
   await expect(body.getByText('앞 문단')).toBeVisible()
   await expect(body.getByText('뒤 문단')).toBeVisible()
@@ -2284,29 +2284,68 @@ test('스타일 줄을 지워도 클래스 다이어그램의 class 선언은 �
   expect(svg).toContain('Dog')
 })
 
-test('접근성: 그려진 그림의 접근 가능한 이름에 노드 이름과 관계가 남는다', async ({ page }) => {
-  await openMermaidNote(page, FLOW)
-  await expect(diagram(page)).toBeVisible()
-  await expect(page.getByRole('img', { name: /시작.*끝/ })).toBeVisible()
-  const alt = (await page.getByRole('img', { name: /시작.*끝/ }).getAttribute('alt')) ?? ''
-  expect(alt).toContain('mermaid 다이어그램')
-  expect(alt).toContain('A[시작] --> B[끝]')
-})
-
-test('접근성: 긴 원문은 접근 가능한 이름을 잘라 두고 줄바꿈은 한 줄로 합친다', async ({ page }) => {
-  const nodes = Array.from({ length: 120 }, (_, index) => `N${index}[노드${index}] --> N${index + 1}[노드${index + 1}]`).join('\n  ')
-  await openMermaidNote(page, `\`\`\`mermaid\ngraph TD\n  ${nodes}\n\`\`\``)
-  await expect(page.getByRole('img', { name: /mermaid 다이어그램/ })).toBeVisible()
-  const alt = (await page.getByRole('img', { name: /mermaid 다이어그램/ }).getAttribute('alt')) ?? ''
-  expect(alt.length).toBeLessThanOrEqual(1200)
-  expect(alt).not.toContain('\n')
-  expect(alt.endsWith('…')).toBe(true)
-})
-
 test('디자인 토큰: 시퀀스 다이어그램의 rect·box 색 지정도 적용되지 않고 그림은 그대로 그려진다', async ({ page }) => {
   await openMermaidNote(page, '```mermaid\nsequenceDiagram\n  box rgb(255, 0, 7) 서버쪽\n    participant 서버\n  end\n  participant 사용자\n  rect rgb(0, 255, 8)\n    사용자->>서버: 요청\n  end\n  rect rgba(1, 2, 255, 0.5)\n    서버-->>사용자: 응답\n  end\n```')
   await expect(diagram(page)).toBeVisible()
   const svg = decodeURIComponent((await diagram(page).getAttribute('src')) ?? '').toLowerCase()
   for (const color of ['rgb(255, 0, 7)', 'rgb(0, 255, 8)', 'rgba(1, 2, 255', 'rgb(255,0,7)', 'rgb(0,255,8)']) expect(svg).not.toContain(color)
   expect(svg).toContain('서버쪽') // 이름은 남고 색만 사라진다
+})
+
+// PR #98 Codex 재리뷰 반영: 세미콜론으로 이어 쓴 스타일, 긴 원문의 접근 가능한 설명(잘리지 않음), Mermaid 접근성 문법(accTitle·accDescr).
+test('디자인 토큰: 세미콜론으로 이어 쓴 style·classDef·class도 지워지고 그림은 그대로 그려진다', async ({ page }) => {
+  await openMermaidNote(page, [
+    '```mermaid\ngraph TD; A[Start] --> B[End]; style A fill:#ff0000;\n```',
+    '```mermaid\ngraph TD; A[시작] --> B[끝]; classDef warn fill:#ff0010,color:#00ff10; class A warn; linkStyle 0 stroke:#0000ee;\n```',
+    '```mermaid\ngraph TD\n  A[시작]:::warn --> B[끝]; classDef warn fill:#ff0011\n```',
+  ].join('\n\n'))
+  await expect(diagram(page)).toHaveCount(3)
+  await expect(diagram(page).nth(2)).toBeVisible()
+  for (let index = 0; index < 3; index += 1) {
+    const svg = decodeURIComponent((await diagram(page).nth(index).getAttribute('src')) ?? '').toLowerCase()
+    for (const color of ['#ff0000', '#ff0010', '#00ff10', '#0000ee', '#ff0011']) expect(svg, `${index}번째 그림에 ${color}`).not.toContain(color)
+  }
+})
+
+test('세미콜론 처리는 따옴표·괄호 안의 라벨을 훼손하지 않는다', async ({ page }) => {
+  // 따옴표 없는 라벨의 ;는 Mermaid에서도 문장 끝이라 따옴표로 감싼 라벨만 시험한다
+  await openMermaidNote(page, '```mermaid\ngraph TD\n  A["앞; 뒤"] --> B["문장; style X fill 같은 글"]; C["괄호; 안"] --> A\n```')
+  await expect(diagram(page)).toBeVisible()
+  // mermaid가 라벨을 단어별 tspan으로 나눠 그리므로 SVG 원문이 아니라 그림에 보이는 글자(textContent)로 확인한다
+  const shown = await diagram(page).evaluate((img: HTMLImageElement) => {
+    const text = decodeURIComponent(img.src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+    // <style>의 글자는 빼고 <text>의 글자만 모으며, 줄바꿈에 따른 공백 차이를 없애려고 공백을 모두 지운다
+    return [...new DOMParser().parseFromString(text, 'image/svg+xml').querySelectorAll('text')].map((element) => element.textContent ?? '').join('').replace(/\s+/g, '')
+  })
+  expect(shown).toContain('앞;뒤')
+  expect(shown).toContain('문장;styleXfill같은글')
+  expect(shown).toContain('괄호;안')
+})
+
+test('접근성: 그림의 접근 가능한 이름은 짧고, 전체 원문은 접근 가능한 설명으로 전달된다', async ({ page }) => {
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  await expect(diagram(page)).toHaveAccessibleName('mermaid 다이어그램')
+  await expect(diagram(page)).toHaveAccessibleDescription(/원문: graph TD; A\[시작\] --> B\[끝\]/)
+  // 원문은 눈에 보이지 않는다(코드로 보이지 않는다)
+  await expect(page.locator('[data-note-body]').getByText('graph TD')).toBeHidden()
+})
+
+test('접근성: 긴 원문도 잘리지 않아 마지막 노드와 관계까지 접근 가능한 설명에 남는다', async ({ page }) => {
+  const lines = Array.from({ length: 81 }, (_, index) => `N${index}[노드${index}] --> N${index + 1}[노드${index + 1}]`).join('\n  ')
+  await openMermaidNote(page, `\`\`\`mermaid\ngraph TD\n  ${lines}\n\`\`\``)
+  await expect(diagram(page)).toBeVisible()
+  const description = await diagram(page).evaluate((img: HTMLImageElement) => document.getElementById(img.getAttribute('aria-describedby') ?? '')?.textContent ?? '')
+  expect(description.length).toBeGreaterThan(1000) // 예전의 1,000자 제한을 넘는다
+  expect(description).toContain('N0[노드0] --> N1[노드1]')
+  expect(description).toContain('N80[노드80] --> N81[노드81]') // 마지막 관계
+  expect(description.endsWith('…')).toBe(false)
+  await expect(diagram(page)).toHaveAccessibleDescription(/N80\[노드80\] --> N81\[노드81\]/)
+})
+
+test('접근성: Mermaid의 accTitle·accDescr를 접근 가능한 이름·설명에 반영한다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n  accTitle: 요청 흐름\n  accDescr: 브라우저가 서버에 요청하고 응답을 받는다\n  A[브라우저] --> B[서버]\n```')
+  await expect(diagram(page)).toBeVisible()
+  await expect(diagram(page)).toHaveAccessibleName('mermaid 다이어그램: 요청 흐름')
+  await expect(diagram(page)).toHaveAccessibleDescription(/브라우저가 서버에 요청하고 응답을 받는다.*원문: /)
 })

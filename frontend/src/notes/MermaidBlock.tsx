@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { describeDiagram, readColors, renderDiagram } from './mermaid.ts'
 import styles from './NoteBody.module.css'
@@ -38,8 +38,14 @@ export function MermaidBlock({ source, fallback }: MermaidBlockProps) {
     }
   }, [source])
 
+  const descriptionId = useId()
+  const text = describeDiagram(source)
   const shown = result?.source === source ? result : null
   if (shown?.url === null) return <>{fallback}</>
   if (shown === null) return <div ref={place} className={styles.diagramPending} role="status">{MESSAGES.drawing}</div>
-  return <div ref={place} className={styles.diagram}><img src={shown.url} alt={describeDiagram(source)} /></div>
+  // 이름(alt)은 짧게, 전체 원문은 눈에 보이지 않는 설명으로 이어 스크린 리더가 읽을 수 있게 한다.
+  return <div ref={place} className={styles.diagram}>
+    <img src={shown.url} alt={text.label} aria-describedby={descriptionId} />
+    <span id={descriptionId} hidden>{text.description}</span>
+  </div>
 }
