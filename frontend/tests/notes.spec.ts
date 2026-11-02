@@ -1838,3 +1838,29 @@ test('입력 경계: 1,000자는 코드포인트 기준이다(조합 이모지�
   await expect(reportSheet(page).getByText('1,000 / 1,000자')).toBeVisible()
   expect([...(await reportInput(page).inputValue())]).toHaveLength(1000)
 })
+
+// PR #88 Codex 리뷰 P2: 겹쳐 열린 BottomSheet가 각자 저장한 overflow를 복원하다가 로그인 페이지로 이동한 뒤에도 스크롤 잠금이 남았다.
+// 마지막 모달이 닫힐 때 원래 값으로 돌아가야 한다.
+const bodyOverflow = (page: Page) => page.evaluate(() => document.body.style.overflow)
+
+test('신고 중 401로 로그인 안내를 열고 로그인 링크로 이동하면 페이지 스크롤 잠금이 풀린다', async ({ page }) => {
+  await setupReport(page, () => ({ status: 401, json: aiError('login_required') }))
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(aiLoginSheet(page)).toBeVisible()
+  expect(await bodyOverflow(page)).toBe('hidden')
+  await aiLoginSheet(page).getByRole('link', { name: '로그인' }).click()
+  await expect.poll(() => bodyOverflow(page)).toBe('')
+})
+
+test('겹친 시트는 안쪽만 닫아도 바깥 시트가 열려 있는 동안 스크롤 잠금을 유지하고, 모두 닫히면 푼다', async ({ page }) => {
+  await setupReport(page, () => created())
+  await openReportFromAi(page, '')
+  expect(await bodyOverflow(page)).toBe('hidden')
+  await page.keyboard.press('Escape') // 신고 시트만 닫는다
+  await expect(reportSheet(page)).toBeHidden()
+  expect(await bodyOverflow(page)).toBe('hidden') // AI 설명 시트가 아직 열려 있다
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' })).toBeHidden()
+  expect(await bodyOverflow(page)).toBe('')
+})

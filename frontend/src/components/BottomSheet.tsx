@@ -15,6 +15,21 @@ type BottomSheetProps = {
   children: ReactNode
 }
 
+// 스크롤 잠금: 열린 시트 수와, 첫 시트가 열리기 전의 body overflow 값
+let openSheets = 0
+let overflowBeforeLock = ''
+
+function lockScroll() {
+  if (openSheets === 0) overflowBeforeLock = document.body.style.overflow
+  openSheets += 1
+  document.body.style.overflow = 'hidden'
+}
+
+function unlockScroll() {
+  openSheets = Math.max(0, openSheets - 1)
+  if (openSheets === 0) document.body.style.overflow = overflowBeforeLock
+}
+
 // 아래에서 올라오는 모달 시트. 브라우저 기본 모달(dialog)을 써서 아래를 브라우저가 처리한다.
 //  - 열 때 제목으로 포커스가 가고(디자인 시스템 접근성 규칙), 포커스는 시트 안에 갇힌다
 //  - 배경은 조작할 수 없고, Esc로 닫힌다
@@ -43,14 +58,12 @@ export function BottomSheet({ open, onClose, title, badge, closeLabel = '닫기'
     }
   }, [])
 
-  // 시트가 열려 있는 동안 뒤 화면이 스크롤되지 않게 한다.
+  // 시트가 열려 있는 동안 뒤 화면이 스크롤되지 않게 한다. 시트가 겹쳐 열릴 수 있어 시트마다 이전 값을 저장해 복원하지 않고,
+  // 열린 시트 수를 세어 처음 열릴 때 원래 값을 저장하고 마지막 시트가 닫힐 때 그 값으로 돌려놓는다.
   useEffect(() => {
     if (!open) return
-    const previous = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = previous
-    }
+    lockScroll()
+    return unlockScroll
   }, [open])
 
   return (
