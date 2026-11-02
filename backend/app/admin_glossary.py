@@ -14,7 +14,8 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
-from pydantic import BaseModel, ConfigDict, Field, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
+from pydantic_core import PydanticCustomError
 
 from app.auth import SessionUser, require_operator
 from app.errors import FIELD_MESSAGES, ApiError, request_id_of
@@ -86,6 +87,14 @@ class GlossaryEntryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     label: StrictStr = Field(min_length=1, max_length=_MAX_LABEL)
     body_markdown: StrictStr = Field(default="", max_length=_MAX_BODY)
+
+    @field_validator("label", "body_markdown")
+    @classmethod
+    def no_nul(cls, value: str) -> str:
+        # Postgres text는 NUL(U+0000)을 담지 못한다. DB가 거절하면 500이 되므로 형식 오류로 먼저 막는다.
+        if "\x00" in value:
+            raise PydanticCustomError("invalid_characters", "Value contains a NUL character")
+        return value
 
 
 @router.post("/admin/glossary", status_code=201, summary="E20 create or update a glossary entry by term key")
@@ -162,6 +171,8 @@ def upload_glossary_image(
     if not supabase.glossary_entry_exists(target):
         raise ApiError("not_found", stage="db")
 
+    if alt is not None and "\x00" in alt:
+        raise _field_error("alt", "invalid_format")
     alt_text = (alt or "").strip() or None
     object_path = f"terms/{target}/{uuid.uuid4().hex}.{image.extension}"
     job_id = supabase.create_glossary_upload_job(object_path)

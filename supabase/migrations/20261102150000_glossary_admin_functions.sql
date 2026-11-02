@@ -65,7 +65,11 @@ as $$
 declare
   v_jobs jsonb;
 begin
-  -- 같은 용어에 이미지를 붙이는 요청(glossary_add_image)과 순서를 정한다.
+  -- 잠금 순서는 E20(glossary_upsert_entry)과 같게 terms → glossary_entries다. 반대 순서면 둘이 서로를 기다린다(교착).
+  -- terms는 FOR NO KEY UPDATE로 잡는다. glossary_add_image가 glossary_images를 넣을 때 외래 키 확인으로 terms에
+  -- FOR KEY SHARE를 거는데, FOR UPDATE면 그것과 충돌해 E22와 교착할 수 있다.
+  perform 1 from public.terms where id = p_term_id for no key update;
+  -- 같은 용어에 이미지를 붙이는 요청(glossary_add_image의 FOR SHARE)과 순서를 정한다.
   perform 1 from public.glossary_entries where term_id = p_term_id for update;
   if not found then
     return null;
@@ -122,6 +126,12 @@ begin
 
   delete from public.storage_delete_jobs
   where id = p_job_id and status = 'pending' and object_path = p_storage_path;
+  -- 작업이 이미 처리됐거나(객체가 지워졌을 수 있다) 경로가 다르면 이미지 행을 남기지 않는다. 남기면 행이 없는 객체를
+  -- 가리키거나, 남은 작업이 나중에 살아 있는 이미지의 객체를 지운다. 예외로 이 트랜잭션 전체를 되돌린다(앱은 500).
+  -- 삭제 작업을 처리하는 작업자를 만들 때는 올리는 중인 작업(방금 만든 pending)을 건너뛰는 유예 시간이 필요하다.
+  if not found then
+    raise exception 'glossary upload job % is missing or already processed', p_job_id;
+  end if;
 
   return v_image_id;
 end;

@@ -8,6 +8,7 @@ GLOSSARY_SQL_TEST_CONTAINER에 컨테이너 이름을 넣지 않으면 건너뛴
 import json
 import os
 import subprocess
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -239,7 +240,79 @@ def test_delete_image_checks_owner_term_and_records_a_job(db):
     assert sql(db, f"select status from public.storage_delete_jobs where id = {out['job_id']};") == "pending"
 
 
+CALLS = [
+    "select public.glossary_upsert_entry('k', 'k', '', '00000000-0000-0000-0000-000000000000')",
+    f"select public.glossary_delete_entry(1, '{BUCKET}')",
+    "select public.glossary_add_image(1, 'p', null, 1)",
+    f"select public.glossary_delete_image(1, 1, '{BUCKET}')",
+]
+
+
 @pytest.mark.parametrize("role", ["anon", "authenticated"])
-def test_only_service_role_can_execute(db, role):
-    error = run_sql(db, f"set role {role}; select public.glossary_delete_entry(1, '{BUCKET}');", expect_ok=False)
+@pytest.mark.parametrize("call", CALLS, ids=["upsert", "delete_entry", "add_image", "delete_image"])
+def test_only_service_role_can_execute(db, role, call):
+    error = run_sql(db, f"set role {role}; {call};", expect_ok=False)
     assert "permission denied" in error
+
+
+# --- 리뷰 지적 회귀 ---
+
+
+def test_add_image_fails_and_rolls_back_when_the_upload_job_is_gone_or_mismatched(db):
+    term_id = upsert(db, "guard", "Guard", "", new_user(db))["id"]
+    done = sql(db, f"insert into public.storage_delete_jobs (bucket, object_path, status) values ('{BUCKET}', 'terms/{term_id}/d.png', 'done') returning id;")
+    pending = sql(db, f"insert into public.storage_delete_jobs (bucket, object_path) values ('{BUCKET}', 'terms/{term_id}/other.png') returning id;")
+    for job, path in ((done, f"terms/{term_id}/d.png"), (pending, f"terms/{term_id}/d.png"), (999999, f"terms/{term_id}/d.png")):
+        error = run_sql(db, as_service(f"select public.glossary_add_image({term_id}, '{path}', null, {job});"), expect_ok=False)
+        assert "missing or already processed" in error
+    assert sql(db, "select count(*) from public.glossary_images;") == "0"
+    assert sql(db, f"select status from public.storage_delete_jobs where id = {pending};") == "pending"
+
+
+def test_delete_entry_takes_locks_in_the_same_order_as_upsert(db):
+    """E20은 terms → glossary_entries 순서로 잠근다. E21이 반대로 잡으면 서로를 기다린다(교착).
+
+    세션 1이 E20의 첫 단계(terms 행 잠금)를 흉내 내 쥐고 있는 동안 E21을 부르고, 세션 1이 E20의 둘째 단계
+    (glossary_entries 갱신)로 넘어간다. E21이 terms를 먼저 잠그면 E21이 기다리기만 하고 둘 다 끝난다.
+    """
+    term_id = upsert(db, "ordering", "Ordering", "", new_user(db))["id"]
+
+    def psql_process(query):
+        return subprocess.Popen(["docker", "exec", "-i", CONTAINER, "psql", "-U", "postgres", "-d", db,
+                                 "-v", "ON_ERROR_STOP=1", "-qAt"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, encoding="utf-8")
+
+    holder = psql_process(None)
+    deleter = psql_process(None)
+    holder.stdin.write(f"""begin;
+      update public.terms set label = label where id = {term_id};
+      select pg_sleep(2.5);
+      update public.glossary_entries set body_markdown = 'x' where term_id = {term_id};
+      commit;""")
+    holder.stdin.close()
+    time.sleep(1)
+    deleter.stdin.write(as_service(f"select public.glossary_delete_entry({term_id}, '{BUCKET}');"))
+    deleter.stdin.close()
+    results = {name: (proc.wait(timeout=60), proc.stderr.read()) for name, proc in (("holder", holder), ("deleter", deleter))}
+    assert results["holder"][0] == 0 and results["deleter"][0] == 0, results
+    assert not any("deadlock" in err for _, err in results.values())
+
+
+def test_concurrent_upsert_delete_and_add_image_keep_a_consistent_state(db):
+    operator = new_user(db)
+    term_id = upsert(db, "contend", "Contend", "", operator)["id"]
+
+    def work(i):
+        if i % 3 == 0:
+            return sql(db, as_service(f"select public.glossary_upsert_entry('contend', 'Contend', 'b{i}', '{operator}');"))
+        if i % 3 == 1:
+            return sql(db, as_service(f"select public.glossary_delete_entry({term_id}, '{BUCKET}');"))
+        job = sql(db, f"insert into public.storage_delete_jobs (bucket, object_path) values ('{BUCKET}', 'terms/{term_id}/{i}.png') returning id;")
+        return sql(db, as_service(f"select public.glossary_add_image({term_id}, 'terms/{term_id}/{i}.png', null, {job});"))
+
+    with ThreadPoolExecutor(max_workers=9) as pool:
+        list(pool.map(work, range(18)))
+    # 사전 설명이 없는데 이미지가 남는 일은 없다(E21과 E22의 잠금이 순서를 정한다).
+    assert sql(db, f"""select exists (select 1 from public.glossary_images i
+                                       where i.term_id = {term_id}
+                                         and not exists (select 1 from public.glossary_entries e where e.term_id = i.term_id));""") == "f"

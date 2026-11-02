@@ -4,6 +4,7 @@ SQL 함수 자체(트랜잭션, 무효화, 남는 데이터)는 tests/integratio
 여기서는 권한·검사 순서·오류 응답·Storage 순서를 본다. 가짜는 SQL 함수와 같은 결과 모양을 낸다.
 """
 
+import zlib
 from dataclasses import dataclass, field
 from io import BytesIO
 
@@ -464,3 +465,70 @@ def test_delete_image_is_204_when_object_delete_fails(client, fake):
 def test_delete_image_of_another_term_or_missing_is_404(client, fake, path):
     assert_error(client.delete(f"/api/admin/glossary/{path}", headers=auth()), 404, "not_found")
     assert len(fake.images) == 2 and fake.jobs == {}
+
+
+# --- 리뷰 지적 회귀: 이미지 처리 ---
+
+
+def test_exif_orientation_is_applied_before_metadata_is_stripped(client, fake):
+    # 가로 40x20 픽셀에 Orientation=6(시계 방향 90도)이면 화면에서는 세로 20x40이다.
+    image = Image.new("RGB", (40, 20), (200, 10, 10))
+    exif = image.getexif()
+    exif[0x0112] = 6
+    out = BytesIO()
+    image.save(out, format="JPEG", exif=exif)
+    response = upload(client, out.getvalue(), content_type="image/jpeg")
+    stored = Image.open(BytesIO(fake.objects[fake.images[response.json()["id"]]["storage_path"]][0]))
+    assert stored.size == (20, 40)
+    assert not stored.getexif()
+
+
+def test_mpo_jpeg_from_phones_is_accepted_as_jpeg(client, fake):
+    out = BytesIO()
+    first, second = Image.new("RGB", (6, 4), (1, 2, 3)), Image.new("RGB", (6, 4), (9, 9, 9))
+    first.save(out, format="MPO", save_all=True, append_images=[second])
+    assert Image.open(BytesIO(out.getvalue())).format == "MPO"
+    response = upload(client, out.getvalue(), content_type="image/jpeg")
+    assert response.status_code == 201
+    path = fake.images[response.json()["id"]]["storage_path"]
+    assert path.endswith(".jpg") and fake.objects[path][1] == "image/jpeg"
+
+
+def test_huge_declared_dimensions_are_422_not_415(client, fake):
+    # 머리말만 20000x20000인 PNG. Pillow가 압축 폭탄으로 거절하는 크기다.
+    header = image_bytes("PNG", size=(1, 1))
+    ihdr = (20000).to_bytes(4, "big") * 2 + header[24:29]
+    crc = zlib.crc32(b"IHDR" + ihdr).to_bytes(4, "big")
+    wide = header[:16] + ihdr + crc + header[33:]
+    assert_field(upload(client, wide), "file", "invalid_format")
+    assert fake.writes == []
+
+
+def test_opaque_png_stays_small_and_transparent_png_keeps_alpha(client, fake):
+    opaque = upload(client, image_bytes("PNG", size=(32, 32)))
+    stored = Image.open(BytesIO(fake.objects[fake.images[opaque.json()["id"]]["storage_path"]][0]))
+    assert stored.mode == "RGB"
+    out = BytesIO()
+    Image.new("RGBA", (4, 4), (1, 2, 3, 0)).save(out, format="PNG")
+    transparent = upload(client, out.getvalue())
+    stored = Image.open(BytesIO(fake.objects[fake.images[transparent.json()["id"]]["storage_path"]][0]))
+    assert stored.mode == "RGBA" and stored.getpixel((0, 0))[3] == 0
+
+
+# --- 리뷰 지적 회귀: NUL 문자는 500이 아니라 422 ---
+
+
+@pytest.mark.parametrize("body,name", [
+    ({"label": "a\x00b"}, "label"),
+    ({"label": "ok", "body_markdown": "a\x00b"}, "body_markdown"),
+])
+def test_nul_characters_are_422(client, fake, body, name):
+    response = client.post("/api/admin/glossary", json=body, headers=auth())
+    assert_error(response, 422, "validation_failed")
+    assert response.json()["error"]["fields"][0]["name"] == name
+    assert fake.writes == []
+
+
+def test_nul_in_alt_is_422(client, fake):
+    assert_field(upload(client, image_bytes(), alt="a\x00b"), "alt", "invalid_format")
+    assert fake.writes == []
