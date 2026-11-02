@@ -85,13 +85,14 @@ def test_plan_excludes_answers_and_maps_citations(cases):
 def test_fewshot_examples_are_valid_and_current_payload_is_last(cases):
     from evals.wiki_examples import EXAMPLES, example_messages
     from evals.live_output import validate_output
+    assert len(EXAMPLES) == 1
     for payload, answer in EXAMPLES:
         validate_output(json.dumps(answer, ensure_ascii=False), payload["sources"])
         for heading in ("정의", "작동 원리", "활용 예시", "주의사항"):
             assert f"**{heading}**\n" in answer["explanation"]
         assert payload["term"] not in [c["term"] for c in cases]
     messages = make_plan(cases)["requests"]["WDEV01:U"]["messages"]
-    assert [m["role"] for m in messages] == ["user", "assistant", "user", "assistant", "user"]
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
     current = json.loads(messages[-1]["content"][0]["text"])
     assert current["term"] == cases[0]["term"]
     assert current["sources"]["1"] == cases[0]["internal_evidence"][0]["text"]
