@@ -2204,3 +2204,56 @@ test('data-theme="dark" 안에서는 어두운 토큰 색으로 그린다', asyn
   expect(svg).toContain('#eef1f5') // 어두운 --ink
   expect(svg).not.toContain('#16202f')
 })
+
+// 독립 검토 반영: 약한 시험 보강(지연 로드의 양성 대조, 그려진 그림의 내용 검사), 작성자의 설정 지시문 차단, 더 많은 다이어그램 종류.
+const decodedSvgs = (page: Page) => page.evaluate(() => [...document.querySelectorAll('[data-note-body] img')].map((img) => {
+  const text = decodeURIComponent((img as HTMLImageElement).src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml')
+  const handlers = [...doc.querySelectorAll('*')].flatMap((element) => [...element.attributes].filter((attribute) => /^on/i.test(attribute.name)).map((attribute) => attribute.name))
+  const scriptLinks = [...doc.querySelectorAll('*')].flatMap((element) => [...element.attributes].filter((attribute) => /href$/i.test(attribute.name) && /^\s*javascript:/i.test(attribute.value)).map((attribute) => attribute.value))
+  return { scripts: doc.querySelectorAll('script').length, images: doc.querySelectorAll('img').length, handlers, scriptLinks, neo: doc.querySelectorAll('[data-look="neo"]').length, filtered: doc.querySelectorAll('[filter]').length }
+}))
+
+test('AC-3 그려진 그림 안에 스크립트·이미지 태그·이벤트 처리기·javascript: 링크가 없다(라벨은 글자로만 남는다)', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n  A["<img src=x onerror=window.__pwned=1>"] --> B["<b>굵게</b> <script>window.__pwned=2</script>"]\n```')
+  await expect(diagram(page)).toBeVisible() // 이 입력은 그림으로 그려져야 한다(코드로 돌아가면 이 시험이 알려 준다)
+  expect(await decodedSvgs(page)).toEqual([{ scripts: 0, images: 0, handlers: [], scriptLinks: [], neo: 0, filtered: 0 }])
+})
+
+test('지연 로드 시험이 실제로 요청을 잡는다(mermaid가 있는 노트에서는 라이브러리 요청이 생긴다)', async ({ page }) => {
+  const requested: string[] = []
+  page.on('request', (request) => { if (/\/node_modules\/\.vite\/deps\/(mermaid|chunk-)/i.test(request.url()) && /mermaid/i.test(request.url())) requested.push(request.url()) })
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  expect(requested.length).toBeGreaterThan(0)
+})
+
+test('노트 작성자는 설정 지시문과 머리말로 모양·테마를 바꿀 수 없다(디자인 토큰 고정)', async ({ page }) => {
+  const directive = '```mermaid\n%%{init: {"look": "neo", "theme": "dark", "themeVariables": {"primaryColor": "#ff0000"}}}%%\ngraph TD\n  A[시작] --> B[끝]\n```'
+  const frontmatter = '```mermaid\n---\nconfig:\n  look: neo\n  theme: forest\n---\ngraph TD\n  A[시작] --> B[끝]\n```'
+  await openMermaidNote(page, `${directive}\n\n${frontmatter}`)
+  await expect(diagram(page)).toHaveCount(2)
+  await expect(diagram(page).nth(1)).toBeVisible()
+  expect(await decodedSvgs(page)).toEqual([
+    { scripts: 0, images: 0, handlers: [], scriptLinks: [], neo: 0, filtered: 0 },
+    { scripts: 0, images: 0, handlers: [], scriptLinks: [], neo: 0, filtered: 0 },
+  ])
+  for (const index of [0, 1]) {
+    const svg = decodeURIComponent((await diagram(page).nth(index).getAttribute('src')) ?? '').toLowerCase()
+    expect(svg).toContain('#16202f') // 디자인 토큰의 --ink
+    expect(svg).not.toContain('#ff0000')
+  }
+})
+
+test('디자인 규칙: 상태·관계·여정·파이 같은 다른 종류에서도 그림자·neo 모양이 없다', async ({ page }) => {
+  await openMermaidNote(page, [
+    '```mermaid\nstateDiagram-v2\n  [*] --> 대기\n  대기 --> 완료\n```',
+    '```mermaid\nerDiagram\n  USER ||--o{ NOTE : writes\n```',
+    '```mermaid\njourney\n  title 하루\n  section 아침\n    일어나기: 3: 나\n```',
+    '```mermaid\npie title 비율\n  "가" : 60\n  "나" : 40\n```',
+  ].join('\n\n'))
+  await expect(diagram(page)).toHaveCount(4)
+  await expect(diagram(page).nth(3)).toBeVisible()
+  const found = await decodedSvgs(page)
+  expect(found.map((item) => ({ neo: item.neo, filtered: item.filtered }))).toEqual(Array.from({ length: 4 }, () => ({ neo: 0, filtered: 0 })))
+})

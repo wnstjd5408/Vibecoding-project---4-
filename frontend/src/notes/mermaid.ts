@@ -1,7 +1,8 @@
 // mermaid 다이어그램을 그림(SVG 데이터 주소)으로 만든다.
 // - mermaid는 처음 필요할 때만 불러온다(지연 로드). mermaid가 없는 노트는 코드를 내려받지 않는다.
 // - 본문은 HTML로 해석하지 않는 화면이라, 만든 SVG를 문서에 끼워 넣지 않고 <img>의 데이터 주소로만 보인다.
-//   <img>로 그린 SVG는 스크립트와 이벤트 처리기가 실행되지 않는다. securityLevel strict와 아래 정리는 그 위의 이중 방어다.
+//   <img>로 그린 SVG는 스크립트와 이벤트 처리기가 실행되지 않는다. 이것이 보안의 핵심이다.
+//   securityLevel strict는 라벨의 HTML을 글자로 바꾸고, 아래 정리는 사용자가 이미지를 새 탭에서 따로 열었을 때를 위한 보조 방어다.
 type MermaidApi = typeof import('mermaid').default
 
 let api: Promise<MermaidApi> | null = null
@@ -63,6 +64,14 @@ function themeVariables(colors: DiagramColors) {
   }
 }
 
+// 노트 작성자가 설정 지시문(%%{init: …}%%)이나 머리말(--- config: … ---)로 모양·테마·색을 바꾸지 못하게 지운다.
+// 모양과 색은 디자인 토큰으로 고정한다. 머리말의 title 같은 설정이 아닌 값도 함께 사라진다(알려진 한계).
+function withoutConfig(source: string): string {
+  return source
+    .replace(/%%\{[\s\S]*?\}%%/g, '')
+    .replace(/^\s*---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '')
+}
+
 // SVG 글자를 정리해 데이터 주소로 만든다. 크기는 viewBox의 숫자로 정해 <img>가 그림 비율대로 줄어들게 한다.
 function toDataUrl(svg: string): string {
   const doc = new DOMParser().parseFromString(svg, 'image/svg+xml')
@@ -72,6 +81,8 @@ function toDataUrl(svg: string): string {
   for (const element of Array.from(doc.getElementsByTagName('*'))) {
     for (const attribute of Array.from(element.attributes)) {
       if (/^on/i.test(attribute.name)) element.removeAttribute(attribute.name)
+      // 이미지를 새 탭에서 따로 열면 SVG가 문서로 열릴 수 있어 javascript: 링크도 지운다.
+      else if (/href$/i.test(attribute.name) && /^\s*javascript:/i.test(attribute.value)) element.removeAttribute(attribute.name)
     }
   }
   const box = (root.getAttribute('viewBox') ?? '').trim().split(/[\s,]+/).map(Number)
@@ -86,7 +97,11 @@ function toDataUrl(svg: string): string {
 // 문법이 틀리거나 그릴 수 없으면 거부한다. 부르는 쪽이 원래 코드 블록으로 돌아간다.
 export function renderDiagram(source: string, colors: DiagramColors): Promise<string> {
   const run = async () => {
-    const mermaid = await (api ??= import('mermaid').then((module) => module.default))
+    // 불러오기가 한 번 실패해도(네트워크 순단 등) 그 실패를 붙들어 두지 않고 다음 블록이 다시 시도하게 한다.
+    const mermaid = await (api ??= import('mermaid').then((module) => module.default, (error: unknown) => {
+      api = null
+      throw error
+    }))
     // 디자인 규칙: 그림자·그라데이션을 쓰지 않는다. 기본 모양(neo)은 그림자 필터를 쓰므로 classic으로 둔다.
     // 다이어그램 종류마다 자기 설정에 look 기본값이 있어 최상위 look만으로는 바뀌지 않는다. look을 가진 종류를 모두 classic으로 맞춘다.
     const looks = Object.fromEntries(
@@ -105,9 +120,10 @@ export function renderDiagram(source: string, colors: DiagramColors): Promise<st
       ...looks,
       flowchart: { htmlLabels: false, look: 'classic' },
     })
-    await mermaid.parse(source)
+    const text = withoutConfig(source)
+    await mermaid.parse(text)
     const id = `mermaid-diagram-${++counter}`
-    const { svg } = await mermaid.render(id, source)
+    const { svg } = await mermaid.render(id, text)
     // mermaid가 그리는 동안 문서에 만들어 두는 임시 요소가 남지 않게 한다.
     document.getElementById(id)?.remove()
     document.getElementById(`d${id}`)?.remove()
