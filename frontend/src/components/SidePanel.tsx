@@ -42,8 +42,14 @@ export function SidePanel({ id, open, onClose, title, badge, closeLabel = '닫�
       dialog.show()
       titleRef.current?.focus({ preventScroll: true })
     } else if (!open && dialog.open) {
+      // 다른 패널이 막 열려 포커스를 가져갔다면(용어 패널이 닫히면서 AI 설명 패널이 열리는 경우) 그 포커스를 빼앗지 않는다.
+      const active = document.activeElement
+      const holder = active instanceof HTMLElement ? active.closest('dialog') : null
       dialog.close()
-      const target = latest.current.returnFocus?.() ?? opener.current
+      if (holder !== null && holder !== dialog) return
+      // 돌려줄 요소가 화면에서 사라졌으면(노트가 다시 그려진 경우) 열 때 포커스가 있던 요소를 쓴다.
+      const preferred = latest.current.returnFocus?.()
+      const target = preferred?.isConnected ? preferred : opener.current
       if (target?.isConnected) target.focus({ preventScroll: true })
     }
   }, [open])
@@ -53,7 +59,7 @@ export function SidePanel({ id, open, onClose, title, badge, closeLabel = '닫�
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return
       if (document.querySelector('dialog:modal')) return
       latest.current.onClose()
     }

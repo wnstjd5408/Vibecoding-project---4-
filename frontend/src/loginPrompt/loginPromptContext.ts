@@ -14,6 +14,8 @@ export type LoginPromptContextValue = {
   openLoginPrompt: (options?: LoginPromptOptions) => void
   // API 오류가 401 login_required이면 시트를 열고 true를 돌려준다. 그 밖의 오류는 false라 호출한 화면이 기존 오류 처리를 이어 간다.
   handleLoginRequired: (error: unknown, options?: LoginPromptOptions) => boolean
+  // 열려 있는 로그인 안내를 닫는다. 같은 자리의 다른 패널(용어·AI 설명)이 열릴 때 가려지지 않게 화면이 쓴다.
+  closeLoginPrompt: () => void
   // 로그인 안내가 PC 사이드 패널로 열려 있는지. 화면이 본문 오른쪽 480px를 비워 두는 데 쓴다.
   panelOpen: boolean
 }

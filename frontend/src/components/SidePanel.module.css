@@ -1,7 +1,7 @@
-/* PC 폭의 오른쪽 사이드 패널: 헤더(56px)와 구분선(1px) 바로 아래부터 화면 아래까지, 폭 480px. 막이 없고 본문은 그대로 보인다 */
+/* PC 폭의 오른쪽 사이드 패널: 헤더 바로 아래(틈 없이)부터 화면 아래까지, 폭 480px. 막이 없고 본문은 그대로 보인다 */
 .panel {
   position: fixed;
-  top: 57px;
+  top: var(--app-header-height);
   right: 0;
   bottom: 0;
   left: auto;

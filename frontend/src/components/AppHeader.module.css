@@ -3,7 +3,7 @@
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
-  height: 56px;
+  height: var(--app-header-height);
   padding: 0 var(--space-2);
   border-bottom: 1px solid var(--surface-300);
 }
@@ -57,7 +57,7 @@
     padding: 0 var(--space-6) 0 var(--space-4);
   }
 
-  /* PC 노트 읽기: 스크롤해도 헤더가 위에 남는다(패널은 헤더 아래 57px(56px+구분선)부터 붙는다) */
+  /* PC 노트 읽기: 스크롤해도 헤더가 위에 남는다(패널은 헤더 높이만큼 아래에서 시작한다) */
   .stickyOnWide {
     position: sticky;
     top: 0;

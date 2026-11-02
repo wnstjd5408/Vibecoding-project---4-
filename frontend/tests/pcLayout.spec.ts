@@ -7,6 +7,9 @@ const PC = { width: 1280, height: 800 }
 const appName = (page: Page) => page.getByRole('banner').getByText('CS 학습 노트', { exact: true })
 const backLink = (page: Page) => page.getByRole('banner').getByRole('link', { name: '목록' })
 
+// 스크롤바가 자리를 차지하는 환경에서도 맞도록 화면의 실제 가용 폭을 기준으로 한다
+const clientWidth = (page: Page) => page.evaluate(() => document.documentElement.clientWidth)
+
 async function box(locator: Locator) {
   const result = await locator.boundingBox()
   if (!result) throw new Error('보이지 않는 요소다')
@@ -22,8 +25,8 @@ test.describe('1280px(PC)', () => {
     await expect(article).toBeVisible()
     const rect = await box(article)
     expect(Math.round(rect.width)).toBeLessThanOrEqual(720)
-    expect(Math.round(rect.width)).toBeGreaterThanOrEqual(718)
-    expect(Math.abs(rect.x - (PC.width - rect.width) / 2)).toBeLessThanOrEqual(2) // x 280~1000
+    expect(Math.round(rect.width)).toBeGreaterThanOrEqual(690) // 스크롤바가 있어도 거의 720px
+    expect(Math.abs(rect.x - ((await clientWidth(page)) - rect.width) / 2)).toBeLessThanOrEqual(2) // 가운데(1280px 화면에서 x 280~1000)
   })
 
   test('노트 읽기 헤더는 화면 전체 폭이고 왼쪽에 앱 이름과 "목록"을 함께 둔다', async ({ page }) => {
@@ -31,7 +34,7 @@ test.describe('1280px(PC)', () => {
     await expect(appName(page)).toBeVisible()
     await expect(backLink(page)).toBeVisible()
     const header = await box(page.getByRole('banner'))
-    expect(Math.round(header.width)).toBe(PC.width)
+    expect(Math.round(header.width)).toBe(await clientWidth(page))
     expect(Math.round((await box(appName(page))).x)).toBeLessThan(40)
     // 앱 이름이 "목록"보다 왼쪽에 있다
     expect((await box(appName(page))).x).toBeLessThan((await box(backLink(page))).x)
@@ -44,10 +47,10 @@ test.describe('1280px(PC)', () => {
     await expect(appName(page)).toBeVisible()
     await expect(backLink(page)).toHaveCount(0)
     const header = await box(page.getByRole('banner'))
-    expect(Math.round(header.width)).toBe(PC.width)
+    expect(Math.round(header.width)).toBe(await clientWidth(page))
     const column = await box(page.getByRole('main'))
     expect(Math.round(column.width)).toBeLessThanOrEqual(720)
-    expect(Math.abs(column.x - (PC.width - column.width) / 2)).toBeLessThanOrEqual(2)
+    expect(Math.abs(column.x - ((await clientWidth(page)) - column.width) / 2)).toBeLessThanOrEqual(2)
     const chip = await box(page.getByRole('group', { name: '과목 선택' }).getByRole('button', { name: '전체' }))
     const quiz = await box(page.getByRole('button', { name: '오늘의 퀴즈' }).or(page.getByRole('link', { name: '오늘의 퀴즈' })).first())
     expect(Math.abs((chip.y + chip.height / 2) - (quiz.y + quiz.height / 2))).toBeLessThanOrEqual(6) // 같은 줄

@@ -2087,7 +2087,7 @@ const twoTermsNote = {
 }
 
 async function setupPcTerms(page: Page, options: { favoriteStatus?: number } = {}) {
-  const calls = { glossary7: 0, glossary8: 0, favorites: 0 }
+  const calls = { glossary7: 0, glossary8: 0, favorites: 0, views: 0 }
   await page.route('**/api/me', (route) => route.fulfill({ json: { authenticated: true, role: 'member', display_name: '합성 사용자' } }))
   await page.route('**/api/notes/11', (route) => route.fulfill({ json: twoTermsNote }))
   await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
@@ -2099,7 +2099,10 @@ async function setupPcTerms(page: Page, options: { favoriteStatus?: number } = {
     calls.glossary8 += 1
     return route.fulfill({ json: { term: { id: 8, key: 'secondterm', label: 'SecondTerm' }, body_markdown: '둘째 용어의 합성 설명입니다.', images: [], is_favorite: false } })
   })
-  await page.route('**/api/term-views', (route) => route.fulfill({ json: { recorded: true } }))
+  await page.route('**/api/term-views', (route) => {
+    calls.views += 1
+    return route.fulfill({ json: { recorded: true } })
+  })
   await page.route('**/api/favorites/7', (route) => {
     calls.favorites += 1
     if (options.favoriteStatus && options.favoriteStatus !== 200) return route.fulfill(serverError(options.favoriteStatus))
@@ -2165,7 +2168,7 @@ test.describe('PC 폭 패널(실제 fetch 경로)', () => {
     const header = await page.getByRole('banner').boundingBox()
     const sheet = await firstPanel(page).boundingBox()
     expect(Math.round(header?.y ?? -1)).toBe(0) // 헤더는 화면 위에 그대로
-    expect(Math.round(sheet?.y ?? -1)).toBe(57) // 패널은 헤더 바로 아래에 붙어 빈 띠가 없다
+    expect(Math.round(sheet?.y ?? -1)).toBe(Math.round((header?.y ?? 0) + (header?.height ?? 0))) // 패널은 헤더 바로 아래에 붙어 빈 띠가 없다
     expect(Math.round((sheet?.y ?? 0) + (sheet?.height ?? 0))).toBe(PC_VIEWPORT.height)
     await expect(page.getByRole('banner').getByRole('link', { name: '목록' })).toBeVisible()
   })
@@ -2196,5 +2199,47 @@ test.describe('PC 폭 패널(실제 fetch 경로)', () => {
     expect((article?.x ?? 0) + (article?.width ?? 0)).toBeLessThanOrEqual(sheet?.x ?? 0)
     expect(Math.round(article?.width ?? 0)).toBeLessThan(720)
     expect(Math.round(article?.width ?? 0)).toBeGreaterThan(300)
+  })
+})
+
+// 독립 검토 반영: 창 폭이 1024px 경계를 넘어도 열린 패널의 내용을 다시 부르지 않는다(AI 설명은 호출 한도·비용이 걸려 있다).
+test.describe('PC 폭 패널: 창 폭 전환 중 요청', () => {
+  test.use({ viewport: PC_VIEWPORT })
+
+  test('열린 용어 패널은 창 폭이 경계를 넘어도 E06·E07을 다시 부르지 않고 내용이 그대로다', async ({ page }) => {
+    const calls = await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    await expect.poll(() => calls.views).toBeGreaterThan(0)
+    const before = { glossary: calls.glossary7, views: calls.views }
+    const isModal = () => firstPanel(page).evaluate((element) => element.matches(':modal'))
+    await page.setViewportSize({ width: 800, height: 800 })
+    await expect.poll(isModal).toBe(true)
+    await expect(firstPanel(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    await page.setViewportSize(PC_VIEWPORT)
+    await expect.poll(isModal).toBe(false)
+    await expect(firstPanel(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    await page.waitForTimeout(300)
+    expect({ glossary: calls.glossary7, views: calls.views }).toEqual(before) // 요청이 늘지 않았다
+  })
+
+  test('열린 AI 설명 패널은 창 폭이 경계를 넘어도 E09를 다시 부르지 않는다', async ({ page }) => {
+    const { calls } = await setupAi(page, { member: true })
+    await page.goto('/notes/31')
+    await askAi(page)
+    const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+    await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+    const before = calls.length
+    expect(before).toBeGreaterThan(0)
+    const isModal = () => sheet.evaluate((element) => element.matches(':modal'))
+    await page.setViewportSize({ width: 800, height: 800 })
+    await expect.poll(isModal).toBe(true)
+    await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+    await page.setViewportSize(PC_VIEWPORT)
+    await expect.poll(isModal).toBe(false)
+    await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+    await page.waitForTimeout(300)
+    expect(calls).toHaveLength(before) // E09 요청이 늘지 않았다
   })
 })

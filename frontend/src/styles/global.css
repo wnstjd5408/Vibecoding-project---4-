@@ -9,6 +9,11 @@ html {
   -webkit-text-size-adjust: 100%;
 }
 
+/* 앱 헤더 높이(테두리 포함, box-sizing: border-box). PC 사이드 패널이 헤더 바로 아래에서 시작하도록 헤더와 패널이 같이 쓴다 */
+:root {
+  --app-header-height: 56px;
+}
+
 body {
   margin: 0;
   background: var(--surface-100);

@@ -43,7 +43,7 @@ export default function NoteReadPage() {
 
 function NoteRead({ noteId }: { noteId: string }) {
   const auth = useAuth()
-  const { handleLoginRequired, openLoginPrompt, panelOpen: loginPanelOpen } = useLoginPrompt()
+  const { handleLoginRequired, openLoginPrompt, closeLoginPrompt, panelOpen: loginPanelOpen } = useLoginPrompt()
   const [attempt, setAttempt] = useState(0)
   const [result, setResult] = useState<Result | null>(null)
   // 열린 용어 시트. openId는 열 때마다 올라가 같은 용어를 다시 열어도 새로 불러온다.
@@ -146,9 +146,10 @@ function NoteRead({ noteId }: { noteId: string }) {
     articleRef.current?.focus({ preventScroll: true })
     document.getSelection()?.removeAllRanges()
     setPick(null)
-    if (auth.role === 'visitor') return openLoginPrompt()
     // 패널은 한 번에 하나만 연다(PC 폭에서는 모달이 아니라 용어 패널이 열린 채 AI 설명을 누를 수 있다).
     setOpenTerm(null)
+    if (auth.role === 'visitor') return openLoginPrompt()
+    if (loginPanelOpen) closeLoginPrompt()
     openCount.current += 1
     setOpenAi({ target: { noteId: note.id, revision: note.revision, ...toCodePointRange(note.body_markdown, pick.start, pick.end) }, text, openId: openCount.current })
   }
@@ -167,6 +168,7 @@ function NoteRead({ noteId }: { noteId: string }) {
   const showTerm = (termId: number, link: HTMLElement) => {
     lastTermLink.current = link
     setOpenAi(null)
+    if (loginPanelOpen) closeLoginPrompt() // 로그인 안내 패널이 열려 있으면 닫는다(같은 자리의 용어 패널이 뒤에 가려지지 않게)
     openCount.current += 1
     setOpenTerm({ termId, openId: openCount.current })
   }

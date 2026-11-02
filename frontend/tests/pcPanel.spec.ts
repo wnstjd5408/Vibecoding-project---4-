@@ -13,6 +13,23 @@ async function box(locator: Locator) {
   return result
 }
 
+// 패널은 헤더 바로 아래에 붙는다(틈이 있으면 그 줄에 스크롤된 본문이 비친다)
+async function expectBelowHeader(page: Page, sheet: Locator) {
+  const header = await box(page.getByRole('banner'))
+  const rect = await box(sheet)
+  expect(Math.round(rect.y)).toBe(Math.round(header.y + header.height))
+}
+
+// 본문 열은 패널 왼쪽 영역 안에서 가운데에 놓이고 패널에 가려지지 않는다(스크롤바가 있는 환경에서는 조금 좁아질 수 있다)
+async function expectColumnBesidePanel(page: Page, sheet: Locator) {
+  const article = await box(page.locator('article'))
+  const rect = await box(sheet)
+  expect(article.x + article.width).toBeLessThanOrEqual(rect.x)
+  expect(Math.round(article.width)).toBeLessThanOrEqual(720)
+  expect(Math.round(article.width)).toBeGreaterThanOrEqual(690)
+  expect(Math.abs(article.x - (rect.x - article.width) / 2)).toBeLessThanOrEqual(2)
+}
+
 test.describe('PC 폭 용어 패널', () => {
   test.use({ viewport: PC })
 
@@ -23,7 +40,7 @@ test.describe('PC 폭 용어 패널', () => {
     const rect = await box(panel(page))
     expect(Math.round(rect.width)).toBe(480)
     expect(Math.round(rect.x + rect.width)).toBe(PC.width) // 오른쪽 끝에 붙는다
-    expect(Math.round(rect.y)).toBe(57) // 헤더(56px)와 구분선 바로 아래
+    await expectBelowHeader(page, panel(page)) // 헤더 바로 아래(틈 없음)
     expect(Math.round(rect.y + rect.height)).toBe(PC.height) // 화면 아래까지
     // 비모달: 브라우저의 모달 대화상자가 아니고, 배경을 어둡게 덮는 막이 없다
     expect(await panel(page).evaluate((element) => element.matches(':modal'))).toBe(false)
@@ -40,8 +57,7 @@ test.describe('PC 폭 용어 패널', () => {
     const article = await box(page.locator('article'))
     const sheet = await box(panel(page))
     expect(article.x + article.width).toBeLessThanOrEqual(sheet.x) // 본문이 패널 왼쪽에서 끝난다
-    expect(Math.round(article.x)).toBe(40)
-    expect(Math.round(article.width)).toBe(720)
+    await expectColumnBesidePanel(page, panel(page))
     // 본문은 계속 읽고 누를 수 있다
     await expect(page.getByText('이 노트는')).toBeVisible()
   })
@@ -144,12 +160,12 @@ test.describe('PC 폭 로그인 안내', () => {
     const rect = await box(loginDialog(page))
     expect(Math.round(rect.width)).toBe(480)
     expect(Math.round(rect.x + rect.width)).toBe(PC.width)
-    expect(Math.round(rect.y)).toBe(57) // 용어 패널과 같은 자리
+    await expectBelowHeader(page, loginDialog(page)) // 용어 패널과 같은 자리
     expect(await loginDialog(page).evaluate((element) => element.matches(':modal'))).toBe(false) // 비모달
     await expect(page.locator('[class*="scrim"]:visible')).toHaveCount(0)
     await expect(loginDialog(page).getByText('로그인하면 AI 설명, 즐겨찾기, 오늘의 퀴즈를 쓸 수 있어요.')).toBeVisible()
     // 본문은 패널 때문에 다시 가운데로 움직이지 않고 그대로 왼쪽 영역에 남는다
-    expect(Math.round((await box(page.locator('article'))).x)).toBe(40)
+    await expectColumnBesidePanel(page, loginDialog(page))
   })
 
   test('AC-4 로그인 버튼은 패널 폭을 채우지 않고 내용 폭이다', async ({ page }) => {
@@ -228,7 +244,7 @@ test.describe('PC 폭 AI 설명 패널', () => {
     const rect = await box(aiPanel(page))
     expect(Math.round(rect.width)).toBe(480)
     expect(Math.round(rect.x + rect.width)).toBe(PC.width)
-    expect(Math.round(rect.y)).toBe(57)
+    await expectBelowHeader(page, aiPanel(page))
     expect(await aiPanel(page).evaluate((element) => element.matches(':modal'))).toBe(false)
     await expect(aiPanel(page).getByText('AI 생성·검수 전')).toBeVisible()
     await expect(aiPanel(page).getByRole('group', { name: 'AI 생성 설명' }).getByText('합성 AI 설명입니다.')).toBeVisible()
@@ -236,7 +252,7 @@ test.describe('PC 폭 AI 설명 패널', () => {
     // AI 설명 즐겨찾기는 이번 범위가 아니라 별 버튼을 그리지 않는다
     await expect(aiPanel(page).getByRole('button', { name: /즐겨찾기/ })).toHaveCount(0)
     // 본문은 패널에 가려지지 않는다
-    expect(Math.round((await box(page.locator('article'))).x)).toBe(40)
+    await expectColumnBesidePanel(page, aiPanel(page))
     expect(await page.evaluate(() => document.body.style.overflow)).not.toBe('hidden')
   })
 
@@ -275,5 +291,57 @@ test.describe('PC 폭 AI 설명 패널', () => {
     await expect(panel(page)).toBeVisible()
     await expect(aiPanel(page)).toBeHidden()
     await expect(term(page)).toHaveAttribute('aria-expanded', 'true')
+  })
+})
+
+// 독립 검토 반영: 패널이 서로 바뀔 때의 포커스와 가림, 로그인 안내 패널과의 전환.
+test.describe('PC 폭 패널 전환', () => {
+  test.use({ viewport: PC })
+
+  test('용어 패널이 열린 채 AI 설명을 열면 포커스가 용어 링크가 아니라 AI 패널 제목으로 간다', async ({ page }) => {
+    await loginAsMember(page)
+    await term(page).click()
+    await expect(panel(page)).toBeVisible()
+    await openAiPanel(page)
+    await expect(panel(page)).toBeHidden()
+    await expect(aiPanel(page).getByRole('heading', { name: 'UnknownWord' })).toBeFocused()
+  })
+
+  test('로그인 안내 패널이 열린 채 용어를 누르면 로그인 패널은 닫히고 용어 패널이 열려 보인다(뒤에 가려지지 않는다)', async ({ page }) => {
+    await page.goto('/notes/11')
+    await term(page).click()
+    await panel(page).getByRole('button', { name: '즐겨찾기', exact: true }).click()
+    await expect(loginDialog(page)).toBeVisible()
+    await term(page).click()
+    await expect(loginDialog(page)).toBeHidden()
+    await expect(panel(page)).toBeVisible()
+    await expect(panel(page).getByRole('heading', { name: 'ExampleTerm' })).toBeFocused()
+    await expect(term(page)).toHaveAttribute('aria-expanded', 'true')
+    // 보이는 패널은 하나뿐이다
+    await expect(page.locator('dialog:visible')).toHaveCount(1)
+  })
+
+  test('방문자가 용어 패널이 열린 채 AI 설명을 누르면 용어 패널은 닫히고 로그인 안내만 남는다', async ({ page }) => {
+    await page.goto('/notes/11')
+    await page.locator('[data-note-body]').waitFor()
+    await term(page).click()
+    await expect(panel(page)).toBeVisible()
+    await selectText(page, 'UnknownWord')
+    await page.getByRole('button', { name: 'AI 설명', exact: true }).click()
+    await expect(loginDialog(page)).toBeVisible()
+    await expect(panel(page)).toBeHidden()
+  })
+})
+
+test.describe('1100px(PC와 태블릿 사이)', () => {
+  test('패널이 열려도 본문은 패널에 가려지지 않고 읽을 만한 폭을 지킨다', async ({ page }) => {
+    await page.setViewportSize({ width: 1100, height: 800 })
+    await page.goto('/notes/11')
+    await term(page).click()
+    await expect(panel(page)).toBeVisible()
+    const article = await box(page.locator('article'))
+    const rect = await box(panel(page))
+    expect(article.x + article.width).toBeLessThanOrEqual(rect.x)
+    expect(Math.round(article.width)).toBeGreaterThan(400)
   })
 })

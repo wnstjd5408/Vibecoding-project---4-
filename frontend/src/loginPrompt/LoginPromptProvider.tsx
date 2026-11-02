@@ -39,6 +39,8 @@ export function LoginPromptProvider({ children }: { children: ReactNode }) {
     setOpen(true)
   }, [])
 
+  const closeLoginPrompt = useCallback(() => setOpen(false), [])
+
   const handleLoginRequired = useCallback((error: unknown, options?: LoginPromptOptions) => {
     if (!isLoginRequired(error)) return false
     openLoginPrompt(options)
@@ -47,7 +49,7 @@ export function LoginPromptProvider({ children }: { children: ReactNode }) {
 
   // PC 사이드 패널로 열려 있을 때만 화면이 오른쪽 공간을 비운다.
   const panelOpen = open && panel && wide
-  const value = useMemo<LoginPromptContextValue>(() => ({ openLoginPrompt, handleLoginRequired, panelOpen }), [openLoginPrompt, handleLoginRequired, panelOpen])
+  const value = useMemo<LoginPromptContextValue>(() => ({ openLoginPrompt, handleLoginRequired, closeLoginPrompt, panelOpen }), [openLoginPrompt, handleLoginRequired, closeLoginPrompt, panelOpen])
 
   return (
     <LoginPromptContext.Provider value={value}>
