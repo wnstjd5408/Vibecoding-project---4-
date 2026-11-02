@@ -2,7 +2,8 @@
 import { apiFetchWithStatus, isApiError } from '../api/client.ts'
 import type { ReportResponse, ReportTarget } from '../api/types.ts'
 
-// 신고 본문 상한(E10, 글자 수). 서버가 코드포인트로 세므로 화면도 코드포인트로 센다.
+// 신고 본문 상한(E10). 공백 제거·유니코드 정규화 없이 입력한 그대로 코드포인트 단위로 센다(서버와 같은 기준, 김준성 2026-11-02).
+// 조합 이모지는 화면에 하나로 보여도 여러 코드포인트라 여러 글자로 센다.
 export const REPORT_BODY_LIMIT = 1000
 
 export function countChars(text: string): number {
@@ -32,6 +33,8 @@ export function classifyReportError(error: unknown): ReportFailure {
     const field = error.fields.find((item) => item.name === 'body')
     if (field?.reason === 'too_long') return 'body_too_long'
     if (field) return 'body_invalid'
+    // 대상 자체가 잘못됐다(target 누락, target.type 허용 밖 등). 다시 보내도 같으므로 404와 같은 공통 안내다.
+    if (error.fields.some((item) => item.name === 'target' || item.name.startsWith('target.'))) return 'not_found'
   }
   return 'failed'
 }

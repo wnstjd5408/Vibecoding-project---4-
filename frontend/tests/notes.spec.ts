@@ -1723,7 +1723,7 @@ test('입력 경계: 빈 본문도 보내고, 현재 글자 수와 상한을 보
   const calls = await setupReport(page, () => created())
   await openReportFromAi(page, '')
   await expect(reportSheet(page).getByText('0 / 1,000자')).toBeVisible()
-  await reportInput(page).fill('😀'.repeat(1200)) // 이모지는 UTF-16으로 두 칸이지만 한 글자로 센다
+  await reportInput(page).fill('😀'.repeat(1200)) // 😀는 UTF-16으로 두 칸이지만 코드포인트로는 하나다. 글자 수는 코드포인트로 센다
   await expect(reportSheet(page).getByText('1,000 / 1,000자')).toBeVisible()
   expect([...(await reportInput(page).inputValue())]).toHaveLength(1000)
   await reportInput(page).fill('')
@@ -1793,4 +1793,48 @@ test('신고 시트에서 Esc나 닫기를 눌러도 바깥 AI 설명 시트는 
   await expect(reportSheet(page)).toBeHidden()
   await expect(page.getByRole('dialog', { name: 'UnknownWord' })).toBeVisible()
   await expect(page.getByText('합성 AI 설명입니다.')).toBeVisible()
+})
+
+// 준성님 답변(2026-11-02) 반영: 422의 target 오류와 알 수 없는 필드·reason도 안내와 입력 유지, 1,000자는 코드포인트 기준(조합 이모지 포함).
+const validation = (fields: { name: string; reason: string }[]): ReportReply => ({
+  status: 422,
+  json: { error: { ...aiError('validation_failed').error, fields: fields.map((field) => ({ ...field, message: 'synthetic english message' })) } },
+})
+
+for (const [name, reply] of [
+  ['target required', validation([{ name: 'target', reason: 'required' }])],
+  ['target.type invalid_value', validation([{ name: 'target.type', reason: 'invalid_value' }])],
+] as const) {
+  test(`AC-2 422 ${name}는 대상 안내를 보이고 입력을 유지한다`, async ({ page }) => {
+    await setupReport(page, () => reply)
+    await openReportFromAi(page)
+    await reportSubmit(page).click()
+    await expect(reportSheet(page).getByRole('alert')).toContainText('신고할 대상을 찾을 수 없어요')
+    await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+  })
+}
+
+test('AC-2 알 수 없는 422 필드·reason도 안내를 보이고 입력을 유지한다(message로 분기하지 않는다)', async ({ page }) => {
+  await setupReport(page, () => validation([{ name: 'something_new', reason: 'unknown_reason' }]))
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSheet(page).getByRole('alert')).toContainText('신고를 보내지 못했어요')
+  await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+  await expect(reportSheet(page)).toBeVisible()
+})
+
+test('입력 경계: 1,000자는 코드포인트 기준이다(조합 이모지는 화면에 하나여도 여러 글자로 센다)', async ({ page }) => {
+  const calls = await setupReport(page, () => created())
+  await openReportFromAi(page, '')
+  const family = '👨‍👩‍👧' // 코드포인트 5개(사람 3 + 이음 문자 2)
+  expect([...family]).toHaveLength(5)
+  await reportInput(page).fill(family.repeat(200)) // 정확히 1,000 코드포인트: 줄이지 않고 그대로 보낸다
+  await expect(reportSheet(page).getByText('1,000 / 1,000자')).toBeVisible()
+  await reportSubmit(page).click()
+  await expect(reportSheet(page)).toBeHidden()
+  expect(calls[0].body).toBe(family.repeat(200))
+  await reportOpen(page).click()
+  await reportInput(page).fill(family.repeat(201)) // 1,005 코드포인트: 서버가 거부하기 전에 화면이 1,000으로 줄인다
+  await expect(reportSheet(page).getByText('1,000 / 1,000자')).toBeVisible()
+  expect([...(await reportInput(page).inputValue())]).toHaveLength(1000)
 })
