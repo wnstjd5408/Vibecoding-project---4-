@@ -69,3 +69,30 @@ def test_error_does_not_echo_the_response():
         parse_quiz_items("비밀 응답 원문")
 
     assert "비밀" not in str(error.value)
+
+
+def test_numbered_items_are_returned_in_number_order():
+    shuffled = [{**ITEM, "n": 2, "question": "둘째"}, {**ITEM, "n": 1, "question": "첫째"}]
+
+    items = parse_quiz_items(json.dumps(shuffled, ensure_ascii=False), expected_count=2, numbered=True)
+
+    assert [item.question for item in items] == ["첫째", "둘째"]
+
+
+@pytest.mark.parametrize(
+    "numbers",
+    [[1, 1], [1, 3], [0, 1], ["1", "2"], [True, 2], [None, 2], [1, 2.5]],
+)
+def test_numbered_items_need_each_number_once_from_one(numbers):
+    entries = [{**ITEM, "n": number} for number in numbers]
+
+    with pytest.raises(AiCallError):
+        parse_quiz_items(json.dumps(entries), expected_count=2, numbered=True)
+
+
+def test_a_missing_number_is_rejected_only_when_numbering_is_asked():
+    text = json.dumps([ITEM, ITEM])
+
+    assert len(parse_quiz_items(text, expected_count=2)) == 2
+    with pytest.raises(AiCallError):
+        parse_quiz_items(text, expected_count=2, numbered=True)
