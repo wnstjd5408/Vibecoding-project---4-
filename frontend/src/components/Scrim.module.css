@@ -1,0 +1,10 @@
+/* 바텀시트 뒤를 어둡게 덮는 막. 목업과 같이 라이트·다크 모두 어두운 값으로 고정한다(다크의 ink는 밝아서 쓰지 않는다) */
+.scrim {
+  position: absolute;
+  inset: 0;
+  background: rgb(22 32 47 / 40%);
+}
+
+.fixed {
+  position: fixed;
+}

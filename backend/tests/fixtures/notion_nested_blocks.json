@@ -1,0 +1,23 @@
+{
+  "00000000-0000-4000-8000-000000000001": [
+    {"id":"00000000-0000-4000-8000-000000000002","type":"toggle","has_children":true,"toggle":{"rich_text":[{"plain_text":"Details"}]}}
+  ],
+  "00000000-0000-4000-8000-000000000002": [
+    {"id":"00000000-0000-4000-8000-000000000003","type":"code","code":{"rich_text":[{"plain_text":"print(1)\n\nprint(2)"}]}},
+    {"id":"00000000-0000-4000-8000-000000000004","type":"paragraph","paragraph":{"rich_text":[{"plain_text":"First line\nSecond line"}]}},
+    {"id":"00000000-0000-4000-8000-000000000005","type":"table","table":{"table_width":2,"has_column_header":true}},
+    {"id":"00000000-0000-4000-8000-000000000006","type":"toggle","has_children":true,"toggle":{"rich_text":[{"plain_text":"Nested"}]}}
+  ],
+  "00000000-0000-4000-8000-000000000005": [
+    {"table_row":{"cells":[[{"plain_text":"Name"}],[{"plain_text":"Value"}]]}},
+    {"table_row":{"cells":[[{"plain_text":"ExampleTerm","annotations":{"bold":true}}],[{"plain_text":"A | B"}]]}},
+    {"table_row":{"cells":[[{"plain_text":"<script>bad()</script>"}],[{"text":{"content":"Reference","link":{"url":"https://example.test/reference"}}}]]}}
+  ],
+  "00000000-0000-4000-8000-000000000006": [
+    {"id":"00000000-0000-4000-8000-000000000007","type":"code","code":{"rich_text":[{"plain_text":"nested()"}]}},
+    {"id":"00000000-0000-4000-8000-000000000008","type":"bulleted_list_item","has_children":true,"bulleted_list_item":{"rich_text":[{"plain_text":"Parent item"}]}}
+  ],
+  "00000000-0000-4000-8000-000000000008": [
+    {"id":"00000000-0000-4000-8000-000000000009","type":"paragraph","paragraph":{"rich_text":[{"plain_text":"Child paragraph"}]}}
+  ]
+}

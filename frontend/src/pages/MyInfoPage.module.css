@@ -1,0 +1,57 @@
+/* 모바일 한 열. 로그인 화면·시트와 같은 최대 폭 */
+.page {
+  max-width: 560px;
+  min-height: 100svh;
+  margin: 0 auto;
+}
+
+.main {
+  padding: var(--space-6) var(--space-4);
+}
+
+.title {
+  margin: 0 0 var(--space-4);
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 700;
+}
+
+/* 목업 F4-5의 흰 종이 상자. 디자인 시스템은 카드를 퀴즈 문항에만 쓰지만 이 화면은 목업을 따라 화면 안에서만 이 모양을 쓴다 */
+.box {
+  box-sizing: border-box;
+  padding: var(--space-4);
+  background: var(--surface-200);
+  border: 1px solid var(--surface-300);
+  border-radius: var(--radius-md);
+}
+
+.boxTitle {
+  margin: 0 0 var(--space-3);
+  font-size: 17px;
+  line-height: 26px;
+  font-weight: 600;
+}
+
+.details {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: var(--space-3);
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.details dt {
+  color: var(--ink-muted);
+}
+
+.details dd {
+  margin: 0;
+}
+
+.note {
+  margin: var(--space-3) 0 0;
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+}

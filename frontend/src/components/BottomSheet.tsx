@@ -1,0 +1,104 @@
+import { useEffect, useId, useRef } from 'react'
+import type { ReactNode } from 'react'
+import styles from './BottomSheet.module.css'
+import { Scrim } from './Scrim.tsx'
+
+type BottomSheetProps = {
+  open: boolean
+  // 닫기 버튼·막 누르기·Esc에서 불린다. 열림 여부(open)는 부모가 정한다.
+  onClose: () => void
+  // 시트 제목(예: 용어 이름). 스크린 리더가 시트의 이름으로 읽는다.
+  title: ReactNode
+  // 제목 위에 놓는 표시(예: Badge "사전", "AI 생성")
+  badge?: ReactNode
+  closeLabel?: string
+  children: ReactNode
+}
+
+// 스크롤 잠금: 열린 시트 수와, 첫 시트가 열리기 전의 body overflow 값
+let openSheets = 0
+let overflowBeforeLock = ''
+
+function lockScroll() {
+  if (openSheets === 0) overflowBeforeLock = document.body.style.overflow
+  openSheets += 1
+  document.body.style.overflow = 'hidden'
+}
+
+function unlockScroll() {
+  openSheets = Math.max(0, openSheets - 1)
+  if (openSheets === 0) document.body.style.overflow = overflowBeforeLock
+}
+
+// 아래에서 올라오는 모달 시트. 브라우저 기본 모달(dialog)을 써서 아래를 브라우저가 처리한다.
+//  - 열 때 제목으로 포커스가 가고(디자인 시스템 접근성 규칙), 포커스는 시트 안에 갇힌다
+//  - 배경은 조작할 수 없고, Esc로 닫힌다
+//  - 닫으면 시트를 연 버튼으로 포커스가 돌아간다
+export function BottomSheet({ open, onClose, title, badge, closeLabel = '닫기', children }: BottomSheetProps) {
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  const titleRef = useRef<HTMLHeadingElement>(null)
+  const titleId = useId()
+
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+    if (open && !dialog.open) {
+      dialog.showModal()
+      // showModal은 첫 조작(닫기 버튼)에 포커스를 두므로, 제목으로 옮긴다.
+      titleRef.current?.focus({ preventScroll: true })
+    }
+    if (!open && dialog.open) dialog.close()
+  }, [open])
+
+  // 시트가 열린 채 화면에서 사라져도 브라우저 모달을 닫아, 배경 비활성이 남지 않고 포커스가 연 요소로 돌아가게 한다.
+  useEffect(() => {
+    const dialog = dialogRef.current
+    return () => {
+      if (dialog?.open) dialog.close()
+    }
+  }, [])
+
+  // 시트가 열려 있는 동안 뒤 화면이 스크롤되지 않게 한다. 시트가 겹쳐 열릴 수 있어 시트마다 이전 값을 저장해 복원하지 않고,
+  // 열린 시트 수를 세어 처음 열릴 때 원래 값을 저장하고 마지막 시트가 닫힐 때 그 값으로 돌려놓는다.
+  useEffect(() => {
+    if (!open) return
+    lockScroll()
+    return unlockScroll
+  }, [open])
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className={styles.dialog}
+      aria-labelledby={titleId}
+      aria-modal="true"
+      onCancel={(event) => {
+        // 시트 안에 다른 시트가 겹쳐 열린 경우(예: AI 설명 시트 안의 오류 신고 시트) 안쪽 시트의 Esc가 React 이벤트로 올라와 바깥 시트까지 닫지 않게, 이 dialog 자신의 이벤트만 다룬다.
+        if (event.target !== event.currentTarget) return
+        // Esc는 브라우저가 바로 닫지 않게 막고, 부모가 open을 바꾸게 한다.
+        event.preventDefault()
+        onClose()
+      }}
+      // 브라우저가 스스로 닫은 경우에만 부모 상태를 맞춘다. 코드가 닫았거나(정리 함수·StrictMode) 이미 다시 열렸으면 알리지 않는다.
+      onClose={(event) => {
+        if (event.target !== event.currentTarget) return
+        if (open && !dialogRef.current?.open) onClose()
+      }}
+    >
+      <Scrim onClick={onClose} />
+      <div className={styles.sheet}>
+        <div className={styles.grabRow}>
+          <span aria-hidden="true" className={styles.handle} />
+          <button type="button" className={styles.close} onClick={onClose}>
+            {closeLabel}
+          </button>
+        </div>
+        {badge ? <div className={styles.badge}>{badge}</div> : null}
+        <h2 id={titleId} ref={titleRef} tabIndex={-1} className={styles.title}>
+          {title}
+        </h2>
+        {children}
+      </div>
+    </dialog>
+  )
+}

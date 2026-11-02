@@ -1,0 +1,10 @@
+# terraform.tfvars로 복사해 실제 값을 넣는다. terraform.tfvars는 커밋하지 않는다.
+
+# 이메일 @ 앞부분. infra/terraform.tfvars의 owner와 같은 값.
+owner = "OWNER"
+
+# 백업을 읽고 지울 수 있는 사람. `aws sts get-caller-identity --query Arn --output text`로 확인한다.
+# - user/<이름>이면 그대로 넣는다.
+# - assumed-role/<역할>/<세션>이면 `aws iam get-role --role-name <역할> --query Role.Arn --output text`
+#   결과(경로 포함)를 넣는다. 경로가 빠지면 본인도 거부된다.
+backup_admin_arns = ["arn:aws:iam::123456789012:user/OWNER"]

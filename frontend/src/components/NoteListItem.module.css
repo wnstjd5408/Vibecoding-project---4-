@@ -1,0 +1,30 @@
+.item {
+  display: block;
+  min-height: 44px;
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--surface-300);
+  color: inherit;
+  text-decoration: none;
+}
+
+.item:active {
+  background: var(--surface-300);
+}
+
+.title {
+  font-size: 17px;
+  line-height: 26px;
+  font-weight: 600;
+}
+
+.meta {
+  margin-top: var(--space-1);
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+}
+
+.item:focus-visible {
+  outline-offset: -2px;
+}

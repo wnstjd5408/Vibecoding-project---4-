@@ -95,6 +95,8 @@ class Case:
                 raise DatasetError("schema: comprehension_questions")
             if any(not _text(point) for point in q["key_points"]):
                 raise DatasetError("schema: comprehension_questions")
+            if len(set(q["key_points"])) != len(q["key_points"]):
+                raise DatasetError("schema: duplicate_key_points")
         if not isinstance(value["reviewer"], str):
             raise DatasetError("schema: reviewer")
         if value["reviewer"] != "" and not _text(value["reviewer"]):

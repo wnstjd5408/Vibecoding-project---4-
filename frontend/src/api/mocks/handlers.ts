@@ -21,6 +21,16 @@ export function mockError(status: number, code: string, message: string, detail?
 const loginRequired = () => mockError(401, 'login_required', 'Login is required')
 const notFound = () => mockError(404, 'not_found', 'Resource not found')
 
+// 운영자 API의 가짜 응답이 맨 앞에서 부른다. 서버처럼 방문자는 401 login_required, 일반 사용자는 403 forbidden을 돌려주고,
+// 운영자면 null이라 그대로 이어서 처리한다(backend/app/auth.py의 require_operator와 같은 규칙이다).
+//   handle: () => operatorOnly() ?? { status: 200, body: ... }
+export function operatorOnly(): MockResponse | null {
+  const session = getMockSession()
+  if (session === 'visitor') return loginRequired()
+  if (session === 'member') return mockError(403, 'forbidden', 'Operator permission is required')
+  return null
+}
+
 // 합성 계정. 실제 계정·비밀번호가 아니다. 역할 값은 서버 계약(member·operator)과 같다.
 const ACCOUNTS = {
   'member@example.test': { password: 'example-password', role: 'member', display_name: '합성 사용자' },
@@ -29,6 +39,8 @@ const ACCOUNTS = {
 
 // E06 예시 2의 용어 7을 즐겨찾기했는지. 가짜 응답이 흉내 낸다.
 let favoriteTerm7 = false
+// E10 가짜 응답이 같은 대상의 재신고(200)를 흉내 내려고 기억하는 신고 대상. 새로 고치면 비워진다.
+const reportedTargets = new Set<string>()
 
 const SUBJECTS = [
   { id: 1, name: '네트워크', note_count: 2 },
@@ -42,6 +54,53 @@ const NOTES = [
   { id: 13, title: '예시 노트 · 인덱스가 조회를 빠르게 하는 방식', studied_on: '2026-10-02', subjects: [SUBJECTS[2]], parent_note_id: null },
   { id: 14, title: '예시 노트 · 캐시가 오래된 값을 돌려주는 경우', studied_on: '2026-09-27', subjects: [SUBJECTS[0]], parent_note_id: null },
 ].map((note) => ({ ...note, subjects: note.subjects.map(({ id, name }) => ({ id, name })) }))
+
+const EXAMPLE_IMAGE =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120"><rect width="320" height="120" fill="#dde2e9"/><text x="160" y="66" text-anchor="middle" font-size="20" fill="#16202f">EXAMPLE IMAGE</text></svg>')
+
+const GLOSSARY_IMAGE =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160"><rect width="320" height="160" fill="#dde2e9"/><text x="160" y="86" text-anchor="middle" font-size="20" fill="#16202f">합성 구조도</text></svg>')
+
+// 노트 본문 속 label의 모든 위치를 glossary_spans 형식(코드포인트, 끝 제외)으로 만든다. 가짜 응답이 서버 계산을 흉내 낸다.
+function spansOf(body: string, label: string, termId: number) {
+  const spans: { term_id: number; start: number; end: number }[] = []
+  for (let at = body.indexOf(label); at >= 0; at = body.indexOf(label, at + label.length)) {
+    const start = [...body.slice(0, at)].length
+    spans.push({ term_id: termId, start, end: start + [...label].length })
+  }
+  return spans
+}
+
+// 위치 계산 시험용 합성 노트: 제목·굵게·이스케이프·엔티티·목록·인라인 코드·코드 블록·이모지(UTF-16 두 칸)가 섞여 있다.
+const RICH_BODY = [
+  '## 프로세스 **스케줄링**',
+  '',
+  '😀 ExampleTerm 은 \\*별표\\* 와 &amp; 가 있는 글에서도 찾아요.',
+  '',
+  '- 첫째 항목 ExampleTerm',
+  '- 둘째 `code ExampleTerm` 항목',
+  '',
+  '```js',
+  'const a = ExampleTerm',
+  '```',
+  '',
+  '끝 줄입니다.',
+].join('\n')
+
+const RICH_NOTE = {
+  id: 12,
+  revision: 1,
+  title: '예시 노트 · 프로세스가 번갈아 실행되는 이유',
+  studied_on: '2026-10-09',
+  subjects: [{ id: 2, name: '운영체제' }],
+  sources: [],
+  body_markdown: RICH_BODY,
+  images: {},
+  glossary_terms: [{ term_id: 7, key: 'exampleterm', label: 'ExampleTerm' }],
+  glossary_spans: spansOf(RICH_BODY, 'ExampleTerm', 7),
+}
 
 const routes: Route[] = [
   // 백엔드 상태 확인. 개발 서버 프록시가 실제 백엔드의 /health로 이어 주는 경로와 같은 모양이다.
@@ -95,11 +154,12 @@ const routes: Route[] = [
       return { status: 200, body }
     },
   },
-  // E05 노트 읽기. 예시 1의 노트 11만 있다.
+  // E05 노트 읽기. 예시 1의 노트 11과, 마크다운 문법·이모지가 섞인 시험용 노트 12만 있다.
   {
     method: 'GET',
     pattern: /^\/api\/notes\/(\d+)$/,
     handle: (_request, [noteId]) => {
+      if (noteId === '12') return { status: 200, body: RICH_NOTE }
       if (noteId !== '11') return notFound()
       return {
         status: 200,
@@ -112,11 +172,8 @@ const routes: Route[] = [
           sources: [{ url: 'https://example.test/doc', label: '예시 문서' }],
           body_markdown: '이 노트는 ExampleTerm 을 설명합니다. UnknownWord 는 사전에 없습니다. ![그림](note-image:blk-1)',
           images: {
-            'blk-1': {
-              url: 'https://storage.example.test/signed/EXAMPLE?token=EXAMPLE_ONLY',
-              alt: '그림',
-              expires_at: '2026-10-23T05:35:00Z',
-            },
+            // 예시 1은 https://storage.example.test/... URL이다. 가짜 응답에서도 그림이 보이도록 같은 모양의 data URL을 쓴다.
+            'blk-1': { url: EXAMPLE_IMAGE, alt: '그림', expires_at: '2026-10-23T05:35:00Z' },
           },
           glossary_terms: [{ term_id: 7, key: 'exampleterm', label: 'ExampleTerm' }],
           glossary_spans: [{ term_id: 7, start: 6, end: 17 }],
@@ -133,7 +190,8 @@ const routes: Route[] = [
       const body = {
         term: { id: 7, key: 'exampleterm', label: 'ExampleTerm' },
         body_markdown: '합성 설명 문장입니다.',
-        images: [{ id: 3, url: 'https://storage.example.test/glossary/EXAMPLE', alt: '합성 구조도' }],
+        // 예시 2는 https://storage.example.test/... URL이다. 가짜 응답에서도 그림이 보이도록 같은 모양의 data URL을 쓴다.
+        images: [{ id: 3, url: GLOSSARY_IMAGE, alt: '합성 구조도' }],
       }
       return { status: 200, body: getMockSession() === 'visitor' ? body : { ...body, is_favorite: favoriteTerm7 } }
     },
@@ -143,6 +201,88 @@ const routes: Route[] = [
     method: 'POST',
     pattern: /^\/api\/term-views$/,
     handle: () => ({ status: 200, body: { recorded: getMockSession() !== 'visitor' } }),
+  },
+  // E09 AI 설명. 방문자는 항상 401 login_required다. 로그인한 사용자는 예시 노트 11의 선택 위치로 세 갈래 응답을 받는다(3절 예시 3).
+  //  - UnknownWord(27~38): 새로 만든 공유 설명, ExampleTerm(6~17): 사전에 있는 용어, 그 밖: 저장하지 않는 1회용 설명
+  {
+    method: 'POST',
+    pattern: /^\/api\/ai\/explanations$/,
+    handle: ({ body }) => {
+      if (getMockSession() === 'visitor') return loginRequired()
+      const { note_id, selection } = (body ?? {}) as { note_id?: number; selection?: { start?: number; end?: number } }
+      if (note_id !== 11 || !selection) return notFound()
+      if (selection.start === 27 && selection.end === 38) {
+        return {
+          status: 200,
+          body: {
+            source: 'ai',
+            term: { id: 12, key: 'unknownword', label: 'UnknownWord' },
+            explanation: { id: 31, body: '합성 AI 설명입니다.', review_status: 'pending', cached: false },
+            reportable: true,
+            is_favorite: false,
+          },
+        }
+      }
+      if (selection.start === 6 && selection.end === 17) {
+        return {
+          status: 200,
+          body: {
+            source: 'glossary',
+            term: { id: 7, key: 'exampleterm', label: 'ExampleTerm' },
+            body_markdown: '합성 설명 문장입니다.',
+            images: [{ id: 3, url: GLOSSARY_IMAGE, alt: '합성 구조도' }],
+            is_favorite: false,
+          },
+        }
+      }
+      return { status: 200, body: { source: 'ai', term: null, explanation: { id: null, body: '합성 1회용 AI 설명입니다.' }, reportable: false } }
+    },
+  },
+  // E11 오늘의 퀴즈. 방문자는 401 login_required, 로그인한 사용자는 예시 5의 ready(둘째 문항은 이미 답함)를 받는다. 답하기 전 문항에는 정답·해설이 없다.
+  // 그 밖의 다섯 상태(not_open·none·generating·failed·ai_limit_reached)는 가짜 응답이 아니라 시험의 합성 HTTP 응답으로 만든다.
+  {
+    method: 'POST',
+    pattern: /^\/api\/quiz\/today$/,
+    handle: () => {
+      if (getMockSession() === 'visitor') return loginRequired()
+      return {
+        status: 200,
+        body: {
+          status: 'ready',
+          quiz_date: '2026-10-23',
+          items: [
+            { id: 41, difficulty: '중', question: '합성 질문 1입니다.', answered: false, followups: [], can_request_followup: false },
+            {
+              id: 42,
+              difficulty: '하',
+              question: '합성 질문 2입니다.',
+              answered: true,
+              your_answer: '합성 답변',
+              correct_answer: '합성 정답',
+              explanation: '합성 해설',
+              followups: [{ seq: 1, question: '합성 꼬리 질문', answered: false }],
+              can_request_followup: false,
+            },
+          ],
+        },
+      }
+    },
+  },
+  // E10 신고. 방문자는 401 login_required다. 로그인한 사용자는 AI 설명 31·퀴즈 문항 41·42만 신고할 수 있고(그 밖은 404),
+  // 같은 대상을 다시 신고하면 200으로 기존 신고를 돌려준다(예시 7).
+  {
+    method: 'POST',
+    pattern: /^\/api\/reports$/,
+    handle: ({ body }) => {
+      if (getMockSession() === 'visitor') return loginRequired()
+      const { target } = (body ?? {}) as { target?: { type?: string; id?: number } }
+      const known = (target?.type === 'ai_explanation' && target.id === 31) || (target?.type === 'quiz_item' && (target.id === 41 || target.id === 42))
+      if (!known) return notFound()
+      const key = `${target.type}:${target.id}`
+      const again = reportedTargets.has(key)
+      reportedTargets.add(key)
+      return { status: again ? 200 : 201, body: { id: 5, status: 'open' } }
+    },
   },
   // E08 즐겨찾기. 방문자는 항상 401 login_required다.
   {

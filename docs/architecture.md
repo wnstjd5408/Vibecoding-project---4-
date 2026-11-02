@@ -50,7 +50,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 1. 브라우저(React)는 FastAPI(`/api`)만 부른다. 브라우저에는 Supabase 키도 AI 키도 두지 않는다. (결정)
 2. FastAPI는 Supabase DB에 secret key(`service_role`)로 접근한다. 여러 문장을 한 트랜잭션으로 묶어야 하는 원자 작업(한도 예약, 퀴즈 선점, 노트·사전 무효화, 삭제 작업 기록)은 SQL 함수로 만들고 `service_role`에만 EXECUTE를 준다. 나머지 읽기·쓰기는 REST로 한다. (결정)
 3. AI는 FastAPI가 Amazon Bedrock(Converse API)으로 부른다. 인증은 `AI_AUTH_MODE`로 `oidc`(기본)와 `api_key`(대체)를 고른다. AI 자격증명도 FastAPI에만 있다. (결정, D-056)
-4. 노트 이미지는 비공개 버킷에 두고 FastAPI가 읽기 권한을 확인한 뒤 서명 URL을 내준다. (결정) 사전 이미지 버킷은 공개 읽기를 제안한다. (미정, Q7) 앱이 도는 동안 두 버킷에 쓰는 것은 FastAPI뿐이다. 예외는 5번의 가져오기 스크립트로, 노트와 노트 이미지를 한 번 기록한다.
+4. 노트 이미지는 비공개 버킷에 두고 FastAPI가 읽기 권한을 확인한 뒤 서명 URL을 내준다. (결정) 사전 이미지 버킷은 공개 읽기이고, 사전 읽기(E06)가 공개 주소를 내준다. (결정, Q7, 2026-11-02) 앱이 도는 동안 두 버킷에 쓰는 것은 FastAPI뿐이다. 예외는 5번의 가져오기 스크립트로, 노트와 노트 이미지를 한 번 기록한다.
 5. Notion은 처음 한 번만 쓴다. 운영자가 로컬에서 가져오기 스크립트를 실행하고, 그 뒤로는 앱이 노트의 원본이다. 실시간 동기화는 하지 않는다. 가져오기가 끝나면 Notion 통합 공유를 해제하고 가져오기 전용 키를 폐기한다. (결정) 스크립트는 DB에 노트를, 노트 이미지 버킷에 이미지를 쓴다. 이때 쓰는 Supabase 자격증명은 가져오기 전용 secret key다. 운영자 로컬 환경변수에만 두고, 가져오기가 끝나면 폐기하며, 복구 모드로 다시 실행할 때 새로 발급한다. 별도 키를 발급할 수 있는지는 가져오기 구현 때 확인한다. (결정, D-070)
 
 **신뢰 경계**
@@ -141,11 +141,13 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 - 이름·이메일 같은 개인 정보는 AI에 보내지 않는다. 노트 문장과 사용자 답변은 외부 AI 사업자로 나간다. 사업자의 보관·학습 사용 조건은 구현 때 공식 문서로 확인한다. (미확인)
 - 모델은 gpt-6-luna로 잠정 시작한다. 품질 시험을 통과하지 못하면 바꾸고, 퀴즈·AI 기능 구현 착수 전에 확정한다. (결정, D-034) 모델 ID는 설정 한 곳에 두고 응답에 내보내지 않는다.
 
-**순서: 예약 → 호출 → 정산 (제안)**
+**순서: 예약 → 호출 → 정산 (제안, MEG-86에서 구현)**
+
+`backend/app/ai_ledger.py`의 `run_ai_call`이 아래 순서를 맡고, 원자 작업은 SQL 함수 `ai_reserve`·`ai_settle`·`ai_claim_quiz_set`(퀴즈 세트 선점과 첫 예약)·`ai_invalidate_explanations`(설명 무효화)가 한다.
 
 1. AI를 부르기 전에 `ai_usage_ledger`에 예상 비용을 `reserved`로 넣는다. 한 트랜잭션에서 합계를 잠그고 읽은 뒤 넣어서 동시 요청이 한도를 함께 넘지 못하게 한다. 한도를 넘으면 예약도 AI 호출도 없이 한도 안내를 돌려준다.
-2. Bedrock을 부른다. 호출당 시간 초과를 두고, 호출 안 재시도는 1회까지다. 재시도도 따로 예약·정산한다.
-3. 응답의 실제 사용량으로 `settled` 처리한다. 시간 초과처럼 과금 여부를 모르는 실패는 예약액 그대로 정산하고, 과금되지 않았음이 확실한 실패만 `released`로 바꾼다.
+2. Bedrock을 부른다. 호출당 시간 초과를 두고, 호출 안 재시도는 1회까지다. 재시도도 따로 예약·정산한다. botocore 자동 재시도는 끈다. 켜 두면 예약 없는 호출이 생긴다.
+3. 응답의 실제 사용량으로 `settled` 처리한다. 읽기 시간 초과·연결 끊김처럼 요청이 나갔을 수 있어 과금 여부를 모르는 실패는 예약액 그대로 정산하고, 과금되지 않았음이 확실한 실패만 `released`로 바꾼다. `released` 대상은 STS·배포 환경 단계의 실패, Bedrock의 거절(권한·검증·스로틀링·모델 없음), 인증·권한 거절(`UnrecognizedClientException`·`ExpiredTokenException`·`InvalidSignatureException`·`InvalidClientTokenId`·`IncompleteSignature`·`RequestExpired`·`NotAuthorized`), 요청이 서버에 닿기 전의 실패(`ConnectTimeoutError`·`EndpointConnectionError`·`NoCredentialsError`)다(MEG-145). `released` 행은 일·월 합계, 사용자 몫, 사용자별 횟수에 세지 않는다.
 4. 함수가 중간에 죽어 `reserved`로 오래 남은 행은 다음 예약 때 예약액 그대로 정산한다.
 
 **한도:** 사용자별 하루 새 AI 설명 횟수, 사용자당 하루 퀴즈 1회(DB 고유 제약), 문항당 꼬리 질문 2개(DB 제약), 호출당 토큰 상한, 한 사용자의 하루 사용 상한, 전체 하루·월 예산을 둔다. 숫자는 모델 확정 때 정한다(원본 5절). 한도를 다 쓰면 안내만 보이고 사전 설명과 노트 읽기는 계속된다. 같은 요청을 자동으로 반복하지 않는다.
@@ -188,8 +190,9 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 - **배포 증거:** 환경·버전·URL·동작 확인·복구 근거·사람의 출시 수락은 릴리스 티켓(MEG-21)에 남긴다.
 - **AI 장애:** AI 기능만 안내로 바꾸고 노트·사전 읽기는 계속 동작한다.
 - **Supabase 무료 플랜:** 사용이 없으면 프로젝트가 일시 정지될 수 있다(확인 필요). 정지 때 복구 절차는 릴리스 티켓에 적는다.
-- **DB 백업:** 운영자가 주기적으로 `supabase db dump`를 받아 저장소 밖 비공개 위치에 보관한다. 주기는 정하지 않았다. (미정, Q6)
-- **이미지 백업:** DB 덤프와 Supabase 백업에는 Storage 파일이 들어 있지 않다. 노트 이미지는 가져오기 직후 한 번 파일로 백업하고, 사전 이미지는 주기적으로 백업한다. (결정)
+- **DB 백업:** GitHub Actions `DB Backup`이 주 1회 `supabase db dump`를 받아 저장소 밖 비공개·암호화된 S3 버킷에 올린다. 사전을 대량으로 고치기 전에는 운영자가 같은 워크플로를 수동으로 실행한다. RPO는 7일이고 최근 8개(약 2개월) 이상을 버전으로 보관한다. 설정·복원 절차는 [인프라 가이드](../infra/README.md)의 "DB·이미지 백업" 절을 따른다. (결정, Q6, D-072)
+- **이미지 백업:** DB 덤프와 Supabase 백업에는 Storage 파일이 들어 있지 않다. 노트 이미지는 가져오기 직후 한 번 파일로 백업하고, 사전 이미지는 DB 백업과 같은 주기로 백업한다. 받은 파일 수는 이미지 표의 행과 대조한다. (결정)
+- **고정 IP 백업 전환:** Supabase 접속 제한에 맞춰 비공개 운영 저장소의 전용 EC2 러너와 Elastic IP를 사용한다. [Terraform·전환 절차](../infra/backup-runner/README.md)는 구현 단계이며 아직 적용하지 않았다. 기존 역할은 전환 시 운영 저장소 main만 신뢰하고, 러너는 백업 후 정지한다. 유료 자원 생성은 사람의 별도 승인을 받는다. (결정, MEG-131)
 - **복구:** 노트·사전·사용자 데이터는 최근 덤프로 되돌린다. Notion은 가져온 뒤로 갱신하지 않으므로 노트 본문의 복구 원본으로 쓰지 않는다. 노트 이미지는 Notion 페이지가 남아 있는 동안 복구 모드 가져오기로 다시 받을 수 있다.
 
 ## 8. 외부 의존성 · 환경변수
@@ -211,6 +214,8 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 |---|---|---|---|
 | `SUPABASE_URL` | Supabase 프로젝트 주소 | 필수 | 백엔드(로컬·Vercel) |
 | `SUPABASE_SECRET_KEY` | 백엔드 전용 secret key. RLS를 우회하므로 프런트엔드·로그·URL에 넣지 않는다 | 필수. 용도별로 키를 따로 만든다 | 백엔드(로컬·Vercel) |
+| `NOTE_IMAGE_BUCKET` | 노트 이미지 비공개 버킷 이름. 노트 읽기(E05)가 이 버킷의 서명 URL을 발급한다 | 이미지가 있는 노트를 읽을 때만 필요하다. 비어 있거나 영문·숫자·`.`·`_`·`-` 밖의 글자가 있으면 그 요청이 500이다. 이름이 틀려도 Storage가 오류를 주지 않아 이미지만 빠지고 `stage=storage ... unsigned_images` ERROR 로그가 남는다(MEG-73) | 백엔드(로컬·Vercel) |
+| `GLOSSARY_IMAGE_BUCKET` | 사전 이미지 공개 읽기 버킷 이름. 사전 읽기(E06)가 이 버킷의 공개 주소를 만든다(발급 요청 없음) | 이미지가 있는 용어를 읽을 때만 필요하다. 비어 있거나 영문·숫자·`.`·`_`·`-` 밖의 글자가 있으면 그 요청이 500이다. 버킷이 공개가 아니거나 이름이 틀리면 주소만 열리지 않는다(MEG-75) | 백엔드(로컬·Vercel) |
 | `NOTION_TOKEN` | 가져오기 전용 읽기 통합 토큰 | 가져오기 때만. 끝나면 폐기한다(2절 5번) | 운영자 로컬 |
 | `NOTION_DATABASE_ID` | 가져올 노트 데이터베이스 | 가져오기 때만 | 운영자 로컬 |
 | `AI_AUTH_MODE` | Bedrock 인증 방식 `oidc` 또는 `api_key` | 비우면 `oidc`. 다른 값은 오류 | 백엔드(로컬·Vercel) |
@@ -218,17 +223,19 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 | `AWS_BEARER_TOKEN_BEDROCK` | `api_key` 모드의 장기 API 키. 만료 30일 | `api_key`에서 필수. 평소에는 비워 둔다 | 백엔드(Vercel, 대체 경로를 쓰는 동안만) |
 | `BEDROCK_REGION` | Bedrock 호출 리전 | 비우면 `ap-northeast-1` | 백엔드(선택) |
 | `BEDROCK_MODEL_ID` | 호출할 모델 ID. 응답에 내보내지 않는다(5절) | 비우면 `global.openai.gpt-6-luna` | 백엔드(선택) |
+| `AI_DAILY_BUDGET_USD`·`AI_MONTHLY_BUDGET_USD` | AI 하루 전체·월 예산(USD). 한 사용자의 하루 몫은 하루 예산의 50%다 | AI를 부르는 요청에서 필수. 양의 숫자가 아니면 예약 전에 500이고 AI를 부르지 않는다. 금액은 공개 저장소에 쓰지 않는다(2026-11-02 결정, MEG-86) | 백엔드(Vercel·AI를 시험하는 로컬) |
+| `AI_INPUT_USD_PER_MTOK`·`AI_OUTPUT_USD_PER_MTOK` | 모델의 입력·출력 100만 토큰당 단가(USD). 예약액과 정산액 계산에 쓴다 | 위와 같다. 모델을 바꾸면 같이 바꾼다 | 백엔드(Vercel·AI를 시험하는 로컬) |
 | `ALLOWED_ORIGINS` | 상태를 바꾸는 요청(POST·PUT·PATCH·DELETE)의 `Origin`으로 받을 출처 목록(쉼표로 구분, `scheme://host[:port]`만). CORS 허용 출처도 같은 값이다 | 비우면 `http://localhost:5173`. `*`·경로가 든 값은 시작할 때 거부한다. 운영(`VERCEL_ENV=production`)에서 비우면 앱이 시작하지 않는다 | 백엔드(로컬·Vercel) |
 | `VITE_API_MOCK` | 가짜 응답과 실제 API 전환 | `true`일 때만 가짜 응답. 나머지는 같은 출처의 `/api`로 요청한다. `VITE_` 값에는 비밀값을 넣지 않는다 | 프런트엔드(빌드 시) |
+| `VERCEL`·`VERCEL_ENV`·`VERCEL_TARGET_ENV`·`VERCEL_GIT_COMMIT_REF` | Vercel 시스템 환경변수. 직접 넣지 않는다. AI 호출 허용 판정(운영·staging Preview·로컬만)과 운영 판정(`ALLOWED_ORIGINS` 필수)에 쓴다 | Vercel이 런타임에 넣는다. 프로젝트 설정의 시스템 환경변수 노출이 켜져 있어야 한다. Vercel 위인데 `VERCEL_ENV`가 없으면 AI를 막는다(MEG-120, [ai-credentials.md](ai-credentials.md)) | 백엔드(Vercel) |
 
+- 백업 워크플로(`DB Backup`, 7절)는 앱 환경변수가 아니라 GitHub `db-backup` Environment의 비밀값을 쓴다. `SUPABASE_DB_URL`(세션 풀러 연결 문자열, DB 덤프용), `SUPABASE_URL`·`SUPABASE_SECRET_KEY`(이미지 백업용, 백업 전용 키), `AWS_ROLE_ARN`·`BACKUP_BUCKET`(S3 업로드)이고, 변수는 `GLOSSARY_IMAGE_BUCKET`·`NOTE_IMAGE_BUCKET`이다. 앱이 도는 동안 FastAPI 밖에서 DB를 읽는 예외다(D-072). 설정은 [인프라 가이드](../infra/README.md)의 "DB·이미지 백업" 절을 따른다.
 - 가져오기 스크립트가 DB·버킷에 쓸 때 쓰는 가져오기 전용 secret key의 변수 이름은 아직 없다. 가져오기 구현(MEG-85)에서 정한다. (미정, D-070)
-- 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정), `backend/app/config.py`(허용 출처), `backend/app/supabase.py`(Supabase 주소·secret key), `frontend/src/api/source.ts`(가짜/실제 전환)다. `VITE_API_BASE_URL`은 사용하지 않는다. Notion 변수는 가져오기 구현 때 읽는다.
+- 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정), `backend/app/ai_ledger.py`(AI 예산·단가), `backend/app/config.py`(허용 출처), `backend/app/supabase.py`(Supabase 주소·secret key·노트·사전 이미지 버킷), `frontend/src/api/source.ts`(가짜/실제 전환)다. `VITE_API_BASE_URL`은 사용하지 않는다. Notion 변수는 가져오기 구현 때 읽는다.
 
 ## 9. 아직 정하지 않은 것
 
 | 질문 | 막는가 | 상태 |
 |---|---|---|
 | AI 모델 확정과 한도 숫자 | 퀴즈·AI 기능 구현 | gpt-6-luna로 잠정 시작. 모델 시험과 Bedrock 단가 확인 뒤 확정 |
-| 사전 이미지 버킷 공개 여부(Q7) | 아니오 | 공개 읽기 제안 |
-| 백업 주기와 보관 위치(Q6) | 아니오 | 주 1회 + 대량 수정 전 제안 |
 | 프런트가 렌더된 글에서 원문 위치를 계산할 수 있는가 | AI 설명 구현 | 구현 전 확인. 안 되면 요청 형식을 다시 정한다 |

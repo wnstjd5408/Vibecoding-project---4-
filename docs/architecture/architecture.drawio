@@ -43,7 +43,7 @@
         <mxCell id="db" value="Postgres&lt;br&gt;RLS, service_role만" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;html=1;aspect=fixed;pointerEvents=1;fontColor=#232F3E;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;shape=mxgraph.aws4.generic_database;" vertex="1" parent="zone-supabase">
           <mxGeometry x="90" y="220" width="60" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="glossary_images" value="사전 이미지 버킷&lt;br&gt;공개 읽기 제안" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;html=1;aspect=fixed;pointerEvents=1;fontColor=#232F3E;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;shape=mxgraph.aws4.bucket;" vertex="1" parent="zone-supabase">
+        <mxCell id="glossary_images" value="사전 이미지 버킷&lt;br&gt;공개 읽기" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;html=1;aspect=fixed;pointerEvents=1;fontColor=#232F3E;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;shape=mxgraph.aws4.bucket;" vertex="1" parent="zone-supabase">
           <mxGeometry x="90" y="390" width="60" height="60" as="geometry" />
         </mxCell>
         <mxCell id="note_images" value="노트 이미지 버킷&lt;br&gt;비공개, 서명 URL" style="sketch=0;outlineConnect=0;gradientColor=none;fillColor=#232F3E;strokeColor=none;dashed=0;html=1;aspect=fixed;pointerEvents=1;fontColor=#232F3E;verticalLabelPosition=bottom;verticalAlign=top;align=center;fontSize=12;fontStyle=0;shape=mxgraph.aws4.bucket;" vertex="1" parent="zone-supabase">
@@ -120,7 +120,7 @@
         <mxCell id="legend-1" value="&lt;b&gt;요청 흐름 (실선)&lt;/b&gt;&lt;br&gt;1. 화면 파일을 받는다(HTTPS)&lt;br&gt;2. /api 요청. 세션 쿠키, 상태 변경은 Origin 검사&lt;br&gt;3. 로그인·로그아웃·계정 발급&lt;br&gt;4. secret key로 읽기·쓰기. 원자 작업은 SQL 함수&lt;br&gt;5. 사전 이미지 업로드·삭제" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=12;strokeColor=#D5DBDB;fillColor=#ffffff;fontColor=#232F3E;" vertex="1" parent="1">
           <mxGeometry x="40" y="800" width="340" height="120" as="geometry" />
         </mxCell>
-        <mxCell id="legend-2" value="&lt;b&gt;요청 흐름 (계속)&lt;/b&gt;&lt;br&gt;6. 읽기 권한 확인 뒤 서명 URL 발급, 객체 삭제&lt;br&gt;7. AI 호출. 예약 → 호출 → 정산, OIDC(기본)·API 키(대체)&lt;br&gt;8. 서명 URL로 노트 이미지를 직접 읽는다(선 생략)&lt;br&gt;9. 공개 URL로 사전 이미지를 직접 읽는다(Q7 미정, 선 생략)" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=12;strokeColor=#D5DBDB;fillColor=#ffffff;fontColor=#232F3E;" vertex="1" parent="1">
+        <mxCell id="legend-2" value="&lt;b&gt;요청 흐름 (계속)&lt;/b&gt;&lt;br&gt;6. 읽기 권한 확인 뒤 서명 URL 발급, 객체 삭제&lt;br&gt;7. AI 호출. 예약 → 호출 → 정산, OIDC(기본)·API 키(대체)&lt;br&gt;8. 서명 URL로 노트 이미지를 직접 읽는다(선 생략)&lt;br&gt;9. 공개 URL로 사전 이미지를 직접 읽는다(Q7 결정, 선 생략)" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=12;strokeColor=#D5DBDB;fillColor=#ffffff;fontColor=#232F3E;" vertex="1" parent="1">
           <mxGeometry x="400" y="800" width="380" height="120" as="geometry" />
         </mxCell>
         <mxCell id="legend-3" value="&lt;b&gt;Notion 가져오기 (회색 점선, 처음 한 번)&lt;/b&gt;&lt;br&gt;10. 허용한 페이지 본문만 읽는다&lt;br&gt;11. 노트를 기록한다(이미 있으면 건너뜀)&lt;br&gt;12. 이미지를 재인코딩해 올린다" style="rounded=0;html=1;whiteSpace=wrap;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=12;strokeColor=#D5DBDB;fillColor=#ffffff;fontColor=#232F3E;" vertex="1" parent="1">

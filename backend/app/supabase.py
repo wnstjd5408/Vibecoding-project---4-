@@ -1,6 +1,7 @@
 """Supabase 호출 최소 래퍼. FastAPI만 secret key로 부른다(D-007).
 
-이 파일이 하는 일: 로그인·세션 갱신·로그아웃·세션 토큰 확인(Auth), profiles 조회(REST), SQL 함수 호출(RPC).
+이 파일이 하는 일: 로그인·세션 갱신·로그아웃·세션 토큰 확인(Auth), profiles·과목·노트·사전 용어 조회와 열람 기록(REST),
+노트 이미지 서명 URL 발급과 사전 이미지 공개 주소(Storage), SQL 함수 호출(RPC).
 """
 
 import hashlib
@@ -8,8 +9,12 @@ import hmac
 import os
 import re
 import uuid
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from math import ceil
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -24,6 +29,9 @@ _MAX_TOKEN_LENGTH = 4096
 # 재시도하면 풀릴 수 있는 응답. 그 밖의 4xx는 키·권한·주소 설정 오류로 본다.
 _TRANSIENT_STATUSES = frozenset({408, 425, 429})
 
+# 버킷 이름은 주소 경로에 그대로 들어간다. 영문·숫자·`.`·`_`·`-`만 받고 `.`·`..`는 막는다.
+_BUCKET_SHAPE = re.compile(r"(?!\.{1,2}$)[A-Za-z0-9._-]+")
+
 
 class SupabaseUnavailable(Exception):
     """연결 실패, 시간 초과, 5xx. main.py의 처리기가 503으로 바꾼다."""
@@ -31,6 +39,43 @@ class SupabaseUnavailable(Exception):
 
 class SupabaseConfigError(Exception):
     """환경변수가 없거나 키 권한이 거부됐다. main.py의 처리기가 500으로 바꾼다."""
+
+
+class AuthCreationUncertain(SupabaseUnavailable):
+    """Auth 생성 결과를 확인하지 못했다. 이 요청이 정한 ID만 복구 대상으로 쓴다."""
+
+    def __init__(self, user_id: str):
+        self.user_id = user_id
+        super().__init__("auth creation outcome unknown")
+
+
+class AuthRateLimited(Exception):
+    def __init__(self, retry_after: str | None):
+        # 초 형식과 HTTP-date 모두 허용한다. 누락·비정상 값은 60초 안내로 대체한다.
+        seconds = 60
+        if retry_after:
+            try:
+                seconds = int(retry_after)
+            except ValueError:
+                try:
+                    deadline = parsedate_to_datetime(retry_after)
+                    seconds = ceil((deadline - datetime.now(timezone.utc)).total_seconds())
+                except (ValueError, TypeError, OverflowError):
+                    pass
+        self.retry_after_seconds = max(1, min(seconds, 2147483647))
+        super().__init__("auth rate limited")
+
+
+class EmailExists(Exception):
+    """Auth가 같은 이메일의 기존 계정을 확인했다."""
+
+
+class AccountInputRejected(Exception):
+    """Auth의 입력 거절. 외부 오류 원문 대신 필드 이름만 보관한다."""
+
+    def __init__(self, field: str):
+        self.field = field
+        super().__init__(field)
 
 
 @dataclass(frozen=True)
@@ -58,13 +103,18 @@ _AUTH_REJECTED = frozenset({400, 401, 403, 422})
 _AUTH_CONFIG_ERRORS = frozenset({"email_provider_disabled", "provider_disabled"})
 
 
-def _auth_error_code(response: httpx.Response) -> str | None:
-    """Auth 오류 본문의 error_code. 본문이 JSON이 아니면 None이다. 메시지 원문은 쓰지 않는다."""
+def _error_field(response: httpx.Response, key: str) -> str | None:
+    """오류 본문(JSON 객체)의 문자열 필드 하나. 본문이 JSON 객체가 아니거나 값이 문자열이 아니면 None이다."""
     try:
-        code = response.json().get("error_code")
+        value = response.json().get(key)
     except (ValueError, AttributeError):
         return None
-    return code if isinstance(code, str) else None
+    return value if isinstance(value, str) else None
+
+
+def _auth_error_code(response: httpx.Response) -> str | None:
+    """Auth 오류 본문의 error_code. 메시지 원문은 쓰지 않는다."""
+    return _error_field(response, "error_code")
 
 
 def _is_user_rejection(response: httpx.Response, operation: str, extra: frozenset[int] = frozenset()) -> bool:
@@ -84,10 +134,19 @@ def _is_user_rejection(response: httpx.Response, operation: str, extra: frozense
 
 
 class SupabaseClient:
-    def __init__(self, url: str, secret_key: str, http: httpx.Client | None = None):
+    def __init__(
+        self,
+        url: str,
+        secret_key: str,
+        http: httpx.Client | None = None,
+        note_image_bucket: str | None = None,
+        glossary_image_bucket: str | None = None,
+    ):
         self._url = url.rstrip("/")
         self._secret_key = secret_key
         self._http = http or httpx.Client(timeout=_TIMEOUT)
+        self._note_image_bucket = note_image_bucket
+        self._glossary_image_bucket = glossary_image_bucket
 
     @classmethod
     def from_env(cls) -> "SupabaseClient":
@@ -95,16 +154,25 @@ class SupabaseClient:
         key = os.environ.get("SUPABASE_SECRET_KEY")
         if not url or not key:
             raise SupabaseConfigError("SUPABASE_URL or SUPABASE_SECRET_KEY is not set")
-        return cls(url, key)
+        # 이미지 버킷은 이미지가 있는 노트·용어를 읽을 때만 필요하다. 비어 있어도 앱은 뜨고 그때 500이 된다
+        # (노트 2026-10-30 결정, 사전은 같은 방식).
+        return cls(
+            url,
+            key,
+            note_image_bucket=os.environ.get("NOTE_IMAGE_BUCKET", "").strip() or None,
+            glossary_image_bucket=os.environ.get("GLOSSARY_IMAGE_BUCKET", "").strip() or None,
+        )
 
     def _headers(self, bearer: str | None = None) -> dict[str, str]:
         return {"apikey": self._secret_key, "Authorization": f"Bearer {bearer or self._secret_key}"}
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+    def _request(self, method: str, path: str, *, preserve_rate_limit: bool = False, **kwargs: Any) -> httpx.Response:
         try:
             response = self._http.request(method, f"{self._url}{path}", **kwargs)
         except httpx.HTTPError as exc:
             raise SupabaseUnavailable(type(exc).__name__) from None
+        if preserve_rate_limit and response.status_code == 429:
+            raise AuthRateLimited(response.headers.get("Retry-After"))
         if response.status_code >= 500 or response.status_code in _TRANSIENT_STATUSES:
             raise SupabaseUnavailable(f"status {response.status_code}")
         return response
@@ -178,23 +246,209 @@ class SupabaseClient:
             return False
         raise SupabaseConfigError(f"auth logout status {response.status_code}")
 
+    def _select(self, table: str, params: dict[str, str]) -> list[dict[str, Any]]:
+        response = self._request("GET", f"/rest/v1/{table}", params=params, headers=self._headers())
+        if response.status_code != 200:
+            # 키·권한 설정 오류(RLS·GRANT)는 응답에 원인을 담지 않고 500으로 낸다.
+            raise SupabaseConfigError(f"{table} select status {response.status_code}")
+        return response.json()
+
+    def create_auth_user(self, email: str, password: str) -> str:
+        """운영자 발급 계정을 만든다. 이메일 확인 메일·초대 메일은 보내지 않는다."""
+        user_id = str(uuid.uuid4())
+        try:
+            response = self._request(
+                "POST", "/auth/v1/admin/users", headers=self._headers(), preserve_rate_limit=True,
+                json={"id": user_id, "email": email, "password": password, "email_confirm": True},
+            )
+        except SupabaseUnavailable:
+            # 5xx·응답 유실은 서버에서 커밋됐을 수 있다. 새 POST를 자동 재시도하지 않는다.
+            raise AuthCreationUncertain(user_id) from None
+        if response.status_code in (400, 422):
+            code = _auth_error_code(response)
+            if code == "email_exists":
+                raise EmailExists()
+            if code in ("email_address_invalid", "email_address_not_authorized"):
+                raise AccountInputRejected("email")
+            if code == "weak_password":
+                raise AccountInputRejected("initial_password")
+        if response.status_code in (401, 403):
+            raise SupabaseConfigError("auth create permission denied")
+        if response.status_code not in (200, 201):
+            raise SupabaseUnavailable(f"auth create status {response.status_code}")
+        try:
+            returned_id = str(uuid.UUID(str(response.json()["id"])))
+            if returned_id != user_id:
+                raise ValueError("unexpected user id")
+            return user_id
+        except (ValueError, KeyError, TypeError):
+            raise AuthCreationUncertain(user_id) from None
+
+    def create_member_profile(self, user_id: str, display_name: str) -> None:
+        response = self._request(
+            "POST", "/rest/v1/profiles",
+            headers={**self._headers(), "Prefer": "return=minimal"},
+            json={"user_id": str(uuid.UUID(user_id)), "role": "member",
+                  "is_active": True, "display_name": display_name},
+        )
+        if response.status_code != 201:
+            raise SupabaseConfigError(f"profiles insert status {response.status_code}")
+
+    def delete_auth_user(self, user_id: str) -> None:
+        """발급 중 부분 실패를 보상한다. 일반 계정 회수 API로 노출하지 않는다."""
+        response = self._request(
+            "DELETE", f"/auth/v1/admin/users/{uuid.UUID(user_id)}",
+            headers=self._headers(), json={"should_soft_delete": False},
+        )
+        if response.status_code not in (200, 204):
+            raise SupabaseUnavailable(f"auth delete status {response.status_code}")
+
     def get_profile(self, user_id: str) -> Profile | None:
         """profiles 행이 없으면 None이다. user_id는 UUID 형식으로 검증한 값만 받는다."""
         user_id = str(uuid.UUID(user_id))
-        response = self._request(
-            "GET",
-            "/rest/v1/profiles",
-            params={"user_id": f"eq.{user_id}", "select": "role,is_active,display_name", "limit": "1"},
-            headers=self._headers(),
+        rows = self._select(
+            "profiles", {"user_id": f"eq.{user_id}", "select": "role,is_active,display_name", "limit": "1"}
         )
-        if response.status_code != 200:
-            # 키·권한 설정 오류(RLS·GRANT)는 응답에 원인을 담지 않고 500으로 낸다.
-            raise SupabaseConfigError(f"profiles select status {response.status_code}")
-        rows = response.json()
         if not rows:
             return None
         row = rows[0]
         return Profile(role=row["role"], is_active=bool(row["is_active"]), display_name=row.get("display_name"))
+
+    def list_subjects(self) -> list[dict[str, Any]]:
+        """과목 전체(id, name)를 id 오름차순으로 준다."""
+        return self._select("subjects", {"select": "id,name", "order": "id.asc"})
+
+    def list_notes(self, include_unpublished: bool) -> list[dict[str, Any]]:
+        """노트 목록 열과 연결된 과목 id(note_subjects)를 E04 정렬로 준다.
+
+        include_unpublished가 False면 공개 노트만 DB에서 거르고 운영자 열(is_published·revision·needs_review)도
+        읽지 않는다. 쪽 나누기가 없어 API 최대 행(config.toml max_rows = 1000)을 넘으면 조용히 잘린다(1.5).
+        """
+        columns = "id,title,studied_on,parent_note_id,note_subjects(subject_id)"
+        params = {"order": "studied_on.desc.nullslast,id.desc"}
+        if include_unpublished:
+            columns += ",is_published,revision,needs_review"
+        else:
+            params["is_published"] = "eq.true"
+        return self._select("notes", {"select": columns, **params})
+
+    def get_note(self, note_id: int, include_unpublished: bool) -> dict[str, Any] | None:
+        """E05 노트 한 개와 연결된 과목·출처·이미지 행. 없거나 볼 수 없으면 None이다.
+
+        include_unpublished가 False면 공개 노트만 DB에서 거른다. 비공개 열(memo 등)은 읽지 않는다.
+        """
+        params = {
+            "id": f"eq.{int(note_id)}",
+            "select": (
+                "id,revision,title,studied_on,body_markdown,"
+                "note_subjects(subjects(id,name)),note_sources(id,url,label),"
+                "note_images(notion_block_id,storage_path,alt)"
+            ),
+            "limit": "1",
+        }
+        if not include_unpublished:
+            params["is_published"] = "eq.true"
+        rows = self._select("notes", params)
+        return rows[0] if rows else None
+
+    def list_glossary_terms(self) -> list[dict[str, Any]]:
+        """사전 용어(glossary_entries 행이 있는 terms, S8)의 id·key·label. API 최대 행(1000)을 넘으면 잘린다."""
+        return self._select("terms", {"select": "id,key,label,glossary_entries!inner(term_id)", "order": "id.asc"})
+
+    def get_glossary_entry(self, term_id: int, user_id: str | None = None) -> dict[str, Any] | None:
+        """E06 사전 용어 하나: terms 열, 사전 설명, 이미지 행(id 오름차순). 사전 용어가 아니면 None이다.
+
+        glossary_entries가 없는 용어(AI로만 설명된 용어 포함)는 !inner 내장이 행을 거른다(S8).
+        glossary_entries는 term_id가 기본 키라 내장 결과가 배열이 아니라 객체 하나다(2026-11-02 로컬 확인).
+        user_id를 주면 그 사용자의 즐겨찾기 행만 favorites 배열로 함께 읽는다(빈 배열이면 즐겨찾기 아님).
+        한 번의 요청으로 끝내 로그인 사용자의 바텀시트 열기가 DB 왕복을 두 번 하지 않게 한다.
+        """
+        select = "id,key,label,glossary_entries!inner(body_markdown),glossary_images(id,storage_path,alt)"
+        params = {"id": f"eq.{int(term_id)}", "glossary_images.order": "id.asc", "limit": "1"}
+        if user_id is not None:
+            select += ",favorites(term_id)"
+            params["favorites.user_id"] = f"eq.{uuid.UUID(user_id)}"
+        rows = self._select("terms", {**params, "select": select})
+        return rows[0] if rows else None
+
+    def record_term_view(self, user_id: str, term_id: int, study_date: str) -> bool:
+        """term_views에 (사용자, 용어, KST 날짜) 한 건을 넣는다. 이미 있으면 그대로 둔다(기본 키 충돌 무시).
+
+        넣었거나 이미 있었으면 True, 용어가 없어 외래 키(term_views_term_id_fkey)에 걸렸으면 False다.
+        사용자 쪽 외래 키(profiles 행이 그 사이 지워짐) 같은 다른 거절은 설정 오류(500)로 낸다.
+        """
+        user_id = str(uuid.UUID(user_id))
+        response = self._request(
+            "POST",
+            "/rest/v1/term_views",
+            json={"user_id": user_id, "term_id": int(term_id), "study_date": study_date},
+            headers={**self._headers(), "Prefer": "resolution=ignore-duplicates,return=minimal"},
+        )
+        if response.status_code in (200, 201, 204):
+            return True
+        # 제약 이름은 v05 마이그레이션이 만든 기본 이름이다. 마이그레이션에서 이 외래 키 이름을 바꾸면
+        # 없는 용어가 404가 아니라 500이 되므로 여기와 시험(TERM_FK)을 함께 고친다.
+        if (
+            response.status_code == 409
+            and _error_field(response, "code") == "23503"
+            and "term_views_term_id_fkey" in (_error_field(response, "message") or "")
+        ):
+            return False
+        raise SupabaseConfigError(f"term_views insert status {response.status_code}")
+
+    def glossary_image_url(self, storage_path: str) -> str:
+        """사전 이미지 공개 버킷의 주소(기술 검토 Q7 결정 (a), 2026-11-02). 발급 요청 없이 만든다.
+
+        버킷 이름은 GLOSSARY_IMAGE_BUCKET이다. 없거나 모양이 틀리면 설정 오류(500)다. 주소 안에 버킷 이름과
+        경로가 들어가는 것은 E06의 예외로 받아들였다(2026-11-02 김준성, API spec 1.9·10.5).
+        경로에 빈 구간·`.`·`..`가 있으면 브라우저가 주소를 정규화해 다른 버킷을 가리킬 수 있어 설정 오류로 막는다.
+        """
+        bucket = self._glossary_image_bucket
+        if not bucket or not _BUCKET_SHAPE.fullmatch(bucket):
+            raise SupabaseConfigError("GLOSSARY_IMAGE_BUCKET is not set or invalid")
+        if any(segment in ("", ".", "..") for segment in storage_path.split("/")):
+            raise SupabaseConfigError("glossary image storage_path has an empty or dot segment")
+        return f"{self._url}/storage/v1/object/public/{bucket}/{quote(storage_path, safe='/')}"
+
+    def sign_note_images(self, paths: list[str], expires_in: int) -> dict[str, str]:
+        """노트 이미지 비공개 버킷의 서명 URL을 한 번에 받는다. 파일이 없어 발급되지 않은 경로는 결과에서 빠진다.
+
+        버킷 이름은 NOTE_IMAGE_BUCKET이다. 없거나 모양이 틀리면 설정 오류(500)다.
+        """
+        bucket = self._note_image_bucket
+        if not bucket or not _BUCKET_SHAPE.fullmatch(bucket):
+            raise SupabaseConfigError("NOTE_IMAGE_BUCKET is not set or invalid")
+        response = self._request(
+            "POST",
+            f"/storage/v1/object/sign/{bucket}",
+            json={"expiresIn": expires_in, "paths": paths},
+            headers=self._headers(),
+        )
+        if response.status_code != 200:
+            # 버킷 없음·키 권한 거부. 5xx·일시 상태는 _request가 이미 SupabaseUnavailable로 바꿨다.
+            raise SupabaseConfigError(f"storage sign status {response.status_code}")
+        try:
+            items = [(item["path"], item.get("signedURL"), item.get("error")) for item in response.json()]
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise SupabaseUnavailable("malformed storage response") from None
+        signed = {}
+        for path, signed_path, error in items:
+            url = self._signed_url(signed_path) if not error and isinstance(signed_path, str) else None
+            # 발급되지 않았거나 모양이 이상한 항목은 그 이미지만 뺀다. 호출 쪽이 빠진 수를 로그에 남긴다.
+            if url is not None:
+                signed[path] = url
+        return signed
+
+    def _signed_url(self, signed_path: str) -> str | None:
+        """Storage의 서명 경로(/object/sign/{버킷}/{경로}?token=...)를 브라우저가 열 수 있는 주소로 만든다.
+
+        Storage는 경로를 인코딩하지 않고 준다(공백·`?`·`&`가 그대로 온다, 2026-10-30 로컬 확인). 토큰 앞의
+        마지막 `?`에서 나눠 경로만 인코딩한다. 토큰은 base64url이라 그대로 둔다.
+        """
+        path, separator, query = signed_path.rpartition("?")
+        if not separator or not query.startswith("token="):
+            return None
+        return f"{self._url}/storage/v1{quote(path, safe='/')}?{query}"
 
     def keyed_hash(self, value: str) -> str:
         """이메일·IP 같은 원문 대신 저장할 키. secret key로 서명한 해시라 값을 되돌려 추측하기 어렵다."""
