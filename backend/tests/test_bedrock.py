@@ -12,7 +12,6 @@ from app.bedrock import (
     AiCallError,
     AiConfigError,
     BedrockSettings,
-    call_bedrock,
     converse_text,
     make_client,
 )
@@ -302,14 +301,11 @@ def test_plain_boto3_would_pick_bearer_over_explicit_keys(monkeypatch):
 # --- 호출 결과 (두 모드가 같은 코드·같은 형식) ---
 
 
-def test_both_modes_return_the_same_result_shape(monkeypatch):
+def test_both_modes_return_the_same_result_shape():
     fake_bedrock = SimpleNamespace(converse=lambda **_: GOOD_RESPONSE)
-    monkeypatch.setattr(bedrock, "make_client", lambda *a, **k: fake_bedrock)
 
-    oidc = call_bedrock(
-        BedrockSettings(role_arn="role"), "ping", max_tokens=50, oidc_token=FAKE_TOKEN
-    )
-    api_key = call_bedrock(BedrockSettings(auth_mode="api_key"), "ping", max_tokens=50)
+    oidc = converse_text(fake_bedrock, BedrockSettings(role_arn="role"), "ping", max_tokens=50)
+    api_key = converse_text(fake_bedrock, BedrockSettings(auth_mode="api_key"), "ping", max_tokens=50)
 
     assert oidc == api_key
     assert (oidc.text, oidc.stop_reason, oidc.input_tokens, oidc.output_tokens) == (
@@ -425,6 +421,18 @@ def test_incomplete_answer_keeps_usage_for_settlement():
     assert (error.value.input_tokens, error.value.output_tokens) == (12, 20)
     assert error.value.settlement == "usage"
     assert error.value.retryable is False
+
+
+def test_null_or_non_text_blocks_are_ignored_not_an_exception():
+    response = {
+        "output": {"message": {"content": [{"text": None}, "x", {"text": "pong"}, {"text": 3}]}},
+        "stopReason": "end_turn",
+    }
+
+    assert converse_once(response).text == "pong"
+    with pytest.raises(AiCallError) as error:
+        converse_once({**response, "output": {"message": {"content": [{"text": None}]}}})
+    assert (error.value.step, error.value.code) == ("response", "end_turn")
 
 
 def test_success_without_usage_returns_no_token_counts():

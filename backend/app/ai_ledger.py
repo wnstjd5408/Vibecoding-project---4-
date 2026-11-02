@@ -15,6 +15,7 @@ E09(설명)·E11(퀴즈)·E13(꼬리 질문)은 run_ai_call 하나로 Bedrock을
 import logging
 import math
 import os
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
@@ -64,6 +65,9 @@ QUIZ_MAX_ATTEMPTS = 2
 PROMPT_OVERHEAD_TOKENS = 64
 # 호출 안 재시도 1회(5.2)
 MAX_ATTEMPTS = 2
+# 스로틀링 뒤 재시도 전에 쉬는 초. 시간 초과는 이미 30초를 기다렸으므로 쉬지 않는다.
+THROTTLING_CODE = "ThrottlingException"
+THROTTLE_BACKOFF_SECONDS = 1.0
 
 _USD_STEP = Decimal("0.000001")
 _MILLION = Decimal(1_000_000)
@@ -81,7 +85,11 @@ class AiLimitReached(Exception):
 
 
 class LedgerKeyExists(Exception):
-    """같은 멱등 키의 원장 행이 이미 있다. E09가 상태로 in_progress·result_unavailable을 가른다(5.5절 9단계)."""
+    """같은 멱등 키의 원장 행이 이미 있다. status는 그 시도(:attempt_no) 행 하나의 상태다.
+
+    E09의 9단계 판정은 이 값만 믿지 않는다. 첫 시도가 released여도 재시도(:2)가 아직 reserved일 수 있으므로
+    같은 사용자·키의 모든 시도 행을 보고, 하나라도 reserved면 in_progress로 답한다.
+    """
 
     def __init__(self, status: str):
         super().__init__(status)
@@ -89,7 +97,10 @@ class LedgerKeyExists(Exception):
 
 
 class AiSettlementFailed(Exception):
-    """AI를 부른 뒤 원장 정산이 실패했다. 503이 아니라 500이다(1.4.4). 결과를 사용자에게 주지 않는다."""
+    """AI를 부른 뒤 원장 처리(정산·재시도 예약)가 DB 문제로 실패했다. 503이 아니라 500이다(1.4.4).
+
+    503이면 클라이언트 자동 재시도가 붙어 비용이 겹친다. 결과를 사용자에게 주지 않는다.
+    """
 
 
 def estimate_input_tokens(prompt: str) -> int:
@@ -238,7 +249,11 @@ class SupabaseLedgerStore:
     def claim_quiz_set(
         self, *, user_id: str, quiz_date: str, source_date: str, reserved_usd: Decimal, budget: AiBudget
     ) -> QuizClaim:
-        """퀴즈 세트 선점과 첫 예약(6.4절 2~5번). 날짜는 KST ISO 문자열이다."""
+        """퀴즈 세트 선점과 첫 예약(6.4절 2~5번). 날짜는 KST ISO 문자열이다.
+
+        한도면 AiLimitReached다. E11은 이것을 429가 아니라 200 status: ai_limit_reached로 답한다(6.3).
+        claimed면 reservation을 run_ai_call(first_reservation=...)에 넘긴다.
+        """
         row = _first_row(
             self._supabase.rpc(
                 "ai_claim_quiz_set",
@@ -286,9 +301,12 @@ def followup_request_key(user_id: str, request_id: str) -> str:
 def _settle(store: LedgerStore, reservation: Reservation, outcome: str, **values) -> None:
     """AI를 부른 뒤의 정산. 어떤 실패든 AiSettlementFailed(500)로 바꾼다. 503이면 자동 재시도로 비용이 겹친다."""
     try:
-        store.settle(reservation.ledger_id, outcome, **values)
+        changed = store.settle(reservation.ledger_id, outcome, **values)
     except Exception as error:
         raise AiSettlementFailed(type(error).__name__) from None
+    if not changed:
+        # 다음 예약이 10분 넘었다고 먼저 정산한 행이다. 비용은 그쪽에서 한 번 셌다.
+        logger.warning("ai ledger row was already settled ledger_id=%s outcome=%s", reservation.ledger_id, outcome)
 
 
 def _settle_failure(store: LedgerStore, budget: AiBudget, reservation: Reservation, error: AiCallError) -> None:
@@ -318,15 +336,22 @@ def run_ai_call(
     oidc_token: str | None = None,
     first_reservation: Reservation | None = None,
     client_factory: Callable = make_client,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> AiOutcome:
     """예약 → 호출 → 정산. 원장 키는 {request_key}:{attempt_no}다.
 
-    first_reservation: 퀴즈처럼 선점 함수가 첫 예약을 이미 한 경우 넘긴다.
+    first_reservation: 퀴즈처럼 선점 함수가 첫 예약을 이미 한 경우 넘긴다. 호출하지 못하고 끝나면 이 함수가 푼다.
     낼 수 있는 예외: AiConfigError(500), AiCallError(502), AiLimitReached(429), LedgerKeyExists(E09가 판단),
-    AiSettlementFailed(500), 예약 단계의 SupabaseUnavailable(503, AI 호출 전이므로).
+    AiSettlementFailed(500), 첫 예약 단계의 SupabaseUnavailable(503, AI 호출 전이므로).
     """
     spec = CALL_SPECS[kind]
-    ensure_ready(settings, oidc_token)
+    try:
+        ensure_ready(settings, oidc_token)
+    except (AiConfigError, AiCallError):
+        # 선점 함수가 미리 넣은 예약은 호출 없이 끝나므로 푼다. 없으면 10분 뒤 과금으로 정산된다.
+        if first_reservation is not None:
+            _settle(store, first_reservation, SETTLE_RELEASED)
+        raise
     reserved_usd = budget.reserve_amount(prompt, spec.max_tokens)
     client = None
     last_error: AiCallError | None = None
@@ -345,10 +370,15 @@ def run_ai_call(
                     budget=budget,
                     daily_count_limit=spec.daily_count_limit,
                 )
-            except Exception:
-                # 재시도 예약이 막히면(한도·키·DB) 첫 실패를 그대로 낸다. 첫 호출 비용은 이미 정산됐다.
+            except (AiLimitReached, LedgerKeyExists):
+                # 재시도 예약이 한도·키로 막히면 첫 실패(502)를 그대로 낸다. 첫 호출 비용은 이미 정산됐다.
                 if last_error is not None:
                     raise last_error from None
+                raise
+            except Exception as error:
+                # AI를 한 번 부른 뒤의 DB 실패는 500이다(1.4.4).
+                if last_error is not None:
+                    raise AiSettlementFailed(type(error).__name__) from None
                 raise
 
         try:
@@ -371,7 +401,15 @@ def run_ai_call(
             _settle_failure(store, budget, reservation, error)
             last_error = error
             if error.retryable and attempt_no < MAX_ATTEMPTS:
+                if error.code == THROTTLING_CODE:
+                    # 스로틀링은 바로 다시 부르면 또 걸리므로 잠깐 쉰다.
+                    sleep(THROTTLE_BACKOFF_SECONDS)
                 continue
+            raise
+        except Exception as error:
+            # 예상하지 못한 예외도 예약을 남기지 않는다. 과금 여부를 모르므로 예약액 그대로 정산하고 500으로 둔다.
+            logger.warning("ai call raised unexpected kind=%s attempt=%s type=%s", kind, attempt_no, type(error).__name__)
+            _settle(store, reservation, SETTLE_FALLBACK)
             raise
 
         if result.input_tokens is not None and result.output_tokens is not None:

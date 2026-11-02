@@ -30,8 +30,8 @@ from app.supabase import SupabaseUnavailable
 
 USER = "00000000-0000-4000-8000-000000000001"
 BUDGET = AiBudget(
-    daily_usd=Decimal("1"),
-    monthly_usd=Decimal("10"),
+    daily_usd=Decimal("0.9"),
+    monthly_usd=Decimal("7"),
     input_usd_per_mtok=Decimal("2"),
     output_usd_per_mtok=Decimal("8"),
 )
@@ -378,6 +378,91 @@ def test_first_reservation_from_quiz_claim_is_used_for_attempt_one():
     assert outcome.attempt_no == 2
 
 
+def test_quiz_first_reservation_is_released_when_the_pre_check_fails(monkeypatch):
+    """선점 함수가 넣은 첫 예약은 호출 전 검사가 실패하면 풀린다. 남기면 10분 뒤 과금으로 정산된다."""
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("VERCEL_ENV", "preview")
+    store = FakeStore()
+    bedrock = FakeBedrock(OK)
+
+    with pytest.raises(AiCallError):
+        run(store, bedrock, kind="quiz", request_key="q", first_reservation=Reservation(55, 1))
+    monkeypatch.delenv("VERCEL")
+    monkeypatch.delenv("VERCEL_ENV")
+    with pytest.raises(AiConfigError):
+        run(store, bedrock, kind="quiz", request_key="q", first_reservation=Reservation(56, 1),
+            settings=BedrockSettings(role_arn="role"), oidc_token=None)
+
+    assert store.settled == [(55, "released", {}), (56, "released", {})]
+    assert store.reserved == [] and bedrock.calls == 0
+
+
+def test_unexpected_exception_still_settles_the_reservation():
+    store = FakeStore()
+
+    class Boom(FakeBedrock):
+        def converse(self, **kwargs):
+            self.calls += 1
+            raise RuntimeError("unexpected")
+
+    with pytest.raises(RuntimeError):
+        run(store, Boom())
+
+    assert store.settled == [(101, "reserved_fallback", {})]
+    assert len(store.reserved) == 1
+
+
+def test_unexpected_exception_from_client_creation_still_settles():
+    store = FakeStore()
+
+    def factory(settings, token):
+        raise KeyError("Credentials")
+
+    with pytest.raises(KeyError):
+        run_ai_call(
+            store, API_KEY, BUDGET, user_id=USER, kind="explain", request_key="k", prompt="p", client_factory=factory
+        )
+
+    assert store.settled == [(101, "reserved_fallback", {})]
+
+
+def test_retry_reservation_db_failure_after_a_call_is_a_500():
+    class DownOnRetry(FakeStore):
+        def reserve(self, **kwargs):
+            if kwargs["attempt_no"] == 2:
+                raise SupabaseUnavailable("status 503")
+            return super().reserve(**kwargs)
+
+    store = DownOnRetry()
+
+    with pytest.raises(AiSettlementFailed) as error:
+        run(store, FakeBedrock(timeout(), OK))
+
+    assert api_error_for(error.value).code == "internal_error"
+    assert store.settled == [(101, "reserved_fallback", {})]
+
+
+def test_throttling_waits_before_the_retry_but_timeouts_do_not():
+    waits = []
+
+    run(FakeStore(), FakeBedrock(client_error("ThrottlingException"), OK), sleep=waits.append)
+    run(FakeStore(), FakeBedrock(timeout(), OK), sleep=waits.append)
+
+    assert waits == [1.0]
+
+
+def test_already_settled_row_is_logged_not_failed(caplog):
+    class Swept(FakeStore):
+        def settle(self, ledger_id, outcome, **values):
+            super().settle(ledger_id, outcome, **values)
+            return False
+
+    outcome = run(Swept(), FakeBedrock(OK))
+
+    assert outcome.text == "설명"
+    assert "already settled" in caplog.text
+
+
 def test_failure_log_has_codes_only(caplog):
     store = FakeStore()
 
@@ -452,8 +537,8 @@ def test_supabase_store_sends_amounts_as_strings_and_maps_outcomes():
         "p_attempt_no": 1,
         "p_reserved_usd": "0.004952",
         "p_user_daily_count_limit": 20,
-        "p_daily_budget_usd": "1",
-        "p_monthly_budget_usd": "10",
+        "p_daily_budget_usd": "0.9",
+        "p_monthly_budget_usd": "7",
         "p_user_daily_share": "0.5",
     }
 

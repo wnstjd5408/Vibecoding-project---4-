@@ -18,8 +18,9 @@ def test_accepts_a_list_or_an_items_object_and_drops_extra_keys():
     assert parse_quiz_items(json.dumps({"items": [{**ITEM, "extra": 1}]}, ensure_ascii=False)) == expected
 
 
-def test_accepts_a_json_code_fence():
-    text = "```json\n" + json.dumps([ITEM], ensure_ascii=False) + "\n```"
+@pytest.mark.parametrize("opening", ["```json", "```JSON", "```", "```jsonc "])
+def test_accepts_a_json_code_fence(opening):
+    text = opening + "\n" + json.dumps([ITEM], ensure_ascii=False) + "\n```"
 
     assert len(parse_quiz_items(text)) == 1
 

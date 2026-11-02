@@ -76,7 +76,7 @@ def clean(database):
     return database
 
 
-def reserve_sql(user, key, amount, *, daily="1", monthly="10", share="1", limit="null", kind="explain", attempt=1):
+def reserve_sql(user, key, amount, *, daily="1", monthly="7", share="1", limit="null", kind="explain", attempt=1):
     return (f"select outcome || ',' || coalesce(ledger_id::text, '') || ',' || coalesce(ledger_status, '') "
             f"from public.ai_reserve('{user}', '{kind}', '{key}', {attempt}, {amount}, {daily}, {monthly}, {share}, {limit});")
 
@@ -108,13 +108,13 @@ def test_monthly_budget_counts_earlier_days_of_the_same_kst_month(clean):
     a = new_user(clean)
     sql(clean, f"""insert into public.ai_usage_ledger (user_id, kind, idempotency_key, reserved_usd, actual_usd,
         input_tokens, output_tokens, status, settle_basis, settled_at, kst_date)
-      values ('{a}', 'explain', 'old:1', 5, 9.7, 1, 1, 'settled', 'usage', now(),
+      values ('{a}', 'explain', 'old:1', 5, 6.7, 1, 1, 'settled', 'usage', now(),
               date_trunc('month', (now() at time zone 'Asia/Seoul'))::date),
              ('{a}', 'explain', 'lastmonth:1', 50, 50, 1, 1, 'settled', 'usage', now(),
               (date_trunc('month', (now() at time zone 'Asia/Seoul')) - interval '1 day')::date);""")
-    # 정산된 행은 실제 금액(9.7)으로 센다. 지난달 행은 세지 않는다. 이번 달 첫날이 오늘이어도 같다(일 예산 10으로 넉넉히).
-    assert reserve(clean, a, f"{a}:k:1", "0.4", daily="10")[0] == "limit_reached"
-    assert reserve(clean, a, f"{a}:k:1", "0.3", daily="10")[0] == "reserved"
+    # 정산된 행은 실제 금액(6.7)으로 센다. 지난달 행은 세지 않는다. 이번 달 첫날이 오늘이어도 같다(일 예산 9로 넉넉히).
+    assert reserve(clean, a, f"{a}:k:1", "0.4", daily="9")[0] == "limit_reached"
+    assert reserve(clean, a, f"{a}:k:1", "0.3", daily="9")[0] == "reserved"
 
 
 def test_user_share_of_daily_budget(clean):
@@ -246,7 +246,7 @@ def test_only_service_role_can_execute(clean):
         assert "permission denied" in sql_error(clean, f"set role {role}; select public.ai_settle(1, 'released', null, null, null);")
         assert "permission denied" in sql_error(clean, f"set role {role}; select public.ai_invalidate_explanations(1, null, null);")
         assert "permission denied" in sql_error(
-            clean, f"set role {role}; select * from public.ai_claim_quiz_set('{a}', current_date + 1, current_date, 0.1, 1, 10, 0.5, 300, 2);")
+            clean, f"set role {role}; select * from public.ai_claim_quiz_set('{a}', current_date + 1, current_date, 0.1, 1, 7, 0.5, 300, 2);")
 
 
 # --- 퀴즈 세트 선점 ---
@@ -255,7 +255,7 @@ def test_only_service_role_can_execute(clean):
 def claim(database, user, amount="0.1", *, daily="1"):
     row = sql(database, "set role service_role; select outcome || ',' || coalesce(set_id::text, '') || ',' || "
               "coalesce(attempt::text, '') || ',' || coalesce(ledger_id::text, '') from public.ai_claim_quiz_set("
-              f"'{user}', date '2026-11-03', date '2026-11-02', {amount}, {daily}, 10, 0.5, 300, 2);").splitlines()[-1]
+              f"'{user}', date '2026-11-03', date '2026-11-02', {amount}, {daily}, 7, 0.5, 300, 2);").splitlines()[-1]
     return row.split(",")
 
 
@@ -373,7 +373,7 @@ class SequenceBedrock:
         return step
 
 
-BUDGET = AiBudget(daily_usd=Decimal("1"), monthly_usd=Decimal("10"),
+BUDGET = AiBudget(daily_usd=Decimal("1"), monthly_usd=Decimal("7"),
                   input_usd_per_mtok=Decimal("2"), output_usd_per_mtok=Decimal("8"))
 
 

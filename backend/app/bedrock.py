@@ -272,7 +272,10 @@ def converse_text(
     # content 자체가 없는 응답도 불완전 응답과 같게 502로 끝낸다(1.4.4). usage가 있으면 정산에 쓴다.
     if not isinstance(blocks, list):
         raise AiCallError("response", "NoContent", input_tokens=input_tokens, output_tokens=output_tokens)
-    text = "".join(block.get("text", "") for block in blocks if isinstance(block, Mapping))
+    # text가 문자열이 아닌 블록(null 등)은 버린다. 예외로 끝나면 정산 없이 예약이 남는다.
+    text = "".join(
+        block["text"] for block in blocks if isinstance(block, Mapping) and isinstance(block.get("text"), str)
+    )
     # 응답은 end_turn이고 text가 있을 때만 쓴다. 추론이 예산을 다 쓰면 text 없이 끝난다.
     if stop_reason != "end_turn" or not text:
         raise AiCallError(
@@ -286,15 +289,3 @@ def converse_text(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
     )
-
-
-def call_bedrock(
-    settings: BedrockSettings,
-    prompt: str,
-    *,
-    max_tokens: int,
-    effort: str = "none",
-    oidc_token: str | None = None,
-) -> AiResult:
-    client = make_client(settings, oidc_token)
-    return converse_text(client, settings, prompt, max_tokens=max_tokens, effort=effort)

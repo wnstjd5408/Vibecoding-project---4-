@@ -13,8 +13,8 @@ from app.bedrock import AiCallError
 DIFFICULTIES = ("상", "중", "하")
 QUIZ_FIELDS = ("question", "answer", "explanation", "difficulty")
 
-# 모델이 JSON을 ```json 코드 블록으로 감싸 보내는 경우만 벗긴다.
-_FENCE = re.compile(r"\A```(?:json)?\s*\n(?P<body>.*)\n```\s*\Z", re.DOTALL)
+# 모델이 JSON을 코드 블록(```json, ```JSON, 언어 표시 없음 등)으로 감싸 보내는 경우만 벗긴다.
+_FENCE = re.compile(r"\A```[A-Za-z]*[ \t]*\n(?P<body>.*)\n```\s*\Z", re.DOTALL)
 
 
 @dataclass(frozen=True)
