@@ -1,7 +1,7 @@
 """Supabase 호출 최소 래퍼. FastAPI만 secret key로 부른다(D-007).
 
-이 파일이 하는 일: 로그인·세션 갱신·로그아웃·세션 토큰 확인(Auth), profiles·과목·노트·사전 용어 조회(REST),
-노트 이미지 서명 URL 발급(Storage), SQL 함수 호출(RPC).
+이 파일이 하는 일: 로그인·세션 갱신·로그아웃·세션 토큰 확인(Auth), profiles·과목·노트·사전 용어 조회와 열람 기록(REST),
+노트 이미지 서명 URL 발급과 사전 이미지 공개 주소(Storage), SQL 함수 호출(RPC).
 """
 
 import hashlib
@@ -112,6 +112,15 @@ def _auth_error_code(response: httpx.Response) -> str | None:
     return code if isinstance(code, str) else None
 
 
+def _postgrest_code(response: httpx.Response) -> str | None:
+    """PostgREST 오류 본문의 code(PostgreSQL SQLSTATE 등). 본문이 JSON이 아니면 None이다."""
+    try:
+        code = response.json().get("code")
+    except (ValueError, AttributeError):
+        return None
+    return code if isinstance(code, str) else None
+
+
 def _is_user_rejection(response: httpx.Response, operation: str, extra: frozenset[int] = frozenset()) -> bool:
     """Auth가 이 사용자·토큰을 거절했으면 True, 거절이 아니면 False다. 설정 오류면 예외를 낸다.
 
@@ -130,12 +139,18 @@ def _is_user_rejection(response: httpx.Response, operation: str, extra: frozense
 
 class SupabaseClient:
     def __init__(
-        self, url: str, secret_key: str, http: httpx.Client | None = None, note_image_bucket: str | None = None
+        self,
+        url: str,
+        secret_key: str,
+        http: httpx.Client | None = None,
+        note_image_bucket: str | None = None,
+        glossary_image_bucket: str | None = None,
     ):
         self._url = url.rstrip("/")
         self._secret_key = secret_key
         self._http = http or httpx.Client(timeout=_TIMEOUT)
         self._note_image_bucket = note_image_bucket
+        self._glossary_image_bucket = glossary_image_bucket
 
     @classmethod
     def from_env(cls) -> "SupabaseClient":
@@ -143,8 +158,14 @@ class SupabaseClient:
         key = os.environ.get("SUPABASE_SECRET_KEY")
         if not url or not key:
             raise SupabaseConfigError("SUPABASE_URL or SUPABASE_SECRET_KEY is not set")
-        # 이미지가 있는 노트를 읽을 때만 필요하다. 비어 있어도 앱은 뜨고 그때 500이 된다(2026-10-30 결정).
-        return cls(url, key, note_image_bucket=os.environ.get("NOTE_IMAGE_BUCKET", "").strip() or None)
+        # 이미지 버킷은 이미지가 있는 노트·용어를 읽을 때만 필요하다. 비어 있어도 앱은 뜨고 그때 500이 된다
+        # (노트 2026-10-30 결정, 사전은 같은 방식).
+        return cls(
+            url,
+            key,
+            note_image_bucket=os.environ.get("NOTE_IMAGE_BUCKET", "").strip() or None,
+            glossary_image_bucket=os.environ.get("GLOSSARY_IMAGE_BUCKET", "").strip() or None,
+        )
 
     def _headers(self, bearer: str | None = None) -> dict[str, str]:
         return {"apikey": self._secret_key, "Authorization": f"Bearer {bearer or self._secret_key}"}
@@ -337,6 +358,63 @@ class SupabaseClient:
     def list_glossary_terms(self) -> list[dict[str, Any]]:
         """사전 용어(glossary_entries 행이 있는 terms, S8)의 id·key·label. API 최대 행(1000)을 넘으면 잘린다."""
         return self._select("terms", {"select": "id,key,label,glossary_entries!inner(term_id)", "order": "id.asc"})
+
+    def get_glossary_entry(self, term_id: int) -> dict[str, Any] | None:
+        """E06 사전 용어 하나: terms 열, 사전 설명, 이미지 행(id 오름차순). 사전 용어가 아니면 None이다.
+
+        glossary_entries가 없는 용어(AI로만 설명된 용어 포함)는 !inner 내장이 행을 거른다(S8).
+        glossary_entries는 term_id가 기본 키라 내장 결과가 배열이 아니라 객체 하나다.
+        """
+        rows = self._select(
+            "terms",
+            {
+                "id": f"eq.{int(term_id)}",
+                "select": "id,key,label,glossary_entries!inner(body_markdown),glossary_images(id,storage_path,alt)",
+                "glossary_images.order": "id.asc",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    def is_favorite(self, user_id: str, term_id: int) -> bool:
+        user_id = str(uuid.UUID(user_id))
+        rows = self._select(
+            "favorites", {"user_id": f"eq.{user_id}", "term_id": f"eq.{int(term_id)}", "select": "term_id", "limit": "1"}
+        )
+        return bool(rows)
+
+    def term_exists(self, term_id: int) -> bool:
+        """사전 용어와 AI로 설명된 용어 모두 terms 행이 있으면 True다."""
+        return bool(self._select("terms", {"id": f"eq.{int(term_id)}", "select": "id", "limit": "1"}))
+
+    def record_term_view(self, user_id: str, term_id: int, study_date: str) -> bool:
+        """term_views에 (사용자, 용어, KST 날짜) 한 건을 넣는다. 이미 있으면 그대로 둔다(기본 키 충돌 무시).
+
+        넣었거나 이미 있었으면 True, 그 사이 용어가 지워져 외래 키에 걸렸으면 False다.
+        """
+        user_id = str(uuid.UUID(user_id))
+        response = self._request(
+            "POST",
+            "/rest/v1/term_views",
+            json={"user_id": user_id, "term_id": int(term_id), "study_date": study_date},
+            headers={**self._headers(), "Prefer": "resolution=ignore-duplicates,return=minimal"},
+        )
+        if response.status_code in (200, 201, 204):
+            return True
+        if response.status_code == 409 and _postgrest_code(response) == "23503":
+            return False
+        raise SupabaseConfigError(f"term_views insert status {response.status_code}")
+
+    def glossary_image_url(self, storage_path: str) -> str:
+        """사전 이미지 공개 버킷의 주소(기술 검토 Q7 결정 (a), 2026-11-02). 발급 요청 없이 만든다.
+
+        버킷 이름은 GLOSSARY_IMAGE_BUCKET이다. 없거나 모양이 틀리면 설정 오류(500)다. 주소 안에 버킷 이름과
+        경로가 들어가는 것은 E06의 예외로 받아들였다(2026-11-02 김준성, API spec 1.9·10.4).
+        """
+        bucket = self._glossary_image_bucket
+        if not bucket or not _BUCKET_SHAPE.fullmatch(bucket):
+            raise SupabaseConfigError("GLOSSARY_IMAGE_BUCKET is not set or invalid")
+        return f"{self._url}/storage/v1/object/public/{bucket}/{quote(storage_path, safe='/')}"
 
     def sign_note_images(self, paths: list[str], expires_in: int) -> dict[str, str]:
         """노트 이미지 비공개 버킷의 서명 URL을 한 번에 받는다. 파일이 없어 발급되지 않은 경로는 결과에서 빠진다.

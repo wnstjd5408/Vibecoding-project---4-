@@ -50,7 +50,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 1. 브라우저(React)는 FastAPI(`/api`)만 부른다. 브라우저에는 Supabase 키도 AI 키도 두지 않는다. (결정)
 2. FastAPI는 Supabase DB에 secret key(`service_role`)로 접근한다. 여러 문장을 한 트랜잭션으로 묶어야 하는 원자 작업(한도 예약, 퀴즈 선점, 노트·사전 무효화, 삭제 작업 기록)은 SQL 함수로 만들고 `service_role`에만 EXECUTE를 준다. 나머지 읽기·쓰기는 REST로 한다. (결정)
 3. AI는 FastAPI가 Amazon Bedrock(Converse API)으로 부른다. 인증은 `AI_AUTH_MODE`로 `oidc`(기본)와 `api_key`(대체)를 고른다. AI 자격증명도 FastAPI에만 있다. (결정, D-056)
-4. 노트 이미지는 비공개 버킷에 두고 FastAPI가 읽기 권한을 확인한 뒤 서명 URL을 내준다. (결정) 사전 이미지 버킷은 공개 읽기를 제안한다. (미정, Q7) 앱이 도는 동안 두 버킷에 쓰는 것은 FastAPI뿐이다. 예외는 5번의 가져오기 스크립트로, 노트와 노트 이미지를 한 번 기록한다.
+4. 노트 이미지는 비공개 버킷에 두고 FastAPI가 읽기 권한을 확인한 뒤 서명 URL을 내준다. (결정) 사전 이미지 버킷은 공개 읽기이고, 사전 읽기(E06)가 공개 주소를 내준다. (결정, Q7, 2026-11-02) 앱이 도는 동안 두 버킷에 쓰는 것은 FastAPI뿐이다. 예외는 5번의 가져오기 스크립트로, 노트와 노트 이미지를 한 번 기록한다.
 5. Notion은 처음 한 번만 쓴다. 운영자가 로컬에서 가져오기 스크립트를 실행하고, 그 뒤로는 앱이 노트의 원본이다. 실시간 동기화는 하지 않는다. 가져오기가 끝나면 Notion 통합 공유를 해제하고 가져오기 전용 키를 폐기한다. (결정) 스크립트는 DB에 노트를, 노트 이미지 버킷에 이미지를 쓴다. 이때 쓰는 Supabase 자격증명은 가져오기 전용 secret key다. 운영자 로컬 환경변수에만 두고, 가져오기가 끝나면 폐기하며, 복구 모드로 다시 실행할 때 새로 발급한다. 별도 키를 발급할 수 있는지는 가져오기 구현 때 확인한다. (결정, D-070)
 
 **신뢰 경계**
@@ -215,6 +215,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 | `SUPABASE_URL` | Supabase 프로젝트 주소 | 필수 | 백엔드(로컬·Vercel) |
 | `SUPABASE_SECRET_KEY` | 백엔드 전용 secret key. RLS를 우회하므로 프런트엔드·로그·URL에 넣지 않는다 | 필수. 용도별로 키를 따로 만든다 | 백엔드(로컬·Vercel) |
 | `NOTE_IMAGE_BUCKET` | 노트 이미지 비공개 버킷 이름. 노트 읽기(E05)가 이 버킷의 서명 URL을 발급한다 | 이미지가 있는 노트를 읽을 때만 필요하다. 비어 있거나 영문·숫자·`_`·`-` 밖의 글자가 있으면 그 요청이 500이다. 이름이 틀려도 Storage가 오류를 주지 않아 이미지만 빠지고 `stage=storage ... unsigned_images` ERROR 로그가 남는다(MEG-73) | 백엔드(로컬·Vercel) |
+| `GLOSSARY_IMAGE_BUCKET` | 사전 이미지 공개 읽기 버킷 이름. 사전 읽기(E06)가 이 버킷의 공개 주소를 만든다(발급 요청 없음) | 이미지가 있는 용어를 읽을 때만 필요하다. 비어 있거나 영문·숫자·`.`·`_`·`-` 밖의 글자가 있으면 그 요청이 500이다. 버킷이 공개가 아니거나 이름이 틀리면 주소만 열리지 않는다(MEG-75) | 백엔드(로컬·Vercel) |
 | `NOTION_TOKEN` | 가져오기 전용 읽기 통합 토큰 | 가져오기 때만. 끝나면 폐기한다(2절 5번) | 운영자 로컬 |
 | `NOTION_DATABASE_ID` | 가져올 노트 데이터베이스 | 가져오기 때만 | 운영자 로컬 |
 | `AI_AUTH_MODE` | Bedrock 인증 방식 `oidc` 또는 `api_key` | 비우면 `oidc`. 다른 값은 오류 | 백엔드(로컬·Vercel) |
@@ -230,12 +231,11 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 
 - 백업 워크플로(`DB Backup`, 7절)는 앱 환경변수가 아니라 GitHub `db-backup` Environment의 비밀값을 쓴다. `SUPABASE_DB_URL`(세션 풀러 연결 문자열, DB 덤프용), `SUPABASE_URL`·`SUPABASE_SECRET_KEY`(이미지 백업용, 백업 전용 키), `AWS_ROLE_ARN`·`BACKUP_BUCKET`(S3 업로드)이고, 변수는 `GLOSSARY_IMAGE_BUCKET`·`NOTE_IMAGE_BUCKET`이다. 앱이 도는 동안 FastAPI 밖에서 DB를 읽는 예외다(D-072). 설정은 [인프라 가이드](../infra/README.md)의 "DB·이미지 백업" 절을 따른다.
 - 가져오기 스크립트가 DB·버킷에 쓸 때 쓰는 가져오기 전용 secret key의 변수 이름은 아직 없다. 가져오기 구현(MEG-85)에서 정한다. (미정, D-070)
-- 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정), `backend/app/ai_ledger.py`(AI 예산·단가), `backend/app/config.py`(허용 출처), `backend/app/supabase.py`(Supabase 주소·secret key·노트 이미지 버킷), `frontend/src/api/source.ts`(가짜/실제 전환)다. `VITE_API_BASE_URL`은 사용하지 않는다. Notion 변수는 가져오기 구현 때 읽는다.
+- 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정), `backend/app/ai_ledger.py`(AI 예산·단가), `backend/app/config.py`(허용 출처), `backend/app/supabase.py`(Supabase 주소·secret key·노트·사전 이미지 버킷), `frontend/src/api/source.ts`(가짜/실제 전환)다. `VITE_API_BASE_URL`은 사용하지 않는다. Notion 변수는 가져오기 구현 때 읽는다.
 
 ## 9. 아직 정하지 않은 것
 
 | 질문 | 막는가 | 상태 |
 |---|---|---|
 | AI 모델 확정과 한도 숫자 | 퀴즈·AI 기능 구현 | gpt-6-luna로 잠정 시작. 모델 시험과 Bedrock 단가 확인 뒤 확정 |
-| 사전 이미지 버킷 공개 여부(Q7) | 아니오 | 공개 읽기 제안 |
 | 프런트가 렌더된 글에서 원문 위치를 계산할 수 있는가 | AI 설명 구현 | 구현 전 확인. 안 되면 요청 형식을 다시 정한다 |

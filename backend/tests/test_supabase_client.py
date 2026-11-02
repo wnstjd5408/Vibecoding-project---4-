@@ -514,3 +514,116 @@ def test_from_env_reads_the_note_image_bucket(monkeypatch):
 
     monkeypatch.delenv("NOTE_IMAGE_BUCKET")
     assert SupabaseClient.from_env()._note_image_bucket is None
+
+
+# --- E06 사전 용어·E07 열람 기록 (MEG-75) ---
+
+
+def test_get_glossary_entry_reads_one_glossary_term_with_ordered_images():
+    row = {"id": 7, "key": "k", "label": "K", "glossary_entries": {"body_markdown": "b"}, "glossary_images": []}
+    seen, handler = capture([row])
+
+    assert client_with(handler).get_glossary_entry(7) == row
+    assert seen["path"] == "/rest/v1/terms"
+    assert seen["params"] == {
+        "id": "eq.7",
+        "select": "id,key,label,glossary_entries!inner(body_markdown),glossary_images(id,storage_path,alt)",
+        "glossary_images.order": "id.asc",
+        "limit": "1",
+    }
+
+
+def test_get_glossary_entry_without_a_glossary_row_is_none():
+    _, handler = capture([])
+    assert client_with(handler).get_glossary_entry(9) is None
+
+
+def test_is_favorite_filters_by_the_session_user_and_term():
+    seen, handler = capture([{"term_id": 7}])
+
+    assert client_with(handler).is_favorite(USER_ID, 7) is True
+    assert seen["path"] == "/rest/v1/favorites"
+    assert seen["params"] == {"user_id": f"eq.{USER_ID}", "term_id": "eq.7", "select": "term_id", "limit": "1"}
+    assert client_with(capture([])[1]).is_favorite(USER_ID, 7) is False
+
+
+def test_is_favorite_rejects_non_uuid_ids():
+    with pytest.raises(ValueError):
+        client_with(capture([])[1]).is_favorite("not-a-uuid", 7)
+
+
+def test_term_exists_reads_terms_by_id():
+    seen, handler = capture([{"id": 9}])
+
+    assert client_with(handler).term_exists(9) is True
+    assert seen["params"] == {"id": "eq.9", "select": "id", "limit": "1"}
+    assert client_with(capture([])[1]).term_exists(9) is False
+
+
+def test_record_term_view_inserts_and_ignores_duplicates():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["prefer"] = request.headers["prefer"]
+        seen["body"] = request.content.decode()
+        return httpx.Response(201)
+
+    assert client_with(handler).record_term_view(USER_ID, 7, "2026-10-23") is True
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/rest/v1/term_views"
+    assert seen["prefer"] == "resolution=ignore-duplicates,return=minimal"
+    assert seen["body"].replace(" ", "") == f'{{"user_id":"{USER_ID}","term_id":7,"study_date":"2026-10-23"}}'
+
+
+def test_record_term_view_for_a_deleted_term_is_false():
+    # PostgREST는 외래 키 위반을 409와 SQLSTATE 23503으로 준다.
+    body = {"code": "23503", "message": "violates foreign key constraint"}
+    assert client_with(lambda r: httpx.Response(409, json=body)).record_term_view(USER_ID, 7, "2026-10-23") is False
+
+
+@pytest.mark.parametrize(
+    "response",
+    [httpx.Response(409, json={"code": "23505"}), httpx.Response(401, json={"message": "Invalid API key"}),
+     httpx.Response(403, json={"code": "42501"}), httpx.Response(409, text="not json")],
+)
+def test_record_term_view_other_rejections_are_config_errors(response):
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: response).record_term_view(USER_ID, 7, "2026-10-23")
+
+
+def test_record_term_view_outage_is_unavailable():
+    with pytest.raises(SupabaseUnavailable):
+        client_with(lambda r: httpx.Response(503)).record_term_view(USER_ID, 7, "2026-10-23")
+
+
+def glossary_client(bucket: str | None = "glossary-images") -> SupabaseClient:
+    def handler(request):
+        raise AssertionError("public URLs need no Storage call")
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    return SupabaseClient("https://project.supabase.co/", "sb_secret_test", http, glossary_image_bucket=bucket)
+
+
+def test_glossary_image_url_is_the_public_object_url_with_an_encoded_path():
+    assert glossary_client().glossary_image_url("terms/7/a b+(1)?.png") == (
+        "https://project.supabase.co/storage/v1/object/public/glossary-images/terms/7/a%20b%2B%281%29%3F.png"
+    )
+
+
+@pytest.mark.parametrize("bucket", [None, "", "../other", "glossary images", ".", ".."])
+def test_glossary_image_url_without_a_valid_bucket_is_a_config_error(bucket):
+    with pytest.raises(SupabaseConfigError):
+        glossary_client(bucket).glossary_image_url("terms/7/a.png")
+
+
+def test_from_env_reads_the_glossary_image_bucket(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setenv("GLOSSARY_IMAGE_BUCKET", " glossary-images ")
+
+    assert SupabaseClient.from_env()._glossary_image_bucket == "glossary-images"
+
+    monkeypatch.delenv("GLOSSARY_IMAGE_BUCKET")
+    assert SupabaseClient.from_env()._glossary_image_bucket is None

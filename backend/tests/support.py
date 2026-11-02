@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, Header
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import accounts, notes
+from app import accounts, glossary, notes
 from app.auth import SessionUser, get_session_user, require_login, require_operator
 from app.common import install_common_layer
 from app.config import SESSION_COOKIE
@@ -57,6 +57,16 @@ class FakeSupabase:
     sign_calls: list[tuple[list[str], int]] = field(default_factory=list)
     # get_note를 부를 때마다 넘긴 (note_id, include_unpublished)
     note_reads: list[tuple[int, bool]] = field(default_factory=list)
+    # E06·E07: 용어별 사전 설명·이미지 행, AI로만 설명된 용어 id, 즐겨찾기·열람 기록 행
+    glossary_details: dict[int, dict] = field(default_factory=dict)
+    ai_terms: set[int] = field(default_factory=set)
+    favorites: set[tuple[str, int]] = field(default_factory=set)
+    term_views: set[tuple[str, int, str]] = field(default_factory=set)
+    # False면 GLOSSARY_IMAGE_BUCKET이 없는 것처럼 공개 주소 만들기가 설정 오류를 낸다.
+    glossary_bucket_configured: bool = True
+    # 기록 직전에 용어가 지워진 것처럼 외래 키에 걸리게 한다.
+    term_deleted_before_insert: bool = False
+    term_reads: list[str] = field(default_factory=list)
 
     def add_user(
         self, token: str, user_id: str, role: str = "member", is_active: bool = True, display_name: str | None = None
@@ -179,8 +189,53 @@ class FakeSupabase:
             }
         )
 
-    def add_glossary_term(self, term_id: int, key: str, label: str) -> None:
+    def add_glossary_term(
+        self, term_id: int, key: str, label: str, body_markdown: str = "", images: list[dict] | None = None
+    ) -> None:
         self.glossary.append({"id": term_id, "key": key, "label": label})
+        # glossary_images 행(id, storage_path, alt)
+        self.glossary_details[term_id] = {"body_markdown": body_markdown, "images": images or []}
+
+    def get_glossary_entry(self, term_id: int) -> dict | None:
+        """SupabaseClient.get_glossary_entry와 같은 모양: 사전 설명은 객체 하나, 이미지는 id 오름차순."""
+        if self.down:
+            raise SupabaseUnavailable("down")
+        self.term_reads.append("glossary")
+        for term in self.glossary:
+            if term["id"] == term_id:
+                detail = self.glossary_details[term_id]
+                return {
+                    **term,
+                    "glossary_entries": {"body_markdown": detail["body_markdown"]},
+                    "glossary_images": sorted(detail["images"], key=lambda image: image["id"]),
+                }
+        return None
+
+    def is_favorite(self, user_id: str, term_id: int) -> bool:
+        if self.down:
+            raise SupabaseUnavailable("down")
+        self.term_reads.append("favorite")
+        return (user_id, term_id) in self.favorites
+
+    def term_exists(self, term_id: int) -> bool:
+        if self.down:
+            raise SupabaseUnavailable("down")
+        self.term_reads.append("exists")
+        return term_id in self.ai_terms or any(term["id"] == term_id for term in self.glossary)
+
+    def record_term_view(self, user_id: str, term_id: int, study_date: str) -> bool:
+        """기본 키(user_id, term_id, study_date) 충돌은 무시한다. 용어가 없으면 외래 키에 걸려 False다."""
+        if self.down:
+            raise SupabaseUnavailable("down")
+        if self.term_deleted_before_insert:
+            return False
+        self.term_views.add((user_id, term_id, study_date))
+        return True
+
+    def glossary_image_url(self, storage_path: str) -> str:
+        if not self.glossary_bucket_configured:
+            raise SupabaseConfigError("GLOSSARY_IMAGE_BUCKET is not set or invalid")
+        return f"https://storage.example.test/public/glossary/{storage_path}"
 
     def list_subjects(self) -> list[dict]:
         if self.down:
@@ -387,6 +442,15 @@ def build_notes_app(fake: FakeSupabase) -> FastAPI:
     install_common_layer(app)
     app.dependency_overrides[get_supabase] = lambda: fake
     app.include_router(notes.router)
+    return app
+
+
+def build_glossary_app(fake: FakeSupabase) -> FastAPI:
+    """E06·E07 라우터를 붙인 시험 앱."""
+    app = FastAPI()
+    install_common_layer(app)
+    app.dependency_overrides[get_supabase] = lambda: fake
+    app.include_router(glossary.router)
     return app
 
 
