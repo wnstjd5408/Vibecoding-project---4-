@@ -4,7 +4,7 @@
 
 `python -m evals run --dataset CASES --manifest MANIFEST --config CONFIG --output-dir PRIVATE_DIR --dry-run`
 은 버전·입력 상한·예산과 예정 슬롯을 검사한다. `--fake`는 같은 계약으로 모의 출력만 저장한다.
-live 옵션이나 공급자 연결은 없다. RunConfig JSON 필드는 runner.py를 따른다.
+live 옵션이나 공급자 연결은 없다. RunConfig JSON 필드는 runner.py를 따른다. `budget`·`input_price`·`output_price`는 필수이며, 빠지면 실행 전에 거부한다.
 기본 토큰 계산은 문자 수 기반 **시험용**이다. 실제 모델 토큰·단가·품질 검증으로 사용하지 않는다.
 최대 입력/출력 기준 전체 슬롯 예약액이 예산을 넘으면 호출 전에 거부한다.
 state.json은 비공개 경로에 원자적으로 저장되며 설정·입력 해시가 다른 재개는 거부한다.
