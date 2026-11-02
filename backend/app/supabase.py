@@ -386,6 +386,8 @@ class SupabaseClient:
         )
         if response.status_code in (200, 201, 204):
             return True
+        # 제약 이름은 v05 마이그레이션이 만든 기본 이름이다. 마이그레이션에서 이 외래 키 이름을 바꾸면
+        # 없는 용어가 404가 아니라 500이 되므로 여기와 시험(TERM_FK)을 함께 고친다.
         if (
             response.status_code == 409
             and _error_field(response, "code") == "23503"
