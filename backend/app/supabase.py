@@ -1,7 +1,7 @@
 """Supabase 호출 최소 래퍼. FastAPI만 secret key로 부른다(D-007).
 
-이 파일이 하는 일: 로그인·세션 갱신·로그아웃·세션 토큰 확인(Auth), profiles·과목·노트·사전 용어 조회(REST),
-노트 이미지 서명 URL 발급(Storage), SQL 함수 호출(RPC).
+이 파일이 하는 일: 로그인·세션 갱신·로그아웃·세션 토큰 확인(Auth), profiles·과목·노트·사전 용어 조회와 열람 기록(REST),
+노트 이미지 서명 URL 발급과 사전 이미지 공개 주소(Storage), SQL 함수 호출(RPC).
 """
 
 import hashlib
@@ -103,13 +103,18 @@ _AUTH_REJECTED = frozenset({400, 401, 403, 422})
 _AUTH_CONFIG_ERRORS = frozenset({"email_provider_disabled", "provider_disabled"})
 
 
-def _auth_error_code(response: httpx.Response) -> str | None:
-    """Auth 오류 본문의 error_code. 본문이 JSON이 아니면 None이다. 메시지 원문은 쓰지 않는다."""
+def _error_field(response: httpx.Response, key: str) -> str | None:
+    """오류 본문(JSON 객체)의 문자열 필드 하나. 본문이 JSON 객체가 아니거나 값이 문자열이 아니면 None이다."""
     try:
-        code = response.json().get("error_code")
+        value = response.json().get(key)
     except (ValueError, AttributeError):
         return None
-    return code if isinstance(code, str) else None
+    return value if isinstance(value, str) else None
+
+
+def _auth_error_code(response: httpx.Response) -> str | None:
+    """Auth 오류 본문의 error_code. 메시지 원문은 쓰지 않는다."""
+    return _error_field(response, "error_code")
 
 
 def _is_user_rejection(response: httpx.Response, operation: str, extra: frozenset[int] = frozenset()) -> bool:
@@ -130,12 +135,18 @@ def _is_user_rejection(response: httpx.Response, operation: str, extra: frozense
 
 class SupabaseClient:
     def __init__(
-        self, url: str, secret_key: str, http: httpx.Client | None = None, note_image_bucket: str | None = None
+        self,
+        url: str,
+        secret_key: str,
+        http: httpx.Client | None = None,
+        note_image_bucket: str | None = None,
+        glossary_image_bucket: str | None = None,
     ):
         self._url = url.rstrip("/")
         self._secret_key = secret_key
         self._http = http or httpx.Client(timeout=_TIMEOUT)
         self._note_image_bucket = note_image_bucket
+        self._glossary_image_bucket = glossary_image_bucket
 
     @classmethod
     def from_env(cls) -> "SupabaseClient":
@@ -143,8 +154,14 @@ class SupabaseClient:
         key = os.environ.get("SUPABASE_SECRET_KEY")
         if not url or not key:
             raise SupabaseConfigError("SUPABASE_URL or SUPABASE_SECRET_KEY is not set")
-        # 이미지가 있는 노트를 읽을 때만 필요하다. 비어 있어도 앱은 뜨고 그때 500이 된다(2026-10-30 결정).
-        return cls(url, key, note_image_bucket=os.environ.get("NOTE_IMAGE_BUCKET", "").strip() or None)
+        # 이미지 버킷은 이미지가 있는 노트·용어를 읽을 때만 필요하다. 비어 있어도 앱은 뜨고 그때 500이 된다
+        # (노트 2026-10-30 결정, 사전은 같은 방식).
+        return cls(
+            url,
+            key,
+            note_image_bucket=os.environ.get("NOTE_IMAGE_BUCKET", "").strip() or None,
+            glossary_image_bucket=os.environ.get("GLOSSARY_IMAGE_BUCKET", "").strip() or None,
+        )
 
     def _headers(self, bearer: str | None = None) -> dict[str, str]:
         return {"apikey": self._secret_key, "Authorization": f"Bearer {bearer or self._secret_key}"}
@@ -337,6 +354,227 @@ class SupabaseClient:
     def list_glossary_terms(self) -> list[dict[str, Any]]:
         """사전 용어(glossary_entries 행이 있는 terms, S8)의 id·key·label. API 최대 행(1000)을 넘으면 잘린다."""
         return self._select("terms", {"select": "id,key,label,glossary_entries!inner(term_id)", "order": "id.asc"})
+
+    def get_glossary_entry(self, term_id: int, user_id: str | None = None) -> dict[str, Any] | None:
+        """E06 사전 용어 하나: terms 열, 사전 설명, 이미지 행(id 오름차순). 사전 용어가 아니면 None이다.
+
+        glossary_entries가 없는 용어(AI로만 설명된 용어 포함)는 !inner 내장이 행을 거른다(S8).
+        glossary_entries는 term_id가 기본 키라 내장 결과가 배열이 아니라 객체 하나다(2026-11-02 로컬 확인).
+        user_id를 주면 그 사용자의 즐겨찾기 행만 favorites 배열로 함께 읽는다(빈 배열이면 즐겨찾기 아님).
+        한 번의 요청으로 끝내 로그인 사용자의 바텀시트 열기가 DB 왕복을 두 번 하지 않게 한다.
+        """
+        select = "id,key,label,glossary_entries!inner(body_markdown),glossary_images(id,storage_path,alt)"
+        params = {"id": f"eq.{int(term_id)}", "glossary_images.order": "id.asc", "limit": "1"}
+        if user_id is not None:
+            select += ",favorites(term_id)"
+            params["favorites.user_id"] = f"eq.{uuid.UUID(user_id)}"
+        rows = self._select("terms", {**params, "select": select})
+        return rows[0] if rows else None
+
+    def record_term_view(self, user_id: str, term_id: int, study_date: str) -> bool:
+        """term_views에 (사용자, 용어, KST 날짜) 한 건을 넣는다. 이미 있으면 그대로 둔다(기본 키 충돌 무시).
+
+        넣었거나 이미 있었으면 True, 용어가 없어 외래 키(term_views_term_id_fkey)에 걸렸으면 False다.
+        사용자 쪽 외래 키(profiles 행이 그 사이 지워짐) 같은 다른 거절은 설정 오류(500)로 낸다.
+        """
+        user_id = str(uuid.UUID(user_id))
+        response = self._request(
+            "POST",
+            "/rest/v1/term_views",
+            json={"user_id": user_id, "term_id": int(term_id), "study_date": study_date},
+            headers={**self._headers(), "Prefer": "resolution=ignore-duplicates,return=minimal"},
+        )
+        if response.status_code in (200, 201, 204):
+            return True
+        # 제약 이름은 v05 마이그레이션이 만든 기본 이름이다. 마이그레이션에서 이 외래 키 이름을 바꾸면
+        # 없는 용어가 404가 아니라 500이 되므로 여기와 시험(TERM_FK)을 함께 고친다.
+        if (
+            response.status_code == 409
+            and _error_field(response, "code") == "23503"
+            and "term_views_term_id_fkey" in (_error_field(response, "message") or "")
+        ):
+            return False
+        raise SupabaseConfigError(f"term_views insert status {response.status_code}")
+
+    def get_note_for_explain(self, note_id: int, include_unpublished: bool) -> dict[str, Any] | None:
+        """E09가 읽는 노트의 열(id, revision, is_published, body_markdown). 없거나 볼 수 없으면 None이다.
+
+        include_unpublished가 False면 공개 노트만 DB에서 거른다(비공개 노트는 없는 노트와 같다). 이미지·과목 행은
+        읽지 않는다.
+        """
+        params = {
+            "id": f"eq.{int(note_id)}",
+            "select": "id,revision,is_published,body_markdown",
+            "limit": "1",
+        }
+        if not include_unpublished:
+            params["is_published"] = "eq.true"
+        rows = self._select("notes", params)
+        return rows[0] if rows else None
+
+    def find_term_for_explain(self, key: str, user_id: str) -> dict[str, Any] | None:
+        """E09 5.5절 7·8단계를 한 번에 읽는다: key가 같은 용어와 그 사전 설명·이미지, 유효한 AI 설명, 내 즐겨찾기.
+
+        glossary_entries는 사전 용어일 때만 객체이고 아니면 null이다. ai_explanations는 무효화되지 않은 행만
+        배열로 온다(용어당 하나). favorites는 세션 사용자의 행만 온다. 용어가 없으면 None이다.
+        """
+        select = (
+            "id,key,label,source,glossary_entries(body_markdown),glossary_images(id,storage_path,alt),"
+            "ai_explanations(id,body,review_status),favorites(term_id)"
+        )
+        params = {
+            "key": f"eq.{key}",
+            "select": select,
+            "glossary_images.order": "id.asc",
+            "ai_explanations.invalidated_at": "is.null",
+            "favorites.user_id": f"eq.{uuid.UUID(user_id)}",
+            "limit": "1",
+        }
+        rows = self._select("terms", params)
+        return rows[0] if rows else None
+
+    def list_ledger_rows(self, user_id: str, request_key: str) -> list[dict[str, Any]]:
+        """한 요청({request_key}:{attempt_no})의 원장 행(status, attempt_no, created_at). E09의 멱등 키 확인에 쓴다.
+
+        request_key는 서버가 UUID 두 개로 만든 값이라 like 패턴의 특수 문자가 들어 있지 않다. user_id로도 거른다
+        (남의 행을 보지 않는다).
+        """
+        return self._select(
+            "ai_usage_ledger",
+            {
+                "user_id": f"eq.{uuid.UUID(user_id)}",
+                "idempotency_key": f"like.{request_key}:*",
+                "select": "status,attempt_no,created_at",
+                "order": "attempt_no.asc",
+            },
+        )
+
+    def store_ai_explanation(self, **arguments: Any) -> dict[str, Any]:
+        """ai_store_explanation 함수를 부른다(5.5절 11~12단계). 결과 한 행을 out_ 접두사 없이 돌려준다."""
+        rows = self.rpc("ai_store_explanation", {f"p_{name}": value for name, value in arguments.items()})
+        row = rows[0] if isinstance(rows, list) else rows
+        return {name.removeprefix("out_"): value for name, value in row.items()}
+
+    def _glossary_bucket(self) -> str:
+        bucket = self._glossary_image_bucket
+        if not bucket or not _BUCKET_SHAPE.fullmatch(bucket):
+            raise SupabaseConfigError("GLOSSARY_IMAGE_BUCKET is not set or invalid")
+        return bucket
+
+    def glossary_image_url(self, storage_path: str) -> str:
+        """사전 이미지 공개 버킷의 주소(기술 검토 Q7 결정 (a), 2026-11-02). 발급 요청 없이 만든다.
+
+        버킷 이름은 GLOSSARY_IMAGE_BUCKET이다. 없거나 모양이 틀리면 설정 오류(500)다. 주소 안에 버킷 이름과
+        경로가 들어가는 것은 E06의 예외로 받아들였다(2026-11-02 김준성, API spec 1.9·10.5).
+        경로에 빈 구간·`.`·`..`가 있으면 브라우저가 주소를 정규화해 다른 버킷을 가리킬 수 있어 설정 오류로 막는다.
+        """
+        bucket = self._glossary_bucket()
+        if any(segment in ("", ".", "..") for segment in storage_path.split("/")):
+            raise SupabaseConfigError("glossary image storage_path has an empty or dot segment")
+        return f"{self._url}/storage/v1/object/public/{bucket}/{quote(storage_path, safe='/')}"
+
+    # --- E19~E23 운영자 사전 (MEG-81). 여러 문장을 묶는 쓰기는 SQL 함수(마이그레이션 20261102160000)로 한다. ---
+
+    def list_admin_glossary_terms(self, limit: int, before_id: int | None) -> list[dict[str, Any]]:
+        """사전 용어(glossary_entries 행이 있는 terms)의 id·key·label을 id 내림차순으로 limit개까지 준다.
+
+        before_id를 주면 그보다 작은 id만 준다(cursor = 앞 쪽의 마지막 id, API spec 1.5).
+        """
+        params = {
+            "select": "id,key,label,glossary_entries!inner(term_id)",
+            "order": "id.desc",
+            "limit": str(int(limit)),
+        }
+        if before_id is not None:
+            params["id"] = f"lt.{int(before_id)}"
+        return [{"id": row["id"], "key": row["key"], "label": row["label"]} for row in self._select("terms", params)]
+
+    def glossary_entry_exists(self, term_id: int) -> bool:
+        rows = self._select("glossary_entries", {"select": "term_id", "term_id": f"eq.{int(term_id)}", "limit": "1"})
+        return bool(rows)
+
+    def upsert_glossary_entry(self, key: str, label: str, body_markdown: str, updated_by: str) -> dict[str, Any]:
+        """E20. {"id", "key", "label", "created"}를 준다. 같은 용어의 AI 설명 무효화까지 한 트랜잭션이다."""
+        result = self.rpc(
+            "glossary_upsert_entry",
+            {"p_key": key, "p_label": label, "p_body_markdown": body_markdown,
+             "p_updated_by": str(uuid.UUID(updated_by))},
+        )
+        if not isinstance(result, dict):
+            raise SupabaseConfigError("rpc glossary_upsert_entry returned an unexpected shape")
+        return result
+
+    def delete_glossary_entry(self, term_id: int) -> list[dict[str, Any]] | None:
+        """E21. 사전 용어가 아니면 None, 맞으면 객체를 지울 삭제 작업 목록 [{"job_id", "object_path"}]이다."""
+        result = self.rpc("glossary_delete_entry", {"p_term_id": int(term_id), "p_bucket": self._glossary_bucket()})
+        if result is None:
+            return None
+        return list(result["jobs"])
+
+    def delete_glossary_image(self, term_id: int, image_id: int) -> dict[str, Any] | None:
+        """E23. 그 용어의 이미지가 아니면 None, 맞으면 삭제 작업 {"job_id", "object_path"}이다."""
+        return self.rpc(
+            "glossary_delete_image",
+            {"p_term_id": int(term_id), "p_image_id": int(image_id), "p_bucket": self._glossary_bucket()},
+        )
+
+    def create_glossary_upload_job(self, object_path: str) -> int:
+        """E22 1단계. 올리기 전에 삭제 작업(pending)을 넣는다. 도중에 멈추면 이 작업이 남아 객체를 지울 대상이 된다."""
+        response = self._request(
+            "POST",
+            "/rest/v1/storage_delete_jobs",
+            json={"bucket": self._glossary_bucket(), "object_path": object_path},
+            headers={**self._headers(), "Prefer": "return=representation"},
+            params={"select": "id"},
+        )
+        if response.status_code != 201:
+            raise SupabaseConfigError(f"storage_delete_jobs insert status {response.status_code}")
+        return int(response.json()[0]["id"])
+
+    def upload_glossary_image(self, object_path: str, data: bytes, content_type: str) -> None:
+        """E22 2단계. 같은 경로가 있으면 덮어쓰지 않고 실패한다. 연결 실패·5xx는 SupabaseUnavailable(503)이다."""
+        bucket = self._glossary_bucket()
+        response = self._request(
+            "POST",
+            f"/storage/v1/object/{bucket}/{quote(object_path, safe='/')}",
+            content=data,
+            headers={**self._headers(), "Content-Type": content_type, "x-upsert": "false"},
+        )
+        if response.status_code != 200:
+            # 버킷 없음·크기·형식 제한·키 권한. 앱이 먼저 검사하므로 나오면 설정 문제다.
+            raise SupabaseConfigError(f"storage upload status {response.status_code}")
+
+    def add_glossary_image(self, term_id: int, object_path: str, alt: str | None, job_id: int) -> int | None:
+        """E22 3단계. 이미지 행을 넣고 1단계 작업을 지운다. 그 사이 사전 설명이 지워졌으면 None이다."""
+        result = self.rpc(
+            "glossary_add_image",
+            {"p_term_id": int(term_id), "p_storage_path": object_path, "p_alt": alt, "p_job_id": int(job_id)},
+        )
+        return None if result is None else int(result)
+
+    def remove_glossary_objects(self, jobs: list[dict[str, Any]]) -> None:
+        """삭제 작업의 객체를 지우고 작업을 done으로 바꾼다. 실패하면 예외를 내고 작업은 pending으로 남는다."""
+        if not jobs:
+            return
+        bucket = self._glossary_bucket()
+        response = self._request(
+            "DELETE",
+            f"/storage/v1/object/{bucket}",
+            json={"prefixes": [job["object_path"] for job in jobs]},
+            headers=self._headers(),
+        )
+        if response.status_code != 200:
+            raise SupabaseConfigError(f"storage delete status {response.status_code}")
+        ids = ",".join(str(int(job["job_id"])) for job in jobs)
+        done = self._request(
+            "PATCH",
+            "/rest/v1/storage_delete_jobs",
+            params={"id": f"in.({ids})", "status": "eq.pending"},
+            json={"status": "done", "done_at": datetime.now(timezone.utc).isoformat()},
+            headers={**self._headers(), "Prefer": "return=minimal"},
+        )
+        if done.status_code not in (200, 204):
+            raise SupabaseConfigError(f"storage_delete_jobs update status {done.status_code}")
 
     def sign_note_images(self, paths: list[str], expires_in: int) -> dict[str, str]:
         """노트 이미지 비공개 버킷의 서명 URL을 한 번에 받는다. 파일이 없어 발급되지 않은 경로는 결과에서 빠진다.

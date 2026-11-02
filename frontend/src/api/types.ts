@@ -89,6 +89,11 @@ export type ExplainResponse =
       is_favorite?: boolean
     }
 
+// E10 POST /api/reports (3절 예시 7). 새 신고는 201, 같은 사용자·같은 대상의 열린 신고가 이미 있으면 200으로 기존 id를 돌려준다.
+export type ReportTarget = { type: 'ai_explanation' | 'quiz_item'; id: number }
+export type ReportRequest = { target: ReportTarget; body: string }
+export type ReportResponse = { id: number; status: string }
+
 // E11 POST /api/quiz/today. 여섯 상태는 모두 HTTP 200이다(6.3). 답하기 전 문항에는 정답·해설이 오지 않는다.
 // 답한 문항에는 your_answer·correct_answer·explanation·followups가 더 온다(재접속 때 진행 상황 복원).
 export type QuizItem = {

@@ -65,6 +65,17 @@ DB 조회 엔드포인트가 아직 없으면 실제 연결 검증은 미완료�
 
 루트 [`vercel.json`](../vercel.json)은 Services(Beta)로 `frontend/`의 Vite와 `backend/`의 FastAPI를 함께 배포한다. 함수 지역 설정값은 `hnd1`이며 실제 실행 지역은 배포·런타임 정보로 별도 확인한다. `/api/*` 경로는 그대로 백엔드에 전달한다. `/health`도 백엔드로, 나머지는 프론트로 연결한다. 프론트의 깊은 경로는 `index.html`로 연결한다.
 
+### 함수 최대 실행 시간 (MEG-153, 2026-11-02 확인)
+
+AI 설명(E09)은 요청 하나에서 Bedrock을 최대 두 번 부른다(호출당 30초, 호출 안 재시도 1회, 스로틀링이면 1초 대기). 최악은 약 61~65초다. Vercel 문서의 "Duration limits" 표(Fluid compute 사용 시, 문서 갱신일 2026-08-24)는 Hobby의 기본·최대를 모두 300초로 적는다. 65초는 이 안에 들어서 `vercel.json`에 `maxDuration`을 넣지 않았다. 출처: https://vercel.com/docs/functions/configuring-functions/duration
+
+이 판정은 두 가지를 전제로 한다. 둘 다 Vercel 대시보드의 **Settings → Functions**에서 사람이 확인한다. 저장소와 Vercel 연결 도구로는 읽지 못했다.
+
+- Fluid compute가 켜져 있다. 2025-04-23 이후 새 프로젝트는 기본으로 켜지고, 이 프로젝트는 2026-10-28에 만들었다.
+- **Function Max Duration**의 Default Max Duration을 65초 아래로 낮추지 않았다.
+
+플랜을 Pro로 올려도 기본값은 같고(300초), 이 값보다 짧게 바꾸면 E09 호출이 중간에 끊긴다. 끊기면 원장 행이 `reserved`로 10분 남고, 같은 `Idempotency-Key`로 다시 보내면 409 `in_progress`나 `result_unavailable`이 나온다. E09의 호출 시간 초과나 재시도 횟수를 늘리면 이 판정을 다시 확인한다. 이 절은 Services(Beta)로 배포되는 `backend`에 같은 제한이 적용되는지는 별도로 검증하지 않았다.
+
 1. 이슈별 브랜치에서 PR을 열고 코드·문서 검증 결과를 기록한다. PR Preview에서 해당 변경을 확인한다.
 2. 사람의 검토를 거쳐 테스트할 변경을 `staging`에 반영한다. PR 병합은 사람이 수행하며 에이전트는 병합·auto-merge·우회 병합을 하지 않는다. 테스트 브랜치를 강제로 덮어쓰지 않는다.
 3. Vercel에서 대상이 Preview이고 Git 브랜치가 `staging`인지 확인한 뒤 아래 절차로 검증한다.

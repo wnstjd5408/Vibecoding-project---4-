@@ -25,7 +25,7 @@
     {"id": "api", "zone": "vercel", "label": "FastAPI /api", "icon": {"aws_shape": "gear"}, "sub": "Vercel 함수, 도쿄"},
     {"id": "auth", "zone": "supabase", "label": "Supabase Auth", "icon": {"aws_shape": "ssl_padlock"}, "sub": "HttpOnly 쿠키 세션"},
     {"id": "db", "zone": "supabase", "label": "Postgres", "icon": {"aws_shape": "generic_database"}, "sub": "RLS, service_role만"},
-    {"id": "glossary_images", "zone": "supabase", "label": "사전 이미지 버킷", "icon": {"aws_shape": "bucket"}, "sub": "공개 읽기 제안"},
+    {"id": "glossary_images", "zone": "supabase", "label": "사전 이미지 버킷", "icon": {"aws_shape": "bucket"}, "sub": "공개 읽기"},
     {"id": "note_images", "zone": "supabase", "label": "노트 이미지 버킷", "icon": {"aws_shape": "bucket"}, "sub": "비공개, 서명 URL"},
     {"id": "bedrock", "zone": "external", "label": "Amazon Bedrock", "icon": {"aws_resource": "bedrock", "color": "#01A88D"}, "sub": "gpt-6-luna 잠정"},
     {"id": "importer", "zone": "onetime", "label": "가져오기 스크립트", "icon": {"aws_shape": "gear"}, "sub": "운영자 로컬"},
@@ -40,7 +40,7 @@
     {"id": "f-note-sign", "no": 6, "type": "data", "from": "api", "to": "note_images", "label": "읽기 권한 확인 뒤 서명 URL 발급, 객체 삭제"},
     {"id": "f-ai", "no": 7, "type": "data", "from": "api", "to": "bedrock", "label": "AI 호출. 예약 → 호출 → 정산, OIDC(기본)·API 키(대체)"},
     {"id": "f-note-read", "no": 8, "type": "data", "from": "browser", "to": "note_images", "label": "서명 URL로 노트 이미지를 직접 읽는다(선 생략)", "drawn": false},
-    {"id": "f-glossary-read", "no": 9, "type": "data", "from": "browser", "to": "glossary_images", "label": "공개 URL로 사전 이미지를 직접 읽는다(Q7 미정, 선 생략)", "drawn": false},
+    {"id": "f-glossary-read", "no": 9, "type": "data", "from": "browser", "to": "glossary_images", "label": "공개 URL로 사전 이미지를 직접 읽는다(Q7 결정, 선 생략)", "drawn": false},
     {"id": "f-notion", "no": 10, "type": "control", "from": "importer", "to": "notion", "label": "허용한 페이지 본문만 읽는다"},
     {"id": "f-import-db", "no": 11, "type": "control", "from": "importer", "to": "db", "label": "노트를 기록한다(이미 있으면 건너뜀)"},
     {"id": "f-import-img", "no": 12, "type": "control", "from": "importer", "to": "note_images", "label": "이미지를 재인코딩해 올린다"}

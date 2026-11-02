@@ -7,6 +7,8 @@ dependencies = [
     "boto3>=1.43.117",
     "fastapi[standard]>=0.146.0",
     "httpx>=0.28",
+    # 사전 이미지 올리기(E22)의 형식 판정·재인코딩
+    "pillow>=13.0.0",
 ]
 
 [dependency-groups]
