@@ -141,10 +141,12 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 - 이름·이메일 같은 개인 정보는 AI에 보내지 않는다. 노트 문장과 사용자 답변은 외부 AI 사업자로 나간다. 사업자의 보관·학습 사용 조건은 구현 때 공식 문서로 확인한다. (미확인)
 - 모델은 gpt-6-luna로 잠정 시작한다. 품질 시험을 통과하지 못하면 바꾸고, 퀴즈·AI 기능 구현 착수 전에 확정한다. (결정, D-034) 모델 ID는 설정 한 곳에 두고 응답에 내보내지 않는다.
 
-**순서: 예약 → 호출 → 정산 (제안)**
+**순서: 예약 → 호출 → 정산 (제안, MEG-86에서 구현)**
+
+`backend/app/ai_ledger.py`의 `run_ai_call`이 아래 순서를 맡고, 원자 작업은 SQL 함수 `ai_reserve`·`ai_settle`·`ai_claim_quiz_set`(퀴즈 세트 선점과 첫 예약)·`ai_invalidate_explanations`(설명 무효화)가 한다.
 
 1. AI를 부르기 전에 `ai_usage_ledger`에 예상 비용을 `reserved`로 넣는다. 한 트랜잭션에서 합계를 잠그고 읽은 뒤 넣어서 동시 요청이 한도를 함께 넘지 못하게 한다. 한도를 넘으면 예약도 AI 호출도 없이 한도 안내를 돌려준다.
-2. Bedrock을 부른다. 호출당 시간 초과를 두고, 호출 안 재시도는 1회까지다. 재시도도 따로 예약·정산한다.
+2. Bedrock을 부른다. 호출당 시간 초과를 두고, 호출 안 재시도는 1회까지다. 재시도도 따로 예약·정산한다. botocore 자동 재시도는 끈다. 켜 두면 예약 없는 호출이 생긴다.
 3. 응답의 실제 사용량으로 `settled` 처리한다. 시간 초과처럼 과금 여부를 모르는 실패는 예약액 그대로 정산하고, 과금되지 않았음이 확실한 실패만 `released`로 바꾼다.
 4. 함수가 중간에 죽어 `reserved`로 오래 남은 행은 다음 예약 때 예약액 그대로 정산한다.
 
@@ -220,13 +222,15 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 | `AWS_BEARER_TOKEN_BEDROCK` | `api_key` 모드의 장기 API 키. 만료 30일 | `api_key`에서 필수. 평소에는 비워 둔다 | 백엔드(Vercel, 대체 경로를 쓰는 동안만) |
 | `BEDROCK_REGION` | Bedrock 호출 리전 | 비우면 `ap-northeast-1` | 백엔드(선택) |
 | `BEDROCK_MODEL_ID` | 호출할 모델 ID. 응답에 내보내지 않는다(5절) | 비우면 `global.openai.gpt-6-luna` | 백엔드(선택) |
+| `AI_DAILY_BUDGET_USD`·`AI_MONTHLY_BUDGET_USD` | AI 하루 전체·월 예산(USD). 한 사용자의 하루 몫은 하루 예산의 50%다 | AI를 부르는 요청에서 필수. 양의 숫자가 아니면 예약 전에 500이고 AI를 부르지 않는다. 금액은 공개 저장소에 쓰지 않는다(2026-11-02 결정, MEG-86) | 백엔드(Vercel·AI를 시험하는 로컬) |
+| `AI_INPUT_USD_PER_MTOK`·`AI_OUTPUT_USD_PER_MTOK` | 모델의 입력·출력 100만 토큰당 단가(USD). 예약액과 정산액 계산에 쓴다 | 위와 같다. 모델을 바꾸면 같이 바꾼다 | 백엔드(Vercel·AI를 시험하는 로컬) |
 | `ALLOWED_ORIGINS` | 상태를 바꾸는 요청(POST·PUT·PATCH·DELETE)의 `Origin`으로 받을 출처 목록(쉼표로 구분, `scheme://host[:port]`만). CORS 허용 출처도 같은 값이다 | 비우면 `http://localhost:5173`. `*`·경로가 든 값은 시작할 때 거부한다. 운영(`VERCEL_ENV=production`)에서 비우면 앱이 시작하지 않는다 | 백엔드(로컬·Vercel) |
 | `VITE_API_MOCK` | 가짜 응답과 실제 API 전환 | `true`일 때만 가짜 응답. 나머지는 같은 출처의 `/api`로 요청한다. `VITE_` 값에는 비밀값을 넣지 않는다 | 프런트엔드(빌드 시) |
 | `VERCEL`·`VERCEL_ENV`·`VERCEL_TARGET_ENV`·`VERCEL_GIT_COMMIT_REF` | Vercel 시스템 환경변수. 직접 넣지 않는다. AI 호출 허용 판정(운영·staging Preview·로컬만)과 운영 판정(`ALLOWED_ORIGINS` 필수)에 쓴다 | Vercel이 런타임에 넣는다. 프로젝트 설정의 시스템 환경변수 노출이 켜져 있어야 한다. Vercel 위인데 `VERCEL_ENV`가 없으면 AI를 막는다(MEG-120, [ai-credentials.md](ai-credentials.md)) | 백엔드(Vercel) |
 
 - 백업 워크플로(`DB Backup`, 7절)는 앱 환경변수가 아니라 GitHub `db-backup` Environment의 비밀값을 쓴다. `SUPABASE_DB_URL`(세션 풀러 연결 문자열, DB 덤프용), `SUPABASE_URL`·`SUPABASE_SECRET_KEY`(이미지 백업용, 백업 전용 키), `AWS_ROLE_ARN`·`BACKUP_BUCKET`(S3 업로드)이고, 변수는 `GLOSSARY_IMAGE_BUCKET`·`NOTE_IMAGE_BUCKET`이다. 앱이 도는 동안 FastAPI 밖에서 DB를 읽는 예외다(D-072). 설정은 [인프라 가이드](../infra/README.md)의 "DB·이미지 백업" 절을 따른다.
 - 가져오기 스크립트가 DB·버킷에 쓸 때 쓰는 가져오기 전용 secret key의 변수 이름은 아직 없다. 가져오기 구현(MEG-85)에서 정한다. (미정, D-070)
-- 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정), `backend/app/config.py`(허용 출처), `backend/app/supabase.py`(Supabase 주소·secret key·노트 이미지 버킷), `frontend/src/api/source.ts`(가짜/실제 전환)다. `VITE_API_BASE_URL`은 사용하지 않는다. Notion 변수는 가져오기 구현 때 읽는다.
+- 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정), `backend/app/ai_ledger.py`(AI 예산·단가), `backend/app/config.py`(허용 출처), `backend/app/supabase.py`(Supabase 주소·secret key·노트 이미지 버킷), `frontend/src/api/source.ts`(가짜/실제 전환)다. `VITE_API_BASE_URL`은 사용하지 않는다. Notion 변수는 가져오기 구현 때 읽는다.
 
 ## 9. 아직 정하지 않은 것
 

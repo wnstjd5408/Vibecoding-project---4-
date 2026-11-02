@@ -112,6 +112,15 @@ Secure 쿠키를 그대로 시험하려고 `check`의 앱 주소는 `https://loc
 
 행 수가 다르다는 오류가 나오면 API 시험으로 데이터가 바뀌었을 수 있습니다. fixture로 기준 상태를 복원하고 check를 다시 실행하세요. 이 점검은 초기 상태 확인용이며, 이미 작성한 제품 API의 기능 시험을 대신하지 않습니다.
 
+AI 원장 SQL 함수(한도 예약·정산, 퀴즈 선점, 설명 무효화) 시험은 로컬 Supabase가 아니라 네트워크를 끈 일회용 PostgreSQL 컨테이너에서 돕니다. 운영 DB 주소는 받지 않습니다. 컨테이너 이름을 넣지 않으면 건너뜁니다.
+
+```powershell
+docker run -d --rm --name meg86-sql-test --network none -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17
+$env:AI_LEDGER_TEST_CONTAINER = "meg86-sql-test"
+uv run pytest tests/integration/test_ai_ledger_sql.py -q
+docker stop meg86-sql-test
+```
+
 ## 7. 서버와 화면 실행
 
 ```powershell
