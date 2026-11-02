@@ -10,6 +10,7 @@ import { LOGIN_PROMPT_MESSAGES } from '../loginPrompt/messages.ts'
 import { useLoginPrompt } from '../loginPrompt/useLoginPrompt.ts'
 import { classifyQuizError, pollDelayMs, quizRetryAvailableAt, requestQuizToday } from '../quiz/quizToday.ts'
 import type { QuizFailure } from '../quiz/quizToday.ts'
+import { ReportControl } from '../reports/ReportControl.tsx'
 import { userPaths } from '../routes/paths.ts'
 import styles from './QuizPage.module.css'
 
@@ -160,7 +161,8 @@ export default function QuizPage() {
           <ul className={styles.list}>
             {current.items.map((item) => <li key={item.id}>
               <QuizCard headingLevel={2} title={item.question}
-                badges={<><AiBadge />{Object.hasOwn(LEVEL, item.difficulty) ? <DifficultyChip level={LEVEL[item.difficulty]} /> : null}</>}>
+                badges={<><AiBadge />{Object.hasOwn(LEVEL, item.difficulty) ? <DifficultyChip level={LEVEL[item.difficulty]} /> : null}</>}
+                actions={<ReportControl target={{ type: 'quiz_item', id: item.id }} />}>
                 {item.answered ? <p className={styles.answered}>{MESSAGES.answered}</p> : null}
               </QuizCard>
             </li>)}

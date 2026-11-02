@@ -67,6 +67,14 @@ def test_rejects_invalid_fields_without_echoing_values(field, value):
     assert row["source_text"] not in str(error.value)
 
 
+def test_duplicate_key_points_are_rejected_without_echoing_values():
+    row = record()
+    row["comprehension_questions"] = [{"question": "뜻은?", "key_points": ["secret", "secret"]}]
+    with pytest.raises(DatasetError, match="duplicate_key_points") as error:
+        Case.from_dict(row)
+    assert "secret" not in str(error.value)
+
+
 def test_missing_and_unknown_fields_are_rejected():
     row = record()
     del row["required_conditions"]

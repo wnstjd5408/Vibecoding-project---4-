@@ -514,3 +514,198 @@ def test_from_env_reads_the_note_image_bucket(monkeypatch):
 
     monkeypatch.delenv("NOTE_IMAGE_BUCKET")
     assert SupabaseClient.from_env()._note_image_bucket is None
+
+
+# --- E06 사전 용어·E07 열람 기록 (MEG-75) ---
+
+
+GLOSSARY_SELECT = "id,key,label,glossary_entries!inner(body_markdown),glossary_images(id,storage_path,alt)"
+
+
+def test_get_glossary_entry_reads_one_glossary_term_with_ordered_images():
+    row = {"id": 7, "key": "k", "label": "K", "glossary_entries": {"body_markdown": "b"}, "glossary_images": []}
+    seen, handler = capture([row])
+
+    assert client_with(handler).get_glossary_entry(7) == row
+    assert seen["path"] == "/rest/v1/terms"
+    # 방문자는 즐겨찾기를 읽지 않는다.
+    assert seen["params"] == {
+        "id": "eq.7",
+        "select": GLOSSARY_SELECT,
+        "glossary_images.order": "id.asc",
+        "limit": "1",
+    }
+
+
+def test_get_glossary_entry_for_a_user_embeds_only_that_users_favorite():
+    seen, handler = capture([])
+
+    client_with(handler).get_glossary_entry(7, USER_ID)
+
+    assert seen["params"] == {
+        "id": "eq.7",
+        "select": GLOSSARY_SELECT + ",favorites(term_id)",
+        "favorites.user_id": f"eq.{USER_ID}",
+        "glossary_images.order": "id.asc",
+        "limit": "1",
+    }
+
+
+def test_get_glossary_entry_rejects_non_uuid_user_ids():
+    with pytest.raises(ValueError):
+        client_with(capture([])[1]).get_glossary_entry(7, "not-a-uuid")
+
+
+def test_get_glossary_entry_without_a_glossary_row_is_none():
+    _, handler = capture([])
+    assert client_with(handler).get_glossary_entry(9) is None
+
+
+def test_record_term_view_inserts_and_ignores_duplicates():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["prefer"] = request.headers["prefer"]
+        seen["body"] = request.content.decode()
+        return httpx.Response(201)
+
+    assert client_with(handler).record_term_view(USER_ID, 7, "2026-10-23") is True
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/rest/v1/term_views"
+    assert seen["prefer"] == "resolution=ignore-duplicates,return=minimal"
+    assert seen["body"].replace(" ", "") == f'{{"user_id":"{USER_ID}","term_id":7,"study_date":"2026-10-23"}}'
+
+
+# 2026-11-02 로컬 PostgREST가 준 외래 키 위반 본문(값만 합성).
+TERM_FK = {"code": "23503", "message": 'insert or update on table "term_views" violates foreign key constraint "term_views_term_id_fkey"'}
+USER_FK = {"code": "23503", "message": 'insert or update on table "term_views" violates foreign key constraint "term_views_user_id_fkey"'}
+
+
+def test_record_term_view_for_a_missing_term_is_false():
+    assert client_with(lambda r: httpx.Response(409, json=TERM_FK)).record_term_view(USER_ID, 7, "2026-10-23") is False
+
+
+@pytest.mark.parametrize(
+    "response",
+    [httpx.Response(409, json=USER_FK), httpx.Response(409, json={"code": "23503"}),
+     httpx.Response(409, json={"code": "23505"}), httpx.Response(401, json={"message": "Invalid API key"}),
+     httpx.Response(403, json={"code": "42501"}), httpx.Response(409, text="not json"),
+     httpx.Response(409, json=["not", "an", "object"])],
+)
+def test_record_term_view_other_rejections_are_config_errors(response):
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: response).record_term_view(USER_ID, 7, "2026-10-23")
+
+
+def test_record_term_view_outage_is_unavailable():
+    with pytest.raises(SupabaseUnavailable):
+        client_with(lambda r: httpx.Response(503)).record_term_view(USER_ID, 7, "2026-10-23")
+
+
+def glossary_client(bucket: str | None = "glossary-images") -> SupabaseClient:
+    def handler(request):
+        raise AssertionError("public URLs need no Storage call")
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    return SupabaseClient("https://project.supabase.co/", "sb_secret_test", http, glossary_image_bucket=bucket)
+
+
+def test_glossary_image_url_is_the_public_object_url_with_an_encoded_path():
+    assert glossary_client().glossary_image_url("terms/7/a b+(1)?.png") == (
+        "https://project.supabase.co/storage/v1/object/public/glossary-images/terms/7/a%20b%2B%281%29%3F.png"
+    )
+
+
+@pytest.mark.parametrize("path", ["../note-images/x.png", "terms/../../x.png", "/abs.png", "terms//x.png", "./x.png", "terms/"])
+def test_glossary_image_url_rejects_empty_or_dot_segments(path):
+    # 브라우저가 ../를 정규화하면 다른 버킷의 공개 주소가 된다.
+    with pytest.raises(SupabaseConfigError):
+        glossary_client().glossary_image_url(path)
+
+
+@pytest.mark.parametrize("bucket", [None, "", "../other", "glossary images", ".", ".."])
+def test_glossary_image_url_without_a_valid_bucket_is_a_config_error(bucket):
+    with pytest.raises(SupabaseConfigError):
+        glossary_client(bucket).glossary_image_url("terms/7/a.png")
+
+
+def test_from_env_reads_the_glossary_image_bucket(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setenv("GLOSSARY_IMAGE_BUCKET", " glossary-images ")
+
+    assert SupabaseClient.from_env()._glossary_image_bucket == "glossary-images"
+
+    monkeypatch.delenv("GLOSSARY_IMAGE_BUCKET")
+    assert SupabaseClient.from_env()._glossary_image_bucket is None
+
+
+# --- E09(MEG-87)가 쓰는 조회·저장 ---
+
+
+def test_note_for_explain_reads_only_the_four_columns_and_filters_private_notes_in_the_db():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, dict(request.url.params)))
+        return httpx.Response(200, json=[{"id": 11, "revision": 3, "is_published": True, "body_markdown": "본문"}])
+
+    client = client_with(handler)
+    assert client.get_note_for_explain(11, include_unpublished=False)["revision"] == 3
+    client.get_note_for_explain(11, include_unpublished=True)
+
+    columns = "id,revision,is_published,body_markdown"
+    assert seen[0] == ("/rest/v1/notes", {"id": "eq.11", "select": columns, "limit": "1", "is_published": "eq.true"})
+    assert seen[1] == ("/rest/v1/notes", {"id": "eq.11", "select": columns, "limit": "1"})
+    assert client_with(lambda r: httpx.Response(200, json=[])).get_note_for_explain(99, True) is None
+
+
+def test_term_for_explain_filters_embedded_explanations_and_favorites_to_active_and_mine():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json=[{"id": 9, "key": "k"}])
+
+    assert client_with(handler).find_term_for_explain("k", USER_ID) == {"id": 9, "key": "k"}
+    params = seen["params"]
+    assert params["key"] == "eq.k" and params["limit"] == "1"
+    assert params["ai_explanations.invalidated_at"] == "is.null"
+    assert params["favorites.user_id"] == f"eq.{USER_ID}"
+    assert params["glossary_images.order"] == "id.asc"
+    for embedded in ("glossary_entries(body_markdown)", "ai_explanations(id,body,review_status)", "favorites(term_id)"):
+        assert embedded in params["select"]
+    assert client_with(lambda r: httpx.Response(200, json=[])).find_term_for_explain("k", USER_ID) is None
+
+
+def test_ledger_rows_are_looked_up_by_request_key_prefix_for_the_session_user_only():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"], seen["params"] = request.url.path, dict(request.url.params)
+        return httpx.Response(200, json=[{"status": "settled", "attempt_no": 1, "created_at": "2026-11-02T05:00:00+00:00"}])
+
+    key = f"{USER_ID}:3f2b8c1e-0000-4000-8000-000000000001"
+    rows = client_with(handler).list_ledger_rows(USER_ID, key)
+
+    assert rows[0]["status"] == "settled"
+    assert seen["path"] == "/rest/v1/ai_usage_ledger"
+    assert seen["params"]["idempotency_key"] == f"like.{key}:*"
+    assert seen["params"]["user_id"] == f"eq.{USER_ID}"
+
+
+def test_store_ai_explanation_sends_p_arguments_and_strips_the_out_prefix():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"], seen["json"] = request.url.path, request.read()
+        return httpx.Response(200, json=[{"out_outcome": "stored", "out_term_id": 5, "out_explanation_id": 8,
+                                          "out_body": "설명", "out_review_status": "pending"}])
+
+    result = client_with(handler).store_ai_explanation(note_id=1, note_revision=2, term_key="k", body="설명")
+
+    assert result == {"outcome": "stored", "term_id": 5, "explanation_id": 8, "body": "설명", "review_status": "pending"}
+    assert seen["path"] == "/rest/v1/rpc/ai_store_explanation"
+    assert b'"p_note_id":1' in seen["json"] and b'"p_term_key":"k"' in seen["json"]
