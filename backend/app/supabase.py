@@ -396,6 +396,69 @@ class SupabaseClient:
             return False
         raise SupabaseConfigError(f"term_views insert status {response.status_code}")
 
+    def report_target_exists(self, target_type: str, target_id: int, user_id: str) -> bool:
+        """E10: 신고할 수 있는 대상인지. 그 사용자가 신고할 수 있는 것만 True다(없는 것과 볼 수 없는 것을 구분하지 않는다).
+
+        ai_explanation은 지금 유효한(invalidated_at이 null) 공유 설명이다. term_id가 없는 설명은 이미 무효화된 것이다.
+        quiz_item은 그 사용자 자신의 퀴즈 세트의 문항이다. 남의 문항은 없는 문항과 같다.
+        """
+        user_id = str(uuid.UUID(user_id))
+        if target_type == "ai_explanation":
+            rows = self._select(
+                "ai_explanations",
+                {"id": f"eq.{int(target_id)}", "invalidated_at": "is.null", "select": "id", "limit": "1"},
+            )
+        elif target_type == "quiz_item":
+            rows = self._select(
+                "quiz_items",
+                {
+                    "id": f"eq.{int(target_id)}",
+                    "quiz_sets.user_id": f"eq.{user_id}",
+                    "select": "id,quiz_sets!inner(user_id)",
+                    "limit": "1",
+                },
+            )
+        else:
+            raise ValueError(f"unknown report target type: {target_type}")
+        return bool(rows)
+
+    def create_report(
+        self, user_id: str, target_type: str, target_id: int, body: str
+    ) -> tuple[dict[str, Any], bool] | None:
+        """E10: 신고를 한 건 넣는다. (행, 새로 만들었는지)를 돌려준다. 대상이 그 사이 지워졌으면 None이다.
+
+        같은 사용자·같은 대상의 열린 신고가 이미 있으면 부분 유일 인덱스(reports_open_*_idx)가 막는다. 이때 새 행 없이
+        기존 열린 신고를 읽어 (행, False)로 돌려준다. 막 처리돼 열린 신고가 사라진 경합이면 한 번 더 넣어 본다.
+        제약 이름은 v05·v06 마이그레이션의 이름이다. 바꾸면 이 판정이 틀어지므로 여기와 시험을 함께 고친다.
+        """
+        user_id = str(uuid.UUID(user_id))
+        column = "ai_explanation_id" if target_type == "ai_explanation" else "quiz_item_id"
+        payload = {"user_id": user_id, column: int(target_id), "body": body}
+        for _ in range(2):
+            response = self._request(
+                "POST",
+                "/rest/v1/reports",
+                params={"select": "id,status"},
+                json=payload,
+                headers={**self._headers(), "Prefer": "return=representation"},
+            )
+            if response.status_code == 201:
+                return response.json()[0], True
+            code, message = _error_field(response, "code"), _error_field(response, "message") or ""
+            if response.status_code == 409 and code == "23503" and f"reports_{column}_fkey" in message:
+                return None
+            if response.status_code == 409 and code == "23505" and "reports_open_" in message:
+                rows = self._select(
+                    "reports",
+                    {"user_id": f"eq.{user_id}", column: f"eq.{int(target_id)}", "status": "eq.open",
+                     "select": "id,status", "limit": "1"},
+                )
+                if rows:
+                    return rows[0], False
+                continue
+            raise SupabaseConfigError(f"reports insert status {response.status_code}")
+        raise SupabaseConfigError("reports insert kept conflicting without an open report")
+
     def get_note_for_explain(self, note_id: int, include_unpublished: bool) -> dict[str, Any] | None:
         """E09가 읽는 노트의 열(id, revision, is_published, body_markdown). 없거나 볼 수 없으면 None이다.
 
