@@ -152,7 +152,9 @@ def test_api_key_client_has_no_explicit_credentials(monkeypatch):
 
     make_client(BedrockSettings(auth_mode="api_key"))
 
+    config = captured.pop("config")
     assert captured == {"name": "bedrock-runtime", "region_name": "ap-northeast-1"}
+    assert (config.read_timeout, config.retries["total_max_attempts"]) == (30, 1)
 
 
 def test_oidc_client_uses_exchanged_credentials_and_pins_sigv4(monkeypatch):
@@ -175,6 +177,9 @@ def test_oidc_client_uses_exchanged_credentials_and_pins_sigv4(monkeypatch):
     assert name == "bedrock-runtime"
     assert kwargs["aws_access_key_id"] == FAKE_CREDENTIALS["AccessKeyId"]
     assert kwargs["config"].signature_version == "v4"
+    assert (kwargs["config"].read_timeout, kwargs["config"].retries["total_max_attempts"]) == (30, 1)
+    sts_config = clients[0][1]["config"]
+    assert (sts_config.read_timeout, sts_config.retries["total_max_attempts"]) == (10, 1)
 
 
 def test_oidc_mode_without_token_is_a_config_error():
@@ -384,3 +389,98 @@ def test_truncated_or_empty_answers_are_not_used():
         )
 
     assert (error.value.step, error.value.code) == ("response", "max_tokens")
+
+
+# --- 응답 모양과 원장 정산 분류 (MEG-86, API spec 1.4.4) ---
+
+
+def converse_once(response):
+    return converse_text(
+        SimpleNamespace(converse=lambda **_: response),
+        BedrockSettings(auth_mode="api_key"),
+        "ping",
+        max_tokens=20,
+    )
+
+
+def test_missing_content_is_a_response_error_with_usage_not_a_key_error():
+    with pytest.raises(AiCallError) as error:
+        converse_once({"stopReason": "end_turn", "usage": {"inputTokens": 7, "outputTokens": 0}})
+
+    assert (error.value.step, error.value.code) == ("response", "NoContent")
+    assert (error.value.input_tokens, error.value.output_tokens) == (7, 0)
+    assert error.value.settlement == "usage"
+
+
+def test_incomplete_answer_keeps_usage_for_settlement():
+    truncated = {
+        "output": {"message": {"content": [{"reasoningContent": {}}]}},
+        "stopReason": "max_tokens",
+        "usage": {"inputTokens": 12, "outputTokens": 20},
+    }
+
+    with pytest.raises(AiCallError) as error:
+        converse_once(truncated)
+
+    assert (error.value.input_tokens, error.value.output_tokens) == (12, 20)
+    assert error.value.settlement == "usage"
+    assert error.value.retryable is False
+
+
+def test_success_without_usage_returns_no_token_counts():
+    result = converse_once({"output": {"message": {"content": [{"text": "pong"}]}}, "stopReason": "end_turn"})
+
+    assert (result.text, result.input_tokens, result.output_tokens) == ("pong", None, None)
+
+
+@pytest.mark.parametrize("usage", [{"inputTokens": -1, "outputTokens": 2}, {"inputTokens": "5"}, "x"])
+def test_malformed_usage_is_treated_as_missing(usage):
+    result = converse_once({**GOOD_RESPONSE, "usage": usage})
+
+    assert (result.input_tokens, result.output_tokens) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("step", "code", "settlement", "retryable"),
+    [
+        ("environment", "BlockedEnvironment", "released", False),
+        ("sts", "AccessDenied", "released", False),
+        ("sts", "ReadTimeoutError", "released", False),
+        ("bedrock", "AccessDeniedException", "released", False),
+        ("bedrock", "ValidationException", "released", False),
+        ("bedrock", "ResourceNotFoundException", "released", False),
+        ("bedrock", "ThrottlingException", "released", True),
+        ("bedrock", "ReadTimeoutError", "reserved_fallback", True),
+        ("bedrock", "ModelTimeoutException", "reserved_fallback", True),
+        ("bedrock", "InternalServerException", "reserved_fallback", True),
+        ("bedrock", "ServiceUnavailableException", "reserved_fallback", True),
+        ("bedrock", "SomethingNew", "reserved_fallback", False),
+        ("response", "max_tokens", "reserved_fallback", False),
+    ],
+)
+def test_failure_classification(step, code, settlement, retryable):
+    error = AiCallError(step, code)
+
+    assert (error.settlement, error.retryable) == (settlement, retryable)
+
+
+def test_botocore_does_not_retry_on_its_own(monkeypatch):
+    """스로틀링을 흉내 내도 botocore는 한 번만 보낸다. 다시 부르는 것은 앱(ai_ledger)의 몫이다."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", FAKE_KEY)
+    client = make_client(BedrockSettings(auth_mode="api_key"))
+    sent = []
+
+    def throttled(request, **_):
+        sent.append(request.url)
+        body = json.dumps({"message": "slow down"}).encode()
+        return AWSResponse(
+            request.url, 429, {"x-amzn-ErrorType": "ThrottlingException:http://internal"}, RawBody(body)
+        )
+
+    client.meta.events.register("before-send.bedrock-runtime.Converse", throttled)
+
+    with pytest.raises(AiCallError) as error:
+        converse_text(client, BedrockSettings(auth_mode="api_key"), "ping", max_tokens=20)
+
+    assert error.value.code == "ThrottlingException"
+    assert len(sent) == 1
