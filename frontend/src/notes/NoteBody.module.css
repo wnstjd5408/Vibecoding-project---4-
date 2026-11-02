@@ -13,6 +13,10 @@
 .body code { padding: 0 var(--space-1); border-radius: var(--radius-sm); background: var(--surface-300); font-family: var(--font-mono); font-size: 14px; }
 .body pre { padding: var(--space-3); overflow-x: auto; border: 1px solid var(--surface-300); border-radius: var(--radius-sm); background: var(--surface-200); }
 .body pre code { padding: 0; background: none; font-size: 14px; line-height: 22px; }
+.tableScroll { max-width: 100%; overflow-x: auto; margin-bottom: var(--space-4); }
+.body table { width: 100%; border-collapse: collapse; }
+.body th, .body td { min-width: 6rem; padding: var(--space-2) var(--space-3); border: 1px solid var(--surface-300); vertical-align: top; }
+.body th { background: var(--surface-200); text-align: left; }
 .image { display: block; max-width: 100%; height: auto; margin: var(--space-3) 0; border-radius: var(--radius-md); }
 .imageFallback { display: inline-block; padding: var(--space-1) var(--space-2); border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); color: var(--ink-muted); font-size: 14px; line-height: 22px; }
 .compact { font-size: 14px; line-height: 22px; }

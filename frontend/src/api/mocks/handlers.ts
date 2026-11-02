@@ -21,6 +21,16 @@ export function mockError(status: number, code: string, message: string, detail?
 const loginRequired = () => mockError(401, 'login_required', 'Login is required')
 const notFound = () => mockError(404, 'not_found', 'Resource not found')
 
+// 운영자 API의 가짜 응답이 맨 앞에서 부른다. 서버처럼 방문자는 401 login_required, 일반 사용자는 403 forbidden을 돌려주고,
+// 운영자면 null이라 그대로 이어서 처리한다(backend/app/auth.py의 require_operator와 같은 규칙이다).
+//   handle: () => operatorOnly() ?? { status: 200, body: ... }
+export function operatorOnly(): MockResponse | null {
+  const session = getMockSession()
+  if (session === 'visitor') return loginRequired()
+  if (session === 'member') return mockError(403, 'forbidden', 'Operator permission is required')
+  return null
+}
+
 // 합성 계정. 실제 계정·비밀번호가 아니다. 역할 값은 서버 계약(member·operator)과 같다.
 const ACCOUNTS = {
   'member@example.test': { password: 'example-password', role: 'member', display_name: '합성 사용자' },
@@ -190,11 +200,71 @@ const routes: Route[] = [
     pattern: /^\/api\/term-views$/,
     handle: () => ({ status: 200, body: { recorded: getMockSession() !== 'visitor' } }),
   },
-  // E09 AI 설명. 방문자는 항상 401 login_required다. 로그인한 사용자 응답은 이 화면들이 쓰지 않아 만들지 않는다(등록 안 된 경로와 같은 404).
+  // E09 AI 설명. 방문자는 항상 401 login_required다. 로그인한 사용자는 예시 노트 11의 선택 위치로 세 갈래 응답을 받는다(3절 예시 3).
+  //  - UnknownWord(27~38): 새로 만든 공유 설명, ExampleTerm(6~17): 사전에 있는 용어, 그 밖: 저장하지 않는 1회용 설명
   {
     method: 'POST',
     pattern: /^\/api\/ai\/explanations$/,
-    handle: () => (getMockSession() === 'visitor' ? loginRequired() : notFound()),
+    handle: ({ body }) => {
+      if (getMockSession() === 'visitor') return loginRequired()
+      const { note_id, selection } = (body ?? {}) as { note_id?: number; selection?: { start?: number; end?: number } }
+      if (note_id !== 11 || !selection) return notFound()
+      if (selection.start === 27 && selection.end === 38) {
+        return {
+          status: 200,
+          body: {
+            source: 'ai',
+            term: { id: 12, key: 'unknownword', label: 'UnknownWord' },
+            explanation: { id: 31, body: '합성 AI 설명입니다.', review_status: 'pending', cached: false },
+            reportable: true,
+            is_favorite: false,
+          },
+        }
+      }
+      if (selection.start === 6 && selection.end === 17) {
+        return {
+          status: 200,
+          body: {
+            source: 'glossary',
+            term: { id: 7, key: 'exampleterm', label: 'ExampleTerm' },
+            body_markdown: '합성 설명 문장입니다.',
+            images: [{ id: 3, url: GLOSSARY_IMAGE, alt: '합성 구조도' }],
+            is_favorite: false,
+          },
+        }
+      }
+      return { status: 200, body: { source: 'ai', term: null, explanation: { id: null, body: '합성 1회용 AI 설명입니다.' }, reportable: false } }
+    },
+  },
+  // E11 오늘의 퀴즈. 방문자는 401 login_required, 로그인한 사용자는 예시 5의 ready(둘째 문항은 이미 답함)를 받는다. 답하기 전 문항에는 정답·해설이 없다.
+  // 그 밖의 다섯 상태(not_open·none·generating·failed·ai_limit_reached)는 가짜 응답이 아니라 시험의 합성 HTTP 응답으로 만든다.
+  {
+    method: 'POST',
+    pattern: /^\/api\/quiz\/today$/,
+    handle: () => {
+      if (getMockSession() === 'visitor') return loginRequired()
+      return {
+        status: 200,
+        body: {
+          status: 'ready',
+          quiz_date: '2026-10-23',
+          items: [
+            { id: 41, difficulty: '중', question: '합성 질문 1입니다.', answered: false, followups: [], can_request_followup: false },
+            {
+              id: 42,
+              difficulty: '하',
+              question: '합성 질문 2입니다.',
+              answered: true,
+              your_answer: '합성 답변',
+              correct_answer: '합성 정답',
+              explanation: '합성 해설',
+              followups: [{ seq: 1, question: '합성 꼬리 질문', answered: false }],
+              can_request_followup: false,
+            },
+          ],
+        },
+      }
+    },
   },
   // E08 즐겨찾기. 방문자는 항상 401 login_required다.
   {

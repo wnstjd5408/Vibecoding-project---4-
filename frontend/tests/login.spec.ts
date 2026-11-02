@@ -46,7 +46,7 @@ test('AC-1·AC-3 사용자 계정으로 로그인하면 로그인 상태가 되�
   await page.goto('/login')
   await submit(page, 'member@example.test', PASSWORD)
   await expect(page).toHaveURL(/\/quiz$/)
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('F3-3a')
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('오늘의 퀴즈')
   await expect(await readAuthState(page)).toContainText('사용자')
   await expect(page.getByText('현재 상태:')).toContainText('합성 사용자')
 })

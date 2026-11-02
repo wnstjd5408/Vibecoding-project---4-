@@ -1,6 +1,8 @@
 import { Fragment, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { fromMarkdown } from 'mdast-util-from-markdown'
+import { gfmTableFromMarkdown } from 'mdast-util-gfm-table'
+import { gfmTable } from 'micromark-extension-gfm-table'
 import type { Nodes, PhrasingContent, Root, RootContent } from 'mdast'
 import type { NoteReadResponse } from '../api/types.ts'
 import { TermLink } from '../components/TermLink.tsx'
@@ -38,7 +40,9 @@ type NoteBodyProps = {
 // 본문 속 HTML은 글자 그대로 보이고, dangerouslySetInnerHTML은 쓰지 않는다.
 // 글자 조각마다 원문 위치를 data 속성으로 달아 두어(selection.ts) 드래그한 범위를 원문 위치로 바꿀 수 있다.
 export function NoteBody({ body, spans, images, brokenImages, onTerm, onImageError, compact = false }: NoteBodyProps) {
-  const tree = useMemo(() => fromMarkdown(body), [body])
+  const tree = useMemo(() => fromMarkdown(body, {
+    extensions: [gfmTable()], mdastExtensions: [gfmTableFromMarkdown()],
+  }), [body])
   const prepared = useMemo(() => prepareSpans(body, spans), [body, spans])
   const context: Context = { body, spans: prepared, images, brokenImages, onTerm, onImageError }
   return <div className={compact ? `${styles.body} ${styles.compact}` : styles.body} {...(compact ? {} : { 'data-note-body': '' })}>{blocks(tree, context)}</div>
@@ -150,6 +154,17 @@ function image(url: string, alt: string, context: Context): ReactNode {
 
 function block(node: RootContent, context: Context): ReactNode {
   switch (node.type) {
+    case 'table': {
+      const [header, ...rows] = node.children
+      const cells = (row: typeof header, heading: boolean) => row.children.map((cell, index) => {
+        const Cell = heading ? 'th' : 'td'
+        return <Cell key={index} scope={heading ? 'col' : undefined} style={{ textAlign: node.align?.[index] ?? undefined }}>{inline(cell.children, context)}</Cell>
+      })
+      return <div className={styles.tableScroll}><table>
+        {header && <thead><tr>{cells(header, true)}</tr></thead>}
+        <tbody>{rows.map((row, index) => <tr key={index}>{cells(row, false)}</tr>)}</tbody>
+      </table></div>
+    }
     case 'paragraph':
       return <p>{inline(node.children, context)}</p>
     case 'heading': {
