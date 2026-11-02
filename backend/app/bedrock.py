@@ -50,6 +50,15 @@ def _no_retry() -> dict:
 REJECTED_CODES = frozenset(
     {"AccessDeniedException", "ThrottlingException", "ValidationException", "ResourceNotFoundException"}
 )
+# 요청이 서버에 닿기 전에 끝난 연결 실패. 과금될 수 없어 예약을 푼다. 요청이 나갔을 수 있는
+# ReadTimeoutError·ConnectionClosedError는 넣지 않는다(과금 여부를 모르므로 과금으로 센다).
+NOT_SENT_CODES = frozenset({"ConnectTimeoutError", "EndpointConnectionError"})
+# 인증이 거절돼 모델이 실행되지 않은 오류. 키 만료·서명 오류가 이어지는 동안 한도가 닫히지 않게 한다.
+AUTH_REJECTED_CODES = frozenset(
+    {"UnrecognizedClientException", "ExpiredTokenException", "InvalidSignatureException"}
+)
+# 한도 예약을 풀어 주는 bedrock 단계 오류 전체
+RELEASED_CODES = REJECTED_CODES | NOT_SENT_CODES | AUTH_REJECTED_CODES
 # 한 번 더 불러 볼 만한 실패. 앱의 호출 안 재시도 1회만 쓴다(5.2).
 RETRYABLE_CODES = frozenset(
     {
@@ -93,7 +102,7 @@ class AiCallError(Exception):
     @property
     def settlement(self) -> str:
         """원장을 어떻게 끝낼지(API spec 1.4.4). Bedrock에 닿지 않았거나 거절이 확실하면 예약을 푼다."""
-        if self.step in ("environment", "sts") or (self.step == "bedrock" and self.code in REJECTED_CODES):
+        if self.step in ("environment", "sts") or (self.step == "bedrock" and self.code in RELEASED_CODES):
             return SETTLE_RELEASED
         if self.input_tokens is not None and self.output_tokens is not None:
             return SETTLE_USAGE

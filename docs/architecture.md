@@ -147,7 +147,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 
 1. AI를 부르기 전에 `ai_usage_ledger`에 예상 비용을 `reserved`로 넣는다. 한 트랜잭션에서 합계를 잠그고 읽은 뒤 넣어서 동시 요청이 한도를 함께 넘지 못하게 한다. 한도를 넘으면 예약도 AI 호출도 없이 한도 안내를 돌려준다.
 2. Bedrock을 부른다. 호출당 시간 초과를 두고, 호출 안 재시도는 1회까지다. 재시도도 따로 예약·정산한다. botocore 자동 재시도는 끈다. 켜 두면 예약 없는 호출이 생긴다.
-3. 응답의 실제 사용량으로 `settled` 처리한다. 시간 초과처럼 과금 여부를 모르는 실패는 예약액 그대로 정산하고, 과금되지 않았음이 확실한 실패만 `released`로 바꾼다.
+3. 응답의 실제 사용량으로 `settled` 처리한다. 읽기 시간 초과·연결 끊김처럼 요청이 나갔을 수 있어 과금 여부를 모르는 실패는 예약액 그대로 정산하고, 과금되지 않았음이 확실한 실패만 `released`로 바꾼다. `released` 대상은 STS·배포 환경 단계의 실패, Bedrock의 거절(권한·검증·스로틀링·모델 없음), 인증 거절(`UnrecognizedClientException`·`ExpiredTokenException`·`InvalidSignatureException`), 요청이 서버에 닿기 전의 연결 실패(`ConnectTimeoutError`·`EndpointConnectionError`)다(MEG-145). `released` 행은 일·월 합계, 사용자 몫, 사용자별 횟수에 세지 않는다.
 4. 함수가 중간에 죽어 `reserved`로 오래 남은 행은 다음 예약 때 예약액 그대로 정산한다.
 
 **한도:** 사용자별 하루 새 AI 설명 횟수, 사용자당 하루 퀴즈 1회(DB 고유 제약), 문항당 꼬리 질문 2개(DB 제약), 호출당 토큰 상한, 한 사용자의 하루 사용 상한, 전체 하루·월 예산을 둔다. 숫자는 모델 확정 때 정한다(원본 5절). 한도를 다 쓰면 안내만 보이고 사전 설명과 노트 읽기는 계속된다. 같은 요청을 자동으로 반복하지 않는다.

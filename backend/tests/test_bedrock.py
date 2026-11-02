@@ -457,7 +457,16 @@ def test_malformed_usage_is_treated_as_missing(usage):
         ("bedrock", "ValidationException", "released", False),
         ("bedrock", "ResourceNotFoundException", "released", False),
         ("bedrock", "ThrottlingException", "released", True),
+        # 요청이 서버에 닿기 전에 끝난 연결 실패는 과금될 수 없다(MEG-145)
+        ("bedrock", "ConnectTimeoutError", "released", True),
+        ("bedrock", "EndpointConnectionError", "released", True),
+        # 인증 거절은 모델이 실행되지 않았다(MEG-145)
+        ("bedrock", "UnrecognizedClientException", "released", False),
+        ("bedrock", "ExpiredTokenException", "released", False),
+        ("bedrock", "InvalidSignatureException", "released", False),
+        # 요청이 나갔을 수 있으면 과금으로 센다
         ("bedrock", "ReadTimeoutError", "reserved_fallback", True),
+        ("bedrock", "ConnectionClosedError", "reserved_fallback", True),
         ("bedrock", "ModelTimeoutException", "reserved_fallback", True),
         ("bedrock", "InternalServerException", "reserved_fallback", True),
         ("bedrock", "ServiceUnavailableException", "reserved_fallback", True),

@@ -10,7 +10,13 @@ from decimal import Decimal
 
 import pytest
 from botocore.awsrequest import AWSResponse
-from botocore.exceptions import ClientError, ReadTimeoutError
+from botocore.exceptions import (
+    ClientError,
+    ConnectionClosedError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+)
 
 from app import ai_ledger
 from app.ai_ledger import (
@@ -325,6 +331,45 @@ def test_known_rejection_releases_and_does_not_retry():
 
     assert bedrock.calls == 1
     assert store.settled == [(101, "released", {})]
+
+
+@pytest.mark.parametrize("code", ["UnrecognizedClientException", "ExpiredTokenException", "InvalidSignatureException"])
+def test_auth_rejection_releases_without_retry_and_is_a_502(code):
+    store = FakeStore()
+    bedrock = FakeBedrock(client_error(code))
+
+    with pytest.raises(AiCallError) as error:
+        run(store, bedrock)
+
+    assert bedrock.calls == 1
+    assert store.settled == [(101, "released", {})]
+    assert api_error_for(error.value).code == "ai_unavailable"
+
+
+@pytest.mark.parametrize("error_type", [ConnectTimeoutError, EndpointConnectionError])
+def test_connection_failure_that_never_sent_the_request_releases_both_attempts(error_type):
+    store = FakeStore()
+    failure = error_type(endpoint_url="https://bedrock-runtime.example")
+    bedrock = FakeBedrock(failure, failure)
+
+    with pytest.raises(AiCallError) as error:
+        run(store, bedrock, sleep=lambda _: None)
+
+    # 한 번 다시 부르고(새 예약), 두 예약 모두 푼다. 응답은 502
+    assert bedrock.calls == 2
+    assert store.settled == [(101, "released", {}), (102, "released", {})]
+    assert api_error_for(error.value).code == "ai_unavailable"
+
+
+def test_connection_failure_after_the_request_may_have_been_sent_still_counts_as_billed():
+    store = FakeStore()
+    bedrock = FakeBedrock(ConnectionClosedError(endpoint_url="https://bedrock-runtime.example"),
+                          ConnectionClosedError(endpoint_url="https://bedrock-runtime.example"))
+
+    with pytest.raises(AiCallError):
+        run(store, bedrock, sleep=lambda _: None)
+
+    assert store.settled == [(101, "reserved_fallback", {}), (102, "reserved_fallback", {})]
 
 
 def test_sts_failure_releases_without_retry():
