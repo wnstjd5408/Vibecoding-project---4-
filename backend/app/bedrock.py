@@ -272,7 +272,7 @@ def converse_text(
     # content 자체가 없는 응답도 불완전 응답과 같게 502로 끝낸다(1.4.4). usage가 있으면 정산에 쓴다.
     if not isinstance(blocks, list):
         raise AiCallError("response", "NoContent", input_tokens=input_tokens, output_tokens=output_tokens)
-    # text가 문자열이 아닌 블록(null 등)은 버린다. 예외로 끝나면 정산 없이 예약이 남는다.
+    # text가 문자열이 아닌 블록(null 등)은 버린다. 이런 응답을 예외(500)가 아니라 불완전 응답(502)으로 다룬다.
     text = "".join(
         block["text"] for block in blocks if isinstance(block, Mapping) and isinstance(block.get("text"), str)
     )

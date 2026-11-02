@@ -36,7 +36,7 @@ def parse_quiz_items(text: str, expected_count: int | None = None) -> list[QuizI
     네 필드는 모두 비어 있지 않은 문자열이어야 하고 difficulty는 상·중·하만 받는다. 다른 키는 버린다.
     expected_count를 주면 문항 수가 같아야 한다.
     """
-    body = text.strip()
+    body = text.replace("\r\n", "\n").strip()
     fenced = _FENCE.match(body)
     if fenced:
         body = fenced.group("body").strip()

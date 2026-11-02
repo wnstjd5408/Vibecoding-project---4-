@@ -412,7 +412,8 @@ def test_unexpected_exception_still_settles_the_reservation():
     assert len(store.reserved) == 1
 
 
-def test_unexpected_exception_from_client_creation_still_settles():
+def test_unexpected_exception_from_client_creation_releases():
+    """클라이언트를 만들다 난 예외는 Bedrock에 닿지 않았으므로 과금으로 세지 않는다."""
     store = FakeStore()
 
     def factory(settings, token):
@@ -423,7 +424,7 @@ def test_unexpected_exception_from_client_creation_still_settles():
             store, API_KEY, BUDGET, user_id=USER, kind="explain", request_key="k", prompt="p", client_factory=factory
         )
 
-    assert store.settled == [(101, "reserved_fallback", {})]
+    assert store.settled == [(101, "released", {})]
 
 
 def test_retry_reservation_db_failure_after_a_call_is_a_500():

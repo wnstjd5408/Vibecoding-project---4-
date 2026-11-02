@@ -301,14 +301,13 @@ def test_plain_boto3_would_pick_bearer_over_explicit_keys(monkeypatch):
 # --- 호출 결과 (두 모드가 같은 코드·같은 형식) ---
 
 
-def test_both_modes_return_the_same_result_shape():
-    fake_bedrock = SimpleNamespace(converse=lambda **_: GOOD_RESPONSE)
+def test_converse_returns_text_stop_reason_and_tokens():
+    """두 인증 방식은 make_client만 다르고 결과는 converse_text 하나가 만든다(클라이언트 차이는 위 시험들)."""
+    result = converse_text(
+        SimpleNamespace(converse=lambda **_: GOOD_RESPONSE), BedrockSettings(auth_mode="api_key"), "ping", max_tokens=50
+    )
 
-    oidc = converse_text(fake_bedrock, BedrockSettings(role_arn="role"), "ping", max_tokens=50)
-    api_key = converse_text(fake_bedrock, BedrockSettings(auth_mode="api_key"), "ping", max_tokens=50)
-
-    assert oidc == api_key
-    assert (oidc.text, oidc.stop_reason, oidc.input_tokens, oidc.output_tokens) == (
+    assert (result.text, result.stop_reason, result.input_tokens, result.output_tokens) == (
         "pong",
         "end_turn",
         5,

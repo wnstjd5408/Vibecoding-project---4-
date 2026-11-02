@@ -23,6 +23,7 @@ def test_accepts_a_json_code_fence(opening):
     text = opening + "\n" + json.dumps([ITEM], ensure_ascii=False) + "\n```"
 
     assert len(parse_quiz_items(text)) == 1
+    assert len(parse_quiz_items(text.replace("\n", "\r\n"))) == 1
 
 
 def test_trims_whitespace_in_fields():

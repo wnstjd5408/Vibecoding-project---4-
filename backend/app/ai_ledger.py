@@ -88,7 +88,8 @@ class LedgerKeyExists(Exception):
     """같은 멱등 키의 원장 행이 이미 있다. status는 그 시도(:attempt_no) 행 하나의 상태다.
 
     E09의 9단계 판정은 이 값만 믿지 않는다. 첫 시도가 released여도 재시도(:2)가 아직 reserved일 수 있으므로
-    같은 사용자·키의 모든 시도 행을 보고, 하나라도 reserved면 in_progress로 답한다.
+    {user_id}:{Idempotency-Key}: 접두사의 원장 행을 모두 읽어(REST 조회, MEG-87에서 만든다) 하나라도 reserved면
+    in_progress로 답한다.
     """
 
     def __init__(self, status: str):
@@ -253,6 +254,7 @@ class SupabaseLedgerStore:
 
         한도면 AiLimitReached다. E11은 이것을 429가 아니라 200 status: ai_limit_reached로 답한다(6.3).
         claimed면 reservation을 run_ai_call(first_reservation=...)에 넘긴다.
+        E11은 이 함수보다 먼저 bedrock.ensure_ready를 부른다. 설정·배포 환경 오류로 끝날 요청이 선점 시도를 쓰지 않게 한다.
         """
         row = _first_row(
             self._supabase.rpc(
@@ -340,6 +342,8 @@ def run_ai_call(
 ) -> AiOutcome:
     """예약 → 호출 → 정산. 원장 키는 {request_key}:{attempt_no}다.
 
+    동기 함수다. Bedrock 호출과 스로틀링 대기가 스레드를 막으므로 async 엔드포인트에서 직접 부르지 않는다
+    (FastAPI의 일반 def 엔드포인트는 스레드 풀에서 돈다).
     first_reservation: 퀴즈처럼 선점 함수가 첫 예약을 이미 한 경우 넘긴다. 호출하지 못하고 끝나면 이 함수가 푼다.
     낼 수 있는 예외: AiConfigError(500), AiCallError(502), AiLimitReached(429), LedgerKeyExists(E09가 판단),
     AiSettlementFailed(500), 첫 예약 단계의 SupabaseUnavailable(503, AI 호출 전이므로).
@@ -347,9 +351,11 @@ def run_ai_call(
     spec = CALL_SPECS[kind]
     try:
         ensure_ready(settings, oidc_token)
-    except (AiConfigError, AiCallError):
+    except (AiConfigError, AiCallError) as error:
         # 선점 함수가 미리 넣은 예약은 호출 없이 끝나므로 푼다. 없으면 10분 뒤 과금으로 정산된다.
+        # 푸는 중 DB가 실패하면 503이 아니라 500(AiSettlementFailed)이다. 클라이언트 자동 재시도를 붙이지 않으려는 선택이다.
         if first_reservation is not None:
+            logger.warning("ai pre-check failed with a claimed reservation type=%s", type(error).__name__)
             _settle(store, first_reservation, SETTLE_RELEASED)
         raise
     reserved_usd = budget.reserve_amount(prompt, spec.max_tokens)
@@ -370,20 +376,20 @@ def run_ai_call(
                     budget=budget,
                     daily_count_limit=spec.daily_count_limit,
                 )
-            except (AiLimitReached, LedgerKeyExists):
-                # 재시도 예약이 한도·키로 막히면 첫 실패(502)를 그대로 낸다. 첫 호출 비용은 이미 정산됐다.
-                if last_error is not None:
-                    raise last_error from None
-                raise
             except Exception as error:
+                if last_error is None:
+                    raise
+                # 재시도 예약이 한도·키로 막히면 첫 실패(502)를 그대로 낸다. 첫 호출 비용은 이미 정산됐다.
+                if isinstance(error, (AiLimitReached, LedgerKeyExists)):
+                    raise last_error from None
                 # AI를 한 번 부른 뒤의 DB 실패는 500이다(1.4.4).
-                if last_error is not None:
-                    raise AiSettlementFailed(type(error).__name__) from None
-                raise
+                raise AiSettlementFailed(type(error).__name__) from None
 
+        calling = False
         try:
             if client is None:
                 client = client_factory(settings, oidc_token)
+            calling = True
             result = converse_text(client, settings, prompt, max_tokens=spec.max_tokens, effort=spec.effort)
         except AiConfigError:
             # 예약 전 검사를 지나 호출 직전에 드러난 설정 오류. Bedrock에 닿지 않았다.
@@ -407,9 +413,17 @@ def run_ai_call(
                 continue
             raise
         except Exception as error:
-            # 예상하지 못한 예외도 예약을 남기지 않는다. 과금 여부를 모르므로 예약액 그대로 정산하고 500으로 둔다.
-            logger.warning("ai call raised unexpected kind=%s attempt=%s type=%s", kind, attempt_no, type(error).__name__)
-            _settle(store, reservation, SETTLE_FALLBACK)
+            # 예상하지 못한 예외도 예약을 남기지 않고 500으로 둔다. 클라이언트를 만들다 난 것은 Bedrock에 닿지 않았으므로
+            # 풀고, 호출 중에 난 것은 과금 여부를 모르므로 예약액 그대로 정산한다.
+            outcome = SETTLE_FALLBACK if calling else SETTLE_RELEASED
+            logger.warning(
+                "ai call raised unexpected kind=%s attempt=%s type=%s settle=%s",
+                kind,
+                attempt_no,
+                type(error).__name__,
+                outcome,
+            )
+            _settle(store, reservation, outcome)
             raise
 
         if result.input_tokens is not None and result.output_tokens is not None:
