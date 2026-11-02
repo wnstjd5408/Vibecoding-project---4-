@@ -1,71 +1,64 @@
-# 소량 실제 호출 준비 상태
+# Staging 소량 평가 실행
 
-> 2026-11-02 개정: GPT-6 Luna 유지. 아래 과거의 tokenizer 필수 차단 설명은 `luna-service-envelope-2026-11-02` 정책에는 적용하지 않는다. 실제 토큰 수를 사전에 주장하지 않고 공식 서비스 컨텍스트 전체와 장문 최대 입력 단가로 예약한다. 승인 금액은 비공개 설정에 둔다.
+## 범위와 준비
 
-## CountTokens 없는 비용 예약
+GPT-6 Luna 개발 D01~D03만 실행한다. 봉인 자료와 승인된 실행 identity는 바꾸지 않는다. 제품 AI 설명 API나 최종 평가가 아니다. 예산 금액과 실제 입력·출력은 비공개 파일/원장에 둔다.
 
-`luna_budget.py`는 Global Standard Luna만 허용한다. 모델 공식 컨텍스트 1,050,000 전체를 입력 상한으로 보고 장문 캐시 쓰기 단가를 적용하고, 출력 상한을 별도로 더한다. 이는 실제 입력량 추정이 아니라 서비스 최대치에 기반한 보수적 예약이다. 입력 payload는 UTF-8 16,000 bytes로 제한하되 이를 토큰 수로 환산하지 않는다. payload 초과 시 원문을 자르지 않고 거부한다.
+1. 사람이 staging Supabase에 `sql/shared_ledger.sql`을 최초 한 번 적용하고 승인 행을 등록한다. 기존 행이나 횟수는 초기화하지 않는다.
+2. Vercel Preview의 staging 브랜치에 `EVAL_APPROVAL_ID`를 등록한다. 기존 `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `AWS_ROLE_ARN`, `AI_AUTH_MODE=oidc`, 앱 세션/Origin 설정이 필요하다. 플랫폼 발급 `VERCEL_OIDC_TOKEN`을 사용한다.
+3. 사람이 검토한 코드를 staging에 배포한다. 환경변수 변경 뒤 새 배포가 필요하다. Production 배포는 필요하지 않다.
+4. staging 앱의 활성 운영자 계정으로 로그인한다. Supabase 키나 AWS 토큰을 요청 본문에 넣지 않는다.
+5. 배포 함수가 STS·원장 통신과 단일 모델 호출(read timeout 60초)을 처리할 실행 시간을 제공하는지 확인한다. 플랫폼 timeout이 짧으면 먼저 배포 설정을 검토한다. 중단 후 자동 재전송하지 않는다.
 
-설정은 `max_input=1050000`, `max_output=8192`, `tokenizer_version`과 `price_version` 모두 `luna-service-envelope-2026-11-02`로 고정한다. `input_price`·`output_price`는 정책의 장문 단가와 일치해야 한다. 사용량 정산은 실측 입력 규모에 따라 단가를 고르고 캐시 항목을 보존한다. 캐시 usage 의미가 공급자 청구와 일치하는지는 첫 실측 때 대조하며 현재 비용 값은 추정치다. 모델 별칭·가격 변경 시 재확인이 필요하다. 세금·DB/배포 비용은 모델 호출 원장 범위 밖이다.
+## 요청 파일 만들기 (무과금)
 
-## 공유 원장 연결 현황
-
-`shared_ledger.py`와 `sql/shared_ledger.sql`을 추가했다. SQL은 staging에 **아직 적용하지 않았다**. 기존 제품 원장을 변경하지 않는 평가 전용 테이블/RPC다. 사람이 검토해 적용한 후 승인 행을 하나만 등록한다. 필드: 승인 ID, 고정 run_id, 실행 identity 해시, 허용 슬롯 3개, 예산, 회당 예약액. `EVAL_APPROVAL_ID`는 이 승인 ID를 가리킨다.
-
-`SharedLedger.from_env()`로 원장을 만들고 `calibration(..., ledger=ledger)`에 전달한다. 실제 BedrockTransport는 이 원장 없이 거부된다. DB에서 승인 행을 잠근 후 예약/횟수 증가를 원자 처리한다. 중복 슬롯·변경된 실행 해시·동시 호출·unknown은 거부하고 예약액은 자동 반환하지 않는다. 로컬 결과 파일을 잃었어도 DB의 중복 예약이 호출을 차단한다. 서버리스의 로컬 파일은 보조 결과 사본이며 비용 권한의 원본은 DB다.
-
-임시 PostgreSQL 검증: `tests/eval_ledger_checks.sql`. 외부 DB 적용·OIDC·실제 공급자 호출은 별도 검증 대상이다. 테이블/RPC 적용과 승인 행 생성까지 확인하기 전에는 실행하지 않는다.
-
-`live.py`는 Bedrock Converse 어댑터와 최대 3개 개발 슬롯의 예약·저장·재개 경계를 구현한다. 기존 fake 실행기와 제품 API는 바꾸지 않는다. 현재는 실행 가능한 live CLI를 제공하지 않는다.
-
-## 실행 차단 조건
-
-- 대상 모델의 검증된 입력 토큰 계산/상한이 없어 `input_bound`는 항상 거부한다. 문자 수나 추정 tokenizer를 실제 계산으로 대체하지 않는다.
-- 승인된 환경의 Bedrock 클라이언트가 필요하다. `SDK_CONFIG`로 생성하고 `total_max_attempts=1`을 확인한다. 자격증명은 환경에서 제공하며 코드에 넣지 않는다.
-- 동일 승인에는 하나의 비공개 원장 디렉터리를 재사용한다. 새 디렉터리를 만드는 행위까지 막는 전역 예산 서비스는 아니다. 여러 호스트/프로세스의 별도 원장을 합산하는 운영 기능은 범위 밖이다.
-
-## 저장과 비용
-
-호출 직전에 횟수와 예약액을 원자적으로 저장한다. 중단·사용량 불명·상한 초과는 수동 확인 전 재개를 막는다. 오류 문구나 자격증명은 기록하지 않는다. 출력과 usage는 비공개 디렉터리에 보존한다. 잘린 출력에도 usage를 버리지 않는다.
-
-캐시 읽기는 일반 입력 단가, 쓰기는 입력의 1.25배로 보수적으로 계산한다. `cost_upper_estimate`는 usage 기반 추정치이며 AWS 청구 확정액이 아니다. 미확인 비용은 0으로 기록하지 않는다. 실측 입력 상한 초과는 사후 탐지일 뿐, 사전 토큰 검증을 대신할 수 없다.
-
-## 남은 검증
-
-실제 인증·모델 호출·정확한 토큰 계산 또는 입증된 보수 상한은 미검증이다. 출력 형식·출처 ID 검증과 개발용 T4 연결은 무과금으로 시험했다. CS 내용·출처의 사실적 뒷받침은 사람 검수 대상이다. 토큰 게이트를 우회해 실행하지 않는다.
-
-## 인증 연결 순서
-
-1. 저장소 배포 가이드에 따라 승인된 staging 환경을 사용한다. 운영 비밀값을 PR Preview나 로컬로 복사하지 않는다. AWS 로컬 프로필 파일이 있다는 사실만으로 평가용 인증이 승인·유효하다고 판단하지 않는다.
-2. AWS IAM의 Vercel OIDC 공급자와 평가 역할을 확인한다. trust policy의 issuer·audience·subject를 실제 Vercel 팀·프로젝트·환경에 정확히 제한한다. 예제 ARN이나 subject를 그대로 사용하지 않는다. `sts:AssumeRoleWithWebIdentity`로 임시 자격증명을 발급한다.
-3. 역할에는 대상 추론 프로필 및 해당 글로벌 추론 경로의 foundation-model에 필요한 `bedrock:InvokeModel`만 허용한다. Global 프로필의 목적 리전을 단일 서울 리전으로 가정하면 안 된다. 계정 SCP와 프로필 리소스는 AWS 관리자에게 확인한다.
-4. 승인된 환경에 `AWS_ROLE_ARN`을 등록하고 플랫폼이 발급하는 `VERCEL_OIDC_TOKEN`을 사용한다. 토큰을 문서·채팅에 붙여 넣지 않는다. `live_auth.oidc_transport()`가 STS → 임시 자격증명 → SigV4 클라이언트를 만든다. STS와 Bedrock 모두 SDK 재시도는 0회다. Bearer로 자동 전환하지 않는다.
-5. 인증 점검에 별도의 유료 ping을 쓰지 않는다. 토큰 게이트와 예산 점검이 완료된 뒤 첫 개발 슬롯으로 모델 권한까지 확인한다. 인증 실패·timeout도 원장을 확인하고 자동 재시도하지 않는다.
-
-현재 코드는 인증 팩토리만 제공한다. staging에서 실행할 비공개 작업 경로·영속 원장 저장소는 아직 연결되지 않았다. 서버리스 임시 파일을 영구 원장으로 쓰지 않는다. 사람이 검토·병합하는 배포 절차를 건너뛰지 않는다. OIDC가 불가능할 때만 기존 `docs/ai-credentials.md`의 대체 키 절차를 검토한다.
-
-## CountTokens 없이 상한을 입증하는 방법
-
-**채택 조건:** 다음 둘 중 하나에 대한 모델 버전별 근거가 필요하다.
-
-- 공급자가 공개한 정확한 tokenizer + Converse 메시지 직렬화/특수 토큰/숨은 입력 오버헤드 규칙. 전체 system/messages를 동일 규칙으로 계산한다.
-- 공급자가 보장한 보수 상한. 예를 들어 UTF-8 byte 기반 BPE이고 모든 추가 토큰의 최대치 H가 입증된 경우에만 `입력 상한 = 모든 입력 텍스트의 UTF-8 byte 합 + H`를 쓸 수 있다. H를 임의의 여유분으로 정하지 않는다. 자료·JSON 문자열·역할·특수 토큰을 빠뜨리지 않는다.
-
-확인할 산출물은 모델 ID/버전, tokenizer 이름·파일 해시, 직렬화 규칙, 공식 근거, 고정 프롬프트 해시, 각 실제 요청 해시와 계산 상한이다. 모델 별칭·프롬프트·직렬화 변경 시 증거를 무효화하고 재검증한다.
-
-무과금 경계 시험은 한국어·영문·이모지·결합문자·코드·공백·JSON escape·인젝션 문자열, 상한 직전/동일/직후를 포함한다. 실제 3회 usage는 계산과의 일치 확인에 사용한다. 3개 실측의 최대치에 20% 등을 더한 값은 일반적인 상한 증명이 아니다.
-
-현재 공식 근거에서 Luna의 tokenizer와 Converse 오버헤드 상한을 확보하지 못했다. 따라서 `input_bound`는 계속 거부한다. 지원하지 않는 CountTokens 호출, 다른 모델의 CountTokens, 임의의 tiktoken 인코딩을 대체 근거로 쓰지 않는다. 필요하면 공급자에 모델별 상한을 문의하거나 CountTokens 지원 모델의 품질·단가를 별도 검토한다. 모델 변경은 이번 승인에 포함하지 않는다.
-
-## 출력 검증과 T4
-
-`live_output.validate_output`은 JSON 필드, 한 줄 3개 요약, 비어 있지 않은 설명, 출처 ID 허용 목록과 본문 `[n]`의 일치, 생성 URL 금지를 검사한다. 사용한 출처 목록은 입력 자료에서 가져와 하단에 표시할 수 있는 구조로 저장한다. UI 콜아웃 렌더링은 이 평가 도구 범위 밖이다. 형식 실패는 재생성 없이 error로 저장한다.
+backend에서 실행한다. 입력/출력은 저장소 밖 비공개 경로다.
 
 ```powershell
-uv run python -m evals dev-review-template --dataset <private-cases.jsonl> --state <private-state.json> --output <new-private-reviews.json>
-uv run python -m evals dev-report --dataset <private-cases.jsonl> --state <private-state.json> --reviews <private-reviews.json> --output <new-private-report.json>
+uv run python -m evals.staging --dataset <cases.jsonl> --manifest <manifest.json> --config <config.json> --output <new-private-request.json>
 ```
 
-개발 슬롯을 `D01:1`처럼 바꿔 기존 T4 검수 양식·판정 함수를 사용한다. 사람 검수가 없으면 pending, 호출 실패·상한 초과는 0점/X다. 정상 출력은 기존 사실·개념·조건·명료성·완결성의 5점과 O/X를 검수하며, 출력 해시가 바뀌면 옛 검수는 거부한다. 개발 3건은 최종 120건에 섞지 않으며 `golden_status=NOT_EVALUATED`, `product_status=INCOMPLETE`로 남긴다.
+자료·봉인·설정을 검증하고 요청 파일을 새로 만든다. 출력한 identity_hash가 승인 행과 같아야 한다. 네트워크 호출은 없고 기존 파일을 덮어쓰지 않는다. 본문은 cases, manifest, config이며 최대 2MB다. 자료/채점 근거를 public 저장소나 로그에 남기지 않는다. 모델에는 선택한 용어·문맥·generation_evidence만 전송한다.
 
-공식 근거: [모델 기능](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html), [SDK 재시도](https://docs.aws.amazon.com/boto3/latest/guide/retries.html).
+## 비공개 HTTP 계약
+
+모든 경로는 POST, 동일 요청 파일을 JSON 본문으로 받는다. 활성 운영자의 기존 세션 쿠키와 허용된 staging Origin 헤더가 필요하다. Swagger에는 표시하지 않는다. `VERCEL_ENV=preview`, `VERCEL_GIT_COMMIT_REF=staging`, 승인 ID, OIDC 모드가 맞지 않으면 404다. URL을 숨기는 것은 인증을 대신하지 않는다.
+
+| 경로 | 동작 |
+|---|---|
+| `/api/internal/evals/preflight` | 봉인·설정·승인 해시·원장 상태 확인 후 STS 인증. 예약·Converse 호출 없음. ready, next_slot, provider_calls 반환. 모델 권한은 unverified |
+| `/api/internal/evals/run/D01` | 첫 슬롯 단 한 번 실행 |
+| `/api/internal/evals/run/D02` | D01 성공 후 두 번째 슬롯 실행 |
+| `/api/internal/evals/run/D03` | D02 성공 후 세 번째 슬롯 실행 |
+| `/api/internal/evals/status` | 원장 결과를 T4용 state JSON으로 조회. STS·모델 호출·예약 없음 |
+
+D01 결과 확인 후 D02, D03 순서로 요청한다. 서버리스 실행 시간을 고려해 요청당 한 슬롯만 처리한다. identity는 전체 세 슬롯으로 계산하므로 기존 승인 SQL은 바꾸지 않는다. run/status 응답은 비공개 파일로 저장한다. 자동 재전송 루프는 만들지 않는다.
+
+인증 거부는 401/403, 잘못된 본문은 422/413, 원장·인증 교환·실행 거부는 503이다. 503은 재시도 지시가 아니다. status/SQL로 먼저 확인한다. 오류에 원문·비밀값·원격 오류 내용을 넣지 않는다. API 응답은 private, no-store다.
+
+## 중복·중단 처리
+
+공유 DB가 비용/횟수의 원본이다. 예약 RPC는 승인 행을 잠그고 슬롯 고유성·허용 슬롯·해시·3회·예산·in-flight/unknown을 검사한다. 실행 진입점은 앞 슬롯의 error도 후속 실행 차단으로 처리한다. 사전 조회는 동시성을 보장하지 않으며, 실제 호출 직전 RPC가 최종 차단한다.
+
+다른 서버 인스턴스나 새로운 임시 디렉터리에서도 새 호출 권한은 생기지 않는다. 예약 뒤 중단·결과 저장 실패는 started로 남아 수동 확인 전 추가 호출을 막는다. unknown/over_limit도 자동 재호출하지 않는다. 임시 파일은 요청 종료 시 제거하고, 완료 출력과 usage는 DB에 보존한다. 응답을 잃으면 status로 조회한다. 미저장 출력 복구를 보장하지 않는다.
+
+## CountTokens 없는 비용 관리
+
+`luna-service-envelope-2026-11-02`는 서비스 컨텍스트 전체 1,050,000과 장문 최대 입력 단가, 출력 상한 8,192로 보수적으로 예약한다. 실제 입력 토큰 수 추정이 아니다. UTF-8 요청 16,000 bytes 제한은 별도 payload 제한이며 토큰 수로 환산하지 않는다. 초과하면 자르지 않고 거부한다. 기존 input_bound 경로는 계속 거부한다.
+
+모델/정책/설정을 바꾸면 identity가 달라져 기존 승인에서 실행되지 않는다. 실제 usage와 캐시 항목을 보존하고 cost_upper_estimate를 계산한다. AWS 청구 확정액은 아니며 캐시 의미·단가는 첫 실측 시 대조한다. STS와 추론 SDK의 자동 재시도는 없다.
+
+## T4 연결
+
+status 응답을 비공개 state.json으로 저장한다.
+
+```powershell
+uv run python -m evals dev-review-template --dataset <cases.jsonl> --state <state.json> --output <new-reviews.json>
+uv run python -m evals dev-report --dataset <cases.jsonl> --state <state.json> --reviews <reviews.json> --output <new-report.json>
+```
+
+JSON·세 요약·출처 ID는 기계적으로 검증한다. 사실·핵심 개념·조건·명료성·완결성 5점과 O/X는 사람 검수 대상이다. 미검수는 pending이다. 개발 결과는 golden_status=NOT_EVALUATED, product_status=INCOMPLETE다.
+
+## 검증 한계와 해제
+
+로컬 모의 테스트는 인증 거부·staging 제한·원장 장애·중복/동시 요청·3슬롯 개별 실행·결과 조회·unknown/잘림/상한 초과 후 차단을 검증한다. 실제 staging DB 권한·OIDC trust·모델 접근·플랫폼 실행 시간은 배포 후 확인해야 한다. 원격 SQL은 사람이 적용한다. 평가 후 staging EVAL_APPROVAL_ID를 제거하고 재배포해 경로를 닫는다. 원장과 봉인 자료는 삭제하지 않는다.

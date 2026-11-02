@@ -1,4 +1,4 @@
-"""Small, resumable Bedrock calibration. No CLI until a token bound is verified."""
+"""Small Bedrock calibration with durable reservations and no automatic retries."""
 import json
 import os
 import time
@@ -42,13 +42,15 @@ def request_for(case, config):
             "additionalModelRequestFields": {"reasoning": {"effort": "none"}}}
 
 
-def calibration(cases, manifest, config, directory, case_ids, transport, *, ledger=None):
-    """One approval ledger directory must be reused; never retry uncertain attempts.
+def calibration(cases, manifest, config, directory, case_ids, transport, *, ledger=None, only_slot=None):
+    """Keep the full request identity even when executing only one staging slot.
 
-    Token bound is deliberately unavailable until a reviewed implementation exists.
-    Tests replace it only with a synthetic counter and block network access.
+    The service-envelope policy reserves a conservative cost bound without a tokenizer.
+    Real transports require the shared ledger; local state alone grants no budget.
     """
     config.validate()
+    if only_slot is not None and only_slot not in case_ids:
+        raise DatasetError("live: calibration_scope")
     if (config.split != "dev" or config.repetitions != 1 or config.max_calls > 3
             or config.model_id != MODEL or not 1 <= len(case_ids) <= config.max_calls
             or len(set(case_ids)) != len(case_ids)):
@@ -94,6 +96,8 @@ def calibration(cases, manifest, config, directory, case_ids, transport, *, ledg
         if any(r["status"] in ("started", "unknown", "over_limit") for r in state["slots"].values()):
             raise DatasetError("live: manual_recovery_required")
         for key, request in requests.items():
+            if only_slot is not None and key != only_slot:
+                continue
             if state["slots"][key]["status"] != "pending":
                 continue
             if state["provider_calls"] >= config.max_calls:

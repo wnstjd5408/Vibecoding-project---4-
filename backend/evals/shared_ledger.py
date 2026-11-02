@@ -46,6 +46,25 @@ class SharedLedger:
         self._rpc("eval_reserve", {"p_approval": self.approval_id, "p_run": run_id,
                   "p_slot": slot, "p_identity": identity, "p_amount": amount})
 
+    def snapshot(self):
+        """Read-only readiness/results; never consumes a reservation."""
+        def rows(table, field):
+            try:
+                response = self.client.get(self.url + "/rest/v1/" + table,
+                    headers=self.headers, params={field: "eq." + self.approval_id, "select": "*"})
+                if response.status_code != 200:
+                    raise DatasetError("live: ledger_unavailable")
+                data = response.json()
+                if not isinstance(data, list) or not all(isinstance(row, dict) for row in data):
+                    raise DatasetError("live: ledger_unavailable")
+                return data
+            except (httpx.HTTPError, ValueError):
+                raise DatasetError("live: ledger_unavailable") from None
+        approvals = rows("eval_approvals", "id")
+        if len(approvals) != 1:
+            raise DatasetError("live: approval_missing")
+        return approvals[0], rows("eval_attempts", "approval_id")
+
     def finish(self, run_id, slot, row):
         self._rpc("eval_finish", {"p_approval": self.approval_id, "p_run": run_id,
                   "p_slot": slot, "p_result": row})
