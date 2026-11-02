@@ -158,3 +158,49 @@ These probes require their own reviewed inputs before live execution and are not
 included in the 18-response denominator. Unit fixtures exercise routing/request
 boundaries only, not semantic model performance. Add WDEV analogues when improving
 the prompt; never tune against inspected sealed-final failures or overwrite that set.
+
+## Consolidated review: v7 experiment boundary
+
+v7 changes only the system prompt (and its version identity). Keep v6 input sources,
+context, demonstrations, schema and inference settings fixed. In particular retain
+the dirty editorial note as a diagnostic input for this comparison. Cleaning sources
+is a later separately versioned experiment; preserve dirty-source probes. v6 has only
+one six-case round, so do not claim reduced failure probability from a single v7 run.
+Either authorize the remaining baseline repetitions before comparison, or explicitly
+name v7 a new baseline. No calls are authorized by this document.
+
+Review the case-specific required_concepts and required_conditions from the private
+development bundle for every output, whether or not every source is cited. Do not
+send that grading checklist or expected answer to the model. Check all technical
+claims, including uncited claims and jargon glosses. Preserve modality: a requirement
+to check an implementation is not proof implementations differ. Citation entailment
+is separate from numeric source validation. Do not remove technical conditions when
+separating editorial notes. Source cleaning must not strengthen source assertions.
+
+Report clarity failures separately without retroactively changing the existing
+4/O scoring behavior. New 90% thresholds and automatic judge substitution are NOT
+accepted defaults. Proposed context-only adapter track remains a decision item:
+wrapping context must preserve erroneous-source/qualified expectations and cannot
+be labelled RAG validation. Empty-source live preflight stays fail-closed; a
+four-section server fallback remains unimplemented.
+
+Routing evaluation also includes representative page, alias, missing/unpublished
+page and access-control paths, with no generation call on a permitted page match.
+Current routing tests are mocks, not production integration evidence. RAG implementation
+is deferred; future identity must distinguish disabled/not-applicable from an actual
+retrieval configuration and corpus revision. Do not fill unknown revisions with guesses.
+
+Semantic review should be performed independently of prompt authorship, preferably
+including a non-CS reader. Record reviewer identity and missing review as pending.
+Do not treat keyword warnings as semantic failures or sampling as full-set approval.
+
+External review handoff has three stages:
+1. Blockers and decisions, ordered by severity; separate later improvements.
+2. Evaluation contract: denominators, repeats, missing/N/A handling, trust boundary.
+3. Implementation plan with verified code references and completion evidence.
+Attach workflow, live runner, parser, scorer, approved policy and schema/manifest
+structure. Never provide or request sealed-final questions or evidence text for
+prompt review. API retry policy remains disabled; any future policy must record
+first failures and every attempt without shrinking the denominator. Provider,
+endpoint/region, model profile and optional guardrail configuration belong in the
+future identity; unused guardrails should be explicit, not invented.
