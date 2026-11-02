@@ -161,7 +161,7 @@ function NoteRead({ noteId }: { noteId: string }) {
   }
 
   return <div className={styles.page}>
-    <AppHeader backTo={userPaths.noteList} backLabel="목록" actions={
+    <AppHeader title="CS 학습 노트" backTo={userPaths.noteList} backLabel="목록" wide stickyOnWide actions={
       auth.status === 'loading' ? null
         : auth.role === 'visitor' ? <LinkButton to={userPaths.login}>로그인</LinkButton> : <AccountMenu />
     } />
