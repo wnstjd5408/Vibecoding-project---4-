@@ -1,6 +1,7 @@
 """Supabase 호출 최소 래퍼. FastAPI만 secret key로 부른다(D-007).
 
-이 파일이 하는 일: 로그인·세션 갱신·로그아웃·세션 토큰 확인(Auth), profiles·과목·노트 조회(REST), SQL 함수 호출(RPC).
+이 파일이 하는 일: 로그인·세션 갱신·로그아웃·세션 토큰 확인(Auth), profiles·과목·노트·사전 용어 조회(REST),
+노트 이미지 서명 URL 발급(Storage), SQL 함수 호출(RPC).
 """
 
 import hashlib
@@ -13,6 +14,7 @@ from email.utils import parsedate_to_datetime
 from math import ceil
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -26,6 +28,9 @@ _MAX_TOKEN_LENGTH = 4096
 
 # 재시도하면 풀릴 수 있는 응답. 그 밖의 4xx는 키·권한·주소 설정 오류로 본다.
 _TRANSIENT_STATUSES = frozenset({408, 425, 429})
+
+# 버킷 이름은 주소 경로에 그대로 들어간다. 영문·숫자·`.`·`_`·`-`만 받고 `.`·`..`는 막는다.
+_BUCKET_SHAPE = re.compile(r"(?!\.{1,2}$)[A-Za-z0-9._-]+")
 
 
 class SupabaseUnavailable(Exception):
@@ -124,10 +129,13 @@ def _is_user_rejection(response: httpx.Response, operation: str, extra: frozense
 
 
 class SupabaseClient:
-    def __init__(self, url: str, secret_key: str, http: httpx.Client | None = None):
+    def __init__(
+        self, url: str, secret_key: str, http: httpx.Client | None = None, note_image_bucket: str | None = None
+    ):
         self._url = url.rstrip("/")
         self._secret_key = secret_key
         self._http = http or httpx.Client(timeout=_TIMEOUT)
+        self._note_image_bucket = note_image_bucket
 
     @classmethod
     def from_env(cls) -> "SupabaseClient":
@@ -135,7 +143,8 @@ class SupabaseClient:
         key = os.environ.get("SUPABASE_SECRET_KEY")
         if not url or not key:
             raise SupabaseConfigError("SUPABASE_URL or SUPABASE_SECRET_KEY is not set")
-        return cls(url, key)
+        # 이미지가 있는 노트를 읽을 때만 필요하다. 비어 있어도 앱은 뜨고 그때 500이 된다(2026-10-30 결정).
+        return cls(url, key, note_image_bucket=os.environ.get("NOTE_IMAGE_BUCKET", "").strip() or None)
 
     def _headers(self, bearer: str | None = None) -> dict[str, str]:
         return {"apikey": self._secret_key, "Authorization": f"Bearer {bearer or self._secret_key}"}
@@ -305,6 +314,69 @@ class SupabaseClient:
         else:
             params["is_published"] = "eq.true"
         return self._select("notes", {"select": columns, **params})
+
+    def get_note(self, note_id: int, include_unpublished: bool) -> dict[str, Any] | None:
+        """E05 노트 한 개와 연결된 과목·출처·이미지 행. 없거나 볼 수 없으면 None이다.
+
+        include_unpublished가 False면 공개 노트만 DB에서 거른다. 비공개 열(memo 등)은 읽지 않는다.
+        """
+        params = {
+            "id": f"eq.{int(note_id)}",
+            "select": (
+                "id,revision,title,studied_on,body_markdown,"
+                "note_subjects(subjects(id,name)),note_sources(id,url,label),"
+                "note_images(notion_block_id,storage_path,alt)"
+            ),
+            "limit": "1",
+        }
+        if not include_unpublished:
+            params["is_published"] = "eq.true"
+        rows = self._select("notes", params)
+        return rows[0] if rows else None
+
+    def list_glossary_terms(self) -> list[dict[str, Any]]:
+        """사전 용어(glossary_entries 행이 있는 terms, S8)의 id·key·label. API 최대 행(1000)을 넘으면 잘린다."""
+        return self._select("terms", {"select": "id,key,label,glossary_entries!inner(term_id)", "order": "id.asc"})
+
+    def sign_note_images(self, paths: list[str], expires_in: int) -> dict[str, str]:
+        """노트 이미지 비공개 버킷의 서명 URL을 한 번에 받는다. 파일이 없어 발급되지 않은 경로는 결과에서 빠진다.
+
+        버킷 이름은 NOTE_IMAGE_BUCKET이다. 없거나 모양이 틀리면 설정 오류(500)다.
+        """
+        bucket = self._note_image_bucket
+        if not bucket or not _BUCKET_SHAPE.fullmatch(bucket):
+            raise SupabaseConfigError("NOTE_IMAGE_BUCKET is not set or invalid")
+        response = self._request(
+            "POST",
+            f"/storage/v1/object/sign/{bucket}",
+            json={"expiresIn": expires_in, "paths": paths},
+            headers=self._headers(),
+        )
+        if response.status_code != 200:
+            # 버킷 없음·키 권한 거부. 5xx·일시 상태는 _request가 이미 SupabaseUnavailable로 바꿨다.
+            raise SupabaseConfigError(f"storage sign status {response.status_code}")
+        try:
+            items = [(item["path"], item.get("signedURL"), item.get("error")) for item in response.json()]
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise SupabaseUnavailable("malformed storage response") from None
+        signed = {}
+        for path, signed_path, error in items:
+            url = self._signed_url(signed_path) if not error and isinstance(signed_path, str) else None
+            # 발급되지 않았거나 모양이 이상한 항목은 그 이미지만 뺀다. 호출 쪽이 빠진 수를 로그에 남긴다.
+            if url is not None:
+                signed[path] = url
+        return signed
+
+    def _signed_url(self, signed_path: str) -> str | None:
+        """Storage의 서명 경로(/object/sign/{버킷}/{경로}?token=...)를 브라우저가 열 수 있는 주소로 만든다.
+
+        Storage는 경로를 인코딩하지 않고 준다(공백·`?`·`&`가 그대로 온다, 2026-10-30 로컬 확인). 토큰 앞의
+        마지막 `?`에서 나눠 경로만 인코딩한다. 토큰은 base64url이라 그대로 둔다.
+        """
+        path, separator, query = signed_path.rpartition("?")
+        if not separator or not query.startswith("token="):
+            return None
+        return f"{self._url}/storage/v1{quote(path, safe='/')}?{query}"
 
     def keyed_hash(self, value: str) -> str:
         """이메일·IP 같은 원문 대신 저장할 키. secret key로 서명한 해시라 값을 되돌려 추측하기 어렵다."""
