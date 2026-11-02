@@ -455,6 +455,12 @@ class SupabaseClient:
         row = rows[0] if isinstance(rows, list) else rows
         return {name.removeprefix("out_"): value for name, value in row.items()}
 
+    def _glossary_bucket(self) -> str:
+        bucket = self._glossary_image_bucket
+        if not bucket or not _BUCKET_SHAPE.fullmatch(bucket):
+            raise SupabaseConfigError("GLOSSARY_IMAGE_BUCKET is not set or invalid")
+        return bucket
+
     def glossary_image_url(self, storage_path: str) -> str:
         """사전 이미지 공개 버킷의 주소(기술 검토 Q7 결정 (a), 2026-11-02). 발급 요청 없이 만든다.
 
@@ -462,12 +468,113 @@ class SupabaseClient:
         경로가 들어가는 것은 E06의 예외로 받아들였다(2026-11-02 김준성, API spec 1.9·10.5).
         경로에 빈 구간·`.`·`..`가 있으면 브라우저가 주소를 정규화해 다른 버킷을 가리킬 수 있어 설정 오류로 막는다.
         """
-        bucket = self._glossary_image_bucket
-        if not bucket or not _BUCKET_SHAPE.fullmatch(bucket):
-            raise SupabaseConfigError("GLOSSARY_IMAGE_BUCKET is not set or invalid")
+        bucket = self._glossary_bucket()
         if any(segment in ("", ".", "..") for segment in storage_path.split("/")):
             raise SupabaseConfigError("glossary image storage_path has an empty or dot segment")
         return f"{self._url}/storage/v1/object/public/{bucket}/{quote(storage_path, safe='/')}"
+
+    # --- E19~E23 운영자 사전 (MEG-81). 여러 문장을 묶는 쓰기는 SQL 함수(마이그레이션 20261102160000)로 한다. ---
+
+    def list_admin_glossary_terms(self, limit: int, before_id: int | None) -> list[dict[str, Any]]:
+        """사전 용어(glossary_entries 행이 있는 terms)의 id·key·label을 id 내림차순으로 limit개까지 준다.
+
+        before_id를 주면 그보다 작은 id만 준다(cursor = 앞 쪽의 마지막 id, API spec 1.5).
+        """
+        params = {
+            "select": "id,key,label,glossary_entries!inner(term_id)",
+            "order": "id.desc",
+            "limit": str(int(limit)),
+        }
+        if before_id is not None:
+            params["id"] = f"lt.{int(before_id)}"
+        return [{"id": row["id"], "key": row["key"], "label": row["label"]} for row in self._select("terms", params)]
+
+    def glossary_entry_exists(self, term_id: int) -> bool:
+        rows = self._select("glossary_entries", {"select": "term_id", "term_id": f"eq.{int(term_id)}", "limit": "1"})
+        return bool(rows)
+
+    def upsert_glossary_entry(self, key: str, label: str, body_markdown: str, updated_by: str) -> dict[str, Any]:
+        """E20. {"id", "key", "label", "created"}를 준다. 같은 용어의 AI 설명 무효화까지 한 트랜잭션이다."""
+        result = self.rpc(
+            "glossary_upsert_entry",
+            {"p_key": key, "p_label": label, "p_body_markdown": body_markdown,
+             "p_updated_by": str(uuid.UUID(updated_by))},
+        )
+        if not isinstance(result, dict):
+            raise SupabaseConfigError("rpc glossary_upsert_entry returned an unexpected shape")
+        return result
+
+    def delete_glossary_entry(self, term_id: int) -> list[dict[str, Any]] | None:
+        """E21. 사전 용어가 아니면 None, 맞으면 객체를 지울 삭제 작업 목록 [{"job_id", "object_path"}]이다."""
+        result = self.rpc("glossary_delete_entry", {"p_term_id": int(term_id), "p_bucket": self._glossary_bucket()})
+        if result is None:
+            return None
+        return list(result["jobs"])
+
+    def delete_glossary_image(self, term_id: int, image_id: int) -> dict[str, Any] | None:
+        """E23. 그 용어의 이미지가 아니면 None, 맞으면 삭제 작업 {"job_id", "object_path"}이다."""
+        return self.rpc(
+            "glossary_delete_image",
+            {"p_term_id": int(term_id), "p_image_id": int(image_id), "p_bucket": self._glossary_bucket()},
+        )
+
+    def create_glossary_upload_job(self, object_path: str) -> int:
+        """E22 1단계. 올리기 전에 삭제 작업(pending)을 넣는다. 도중에 멈추면 이 작업이 남아 객체를 지울 대상이 된다."""
+        response = self._request(
+            "POST",
+            "/rest/v1/storage_delete_jobs",
+            json={"bucket": self._glossary_bucket(), "object_path": object_path},
+            headers={**self._headers(), "Prefer": "return=representation"},
+            params={"select": "id"},
+        )
+        if response.status_code != 201:
+            raise SupabaseConfigError(f"storage_delete_jobs insert status {response.status_code}")
+        return int(response.json()[0]["id"])
+
+    def upload_glossary_image(self, object_path: str, data: bytes, content_type: str) -> None:
+        """E22 2단계. 같은 경로가 있으면 덮어쓰지 않고 실패한다. 연결 실패·5xx는 SupabaseUnavailable(503)이다."""
+        bucket = self._glossary_bucket()
+        response = self._request(
+            "POST",
+            f"/storage/v1/object/{bucket}/{quote(object_path, safe='/')}",
+            content=data,
+            headers={**self._headers(), "Content-Type": content_type, "x-upsert": "false"},
+        )
+        if response.status_code != 200:
+            # 버킷 없음·크기·형식 제한·키 권한. 앱이 먼저 검사하므로 나오면 설정 문제다.
+            raise SupabaseConfigError(f"storage upload status {response.status_code}")
+
+    def add_glossary_image(self, term_id: int, object_path: str, alt: str | None, job_id: int) -> int | None:
+        """E22 3단계. 이미지 행을 넣고 1단계 작업을 지운다. 그 사이 사전 설명이 지워졌으면 None이다."""
+        result = self.rpc(
+            "glossary_add_image",
+            {"p_term_id": int(term_id), "p_storage_path": object_path, "p_alt": alt, "p_job_id": int(job_id)},
+        )
+        return None if result is None else int(result)
+
+    def remove_glossary_objects(self, jobs: list[dict[str, Any]]) -> None:
+        """삭제 작업의 객체를 지우고 작업을 done으로 바꾼다. 실패하면 예외를 내고 작업은 pending으로 남는다."""
+        if not jobs:
+            return
+        bucket = self._glossary_bucket()
+        response = self._request(
+            "DELETE",
+            f"/storage/v1/object/{bucket}",
+            json={"prefixes": [job["object_path"] for job in jobs]},
+            headers=self._headers(),
+        )
+        if response.status_code != 200:
+            raise SupabaseConfigError(f"storage delete status {response.status_code}")
+        ids = ",".join(str(int(job["job_id"])) for job in jobs)
+        done = self._request(
+            "PATCH",
+            "/rest/v1/storage_delete_jobs",
+            params={"id": f"in.({ids})", "status": "eq.pending"},
+            json={"status": "done", "done_at": datetime.now(timezone.utc).isoformat()},
+            headers={**self._headers(), "Prefer": "return=minimal"},
+        )
+        if done.status_code not in (200, 204):
+            raise SupabaseConfigError(f"storage_delete_jobs update status {done.status_code}")
 
     def sign_note_images(self, paths: list[str], expires_in: int) -> dict[str, str]:
         """노트 이미지 비공개 버킷의 서명 URL을 한 번에 받는다. 파일이 없어 발급되지 않은 경로는 결과에서 빠진다.
