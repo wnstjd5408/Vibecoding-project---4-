@@ -64,12 +64,33 @@ function themeVariables(colors: DiagramColors) {
   }
 }
 
-// 노트 작성자가 설정 지시문(%%{init: …}%%)이나 머리말(--- config: … ---)로 모양·테마·색을 바꾸지 못하게 지운다.
-// 모양과 색은 디자인 토큰으로 고정한다. 머리말의 title 같은 설정이 아닌 값도 함께 사라진다(알려진 한계).
-function withoutConfig(source: string): string {
+// 노트 작성자가 설정 지시문(%%{init: …}%%)·머리말(--- config: … ---)·스타일 문법으로 모양·테마·색을 바꾸지 못하게 지운다.
+// 모양과 색은 디자인 토큰으로 고정한다. 그림은 스타일만 빠진 채 그려지고, 코드로 돌아가지 않는다.
+// 지우는 것: 설정 지시문, 머리말(title 같은 설정이 아닌 값도 함께 사라진다), classDef·linkStyle·style·cssClass 줄,
+//   노드에 클래스를 붙이는 `class A,B name` 줄(클래스 다이어그램의 `class Foo`·`class Foo {`는 인자가 하나라 그대로 둔다), `:::name`,
+//   시퀀스 다이어그램 `rect`·`box`에 지정한 색.
+// 알려진 한계: `box Aqua 이름`처럼 색 이름을 쓴 경우와 mermaid가 앞으로 더하는 스타일 문법은 지우지 못한다.
+export function withoutStyle(source: string): string {
   return source
     .replace(/%%\{[\s\S]*?\}%%/g, '')
     .replace(/^\s*---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, '')
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(classDef|linkStyle|style|cssClass)\s/.test(line) && !/^\s*class\s+\S+\s+[^\s{<~":;]+\s*;?\s*$/.test(line))
+    .map((line) => line
+      .replace(/:::[^\s;,)\]}]+/g, '')
+      .replace(/^(\s*rect\s+).*$/, '$1transparent')
+      .replace(/^(\s*box\s+)(?:rgba?\([^)]*\)|#[0-9a-fA-F]{3,8})\s*/, '$1'))
+    .join('\n')
+}
+
+// 그려진 그림의 접근 가능한 이름. 그림이 되면 원래 코드(노드 이름·관계)가 사라지므로, 읽을 수 있는 원문을 한 줄로 이어 남긴다.
+// 너무 긴 원문은 코드포인트 기준으로 잘라 끝에 …을 붙인다.
+const DESCRIPTION_LIMIT = 1000
+
+export function describeDiagram(source: string): string {
+  const flat = withoutStyle(source).split('\n').map((line) => line.trim()).filter(Boolean).join('; ')
+  const chars = Array.from(flat)
+  return `mermaid 다이어그램. 원문: ${chars.length > DESCRIPTION_LIMIT ? `${chars.slice(0, DESCRIPTION_LIMIT).join('')}…` : flat}`
 }
 
 // SVG 글자를 정리해 데이터 주소로 만든다. 크기는 viewBox의 숫자로 정해 <img>가 그림 비율대로 줄어들게 한다.
@@ -120,7 +141,7 @@ export function renderDiagram(source: string, colors: DiagramColors): Promise<st
       ...looks,
       flowchart: { htmlLabels: false, look: 'classic' },
     })
-    const text = withoutConfig(source)
+    const text = withoutStyle(source)
     await mermaid.parse(text)
     const id = `mermaid-diagram-${++counter}`
     const { svg } = await mermaid.render(id, text)

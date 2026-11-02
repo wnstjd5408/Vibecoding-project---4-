@@ -2257,3 +2257,56 @@ test('디자인 규칙: 상태·관계·여정·파이 같은 다른 종류에�
   const found = await decodedSvgs(page)
   expect(found.map((item) => ({ neo: item.neo, filtered: item.filtered }))).toEqual(Array.from({ length: 4 }, () => ({ neo: 0, filtered: 0 })))
 })
+
+// PR #98 Codex 리뷰 P2 반영: 일반 스타일 문법(classDef·class·style·linkStyle·:::)으로 디자인 토큰 색을 우회하지 못하게 하고,
+// 그려진 그림의 접근 가능한 이름에 원문 내용을 남긴다.
+test('디자인 토큰: classDef·class·style·linkStyle·:::로 지정한 색은 그림에 적용되지 않고 그림은 그대로 그려진다', async ({ page }) => {
+  const styled = [
+    '```mermaid\ngraph TD\n  A[시작] --> B[끝]\n  classDef custom fill:#ff0000,color:#00ff00,stroke:#0000ff;\n  class A custom;\n```',
+    '```mermaid\ngraph TD\n  A[시작]:::custom --> B[끝]\n  classDef custom fill:#ff0001,color:#00ff01,stroke:#0000fe;\n```',
+    '```mermaid\ngraph TD\n  A[시작] --> B[끝]\n  style A fill:#ff0002,stroke:#00ff02,color:#0000fd\n  linkStyle 0 stroke:#ff0003,stroke-width:4px\n```',
+    '```mermaid\nstateDiagram-v2\n  [*] --> 대기\n  대기 --> 완료\n  classDef warn fill:#ff0004,color:#00ff04\n  class 대기 warn\n```',
+  ].join('\n\n')
+  await openMermaidNote(page, styled)
+  await expect(diagram(page)).toHaveCount(4) // 스타일 줄만 지우고 그림은 그린다(코드로 돌아가지 않는다)
+  await expect(diagram(page).nth(3)).toBeVisible()
+  for (let index = 0; index < 4; index += 1) {
+    const svg = decodeURIComponent((await diagram(page).nth(index).getAttribute('src')) ?? '').toLowerCase()
+    for (const color of ['#ff0000', '#00ff00', '#0000ff', '#ff0001', '#00ff01', '#0000fe', '#ff0002', '#00ff02', '#0000fd', '#ff0003', '#ff0004', '#00ff04']) expect(svg, `${index}번째 그림에 ${color}`).not.toContain(color)
+  }
+})
+
+test('스타일 줄을 지워도 클래스 다이어그램의 class 선언은 그대로 그려진다(과하게 지우지 않는다)', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nclassDiagram\n  class Animal {\n    +String name\n  }\n  class Dog\n  Animal <|-- Dog\n```')
+  await expect(diagram(page)).toBeVisible()
+  const svg = decodeURIComponent((await diagram(page).getAttribute('src')) ?? '')
+  expect(svg).toContain('Animal')
+  expect(svg).toContain('Dog')
+})
+
+test('접근성: 그려진 그림의 접근 가능한 이름에 노드 이름과 관계가 남는다', async ({ page }) => {
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  await expect(page.getByRole('img', { name: /시작.*끝/ })).toBeVisible()
+  const alt = (await page.getByRole('img', { name: /시작.*끝/ }).getAttribute('alt')) ?? ''
+  expect(alt).toContain('mermaid 다이어그램')
+  expect(alt).toContain('A[시작] --> B[끝]')
+})
+
+test('접근성: 긴 원문은 접근 가능한 이름을 잘라 두고 줄바꿈은 한 줄로 합친다', async ({ page }) => {
+  const nodes = Array.from({ length: 120 }, (_, index) => `N${index}[노드${index}] --> N${index + 1}[노드${index + 1}]`).join('\n  ')
+  await openMermaidNote(page, `\`\`\`mermaid\ngraph TD\n  ${nodes}\n\`\`\``)
+  await expect(page.getByRole('img', { name: /mermaid 다이어그램/ })).toBeVisible()
+  const alt = (await page.getByRole('img', { name: /mermaid 다이어그램/ }).getAttribute('alt')) ?? ''
+  expect(alt.length).toBeLessThanOrEqual(1200)
+  expect(alt).not.toContain('\n')
+  expect(alt.endsWith('…')).toBe(true)
+})
+
+test('디자인 토큰: 시퀀스 다이어그램의 rect·box 색 지정도 적용되지 않고 그림은 그대로 그려진다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nsequenceDiagram\n  box rgb(255, 0, 7) 서버쪽\n    participant 서버\n  end\n  participant 사용자\n  rect rgb(0, 255, 8)\n    사용자->>서버: 요청\n  end\n  rect rgba(1, 2, 255, 0.5)\n    서버-->>사용자: 응답\n  end\n```')
+  await expect(diagram(page)).toBeVisible()
+  const svg = decodeURIComponent((await diagram(page).getAttribute('src')) ?? '').toLowerCase()
+  for (const color of ['rgb(255, 0, 7)', 'rgb(0, 255, 8)', 'rgba(1, 2, 255', 'rgb(255,0,7)', 'rgb(0,255,8)']) expect(svg).not.toContain(color)
+  expect(svg).toContain('서버쪽') // 이름은 남고 색만 사라진다
+})

@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { readColors, renderDiagram } from './mermaid.ts'
+import { describeDiagram, readColors, renderDiagram } from './mermaid.ts'
 import styles from './NoteBody.module.css'
 
 // 화면 문구. 목업에 없는 임시 문구이며 확정되면 이 한 곳만 고친다(PR에 "문구 미정, 임시 문구"로 기록).
 const MESSAGES = {
   drawing: '다이어그램을 그리는 중이에요',
-  alt: 'mermaid 다이어그램',
 }
 
 type MermaidBlockProps = {
@@ -42,5 +41,5 @@ export function MermaidBlock({ source, fallback }: MermaidBlockProps) {
   const shown = result?.source === source ? result : null
   if (shown?.url === null) return <>{fallback}</>
   if (shown === null) return <div ref={place} className={styles.diagramPending} role="status">{MESSAGES.drawing}</div>
-  return <div ref={place} className={styles.diagram}><img src={shown.url} alt={MESSAGES.alt} /></div>
+  return <div ref={place} className={styles.diagram}><img src={shown.url} alt={describeDiagram(source)} /></div>
 }
