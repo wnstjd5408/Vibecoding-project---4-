@@ -50,7 +50,7 @@ async def bundle_from(request):
         raise ApiError("validation_failed") from None
 
 
-def dispatch(bundle, action, slot=None):
+def dispatch(bundle, action, slot=None, oidc_token=None):
     ledger = None
     transport = None
     try:
@@ -62,7 +62,7 @@ def dispatch(bundle, action, slot=None):
         if action == "run" and (slot != pending or slot not in staging.SLOTS):
             raise DatasetError("live: slot_not_pending")
         # STS credential exchange only; preflight never invokes Converse or reserves a slot.
-        transport = oidc_transport()
+        transport = oidc_transport(oidc_token)
         if action == "preflight":
             return {"ready": pending is not None, "next_slot": pending,
                     "provider_calls": state["provider_calls"], "model_access": "unverified"}
@@ -79,7 +79,8 @@ def dispatch(bundle, action, slot=None):
 
 @router.post("/preflight")
 async def preflight(request: Request):
-    return await run_in_threadpool(dispatch, await bundle_from(request), "preflight")
+    return await run_in_threadpool(dispatch, await bundle_from(request), "preflight",
+                                   oidc_token=request.headers.get("x-vercel-oidc-token"))
 
 
 @router.post("/status")
@@ -89,4 +90,5 @@ async def status(request: Request):
 
 @router.post("/run/{slot}")
 async def run_slot(slot: str, request: Request):
-    return await run_in_threadpool(dispatch, await bundle_from(request), "run", slot)
+    return await run_in_threadpool(dispatch, await bundle_from(request), "run", slot,
+                                   oidc_token=request.headers.get("x-vercel-oidc-token"))

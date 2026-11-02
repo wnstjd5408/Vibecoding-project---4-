@@ -59,6 +59,7 @@ def test_missing_auth_no_sdk(monkeypatch):
 
 
 def test_oidc_no_bearer_fallback_or_retries(monkeypatch):
+    monkeypatch.delenv("VERCEL_ENV", raising=False)
     monkeypatch.setenv("AWS_ROLE_ARN", "fixture-role")
     monkeypatch.setenv("VERCEL_OIDC_TOKEN", "fixture-token")
     seen = []
@@ -72,3 +73,30 @@ def test_oidc_no_bearer_fallback_or_retries(monkeypatch):
     live_auth.oidc_transport()
     assert all(k["config"].retries["total_max_attempts"] == 1 for _, k in seen)
     assert seen[1][1]["config"].signature_version == "v4"
+
+
+def test_runtime_never_uses_build_token(monkeypatch, caplog):
+    monkeypatch.setenv("VERCEL_ENV", "preview")
+    monkeypatch.setenv("AWS_ROLE_ARN", "private-role")
+    monkeypatch.setenv("VERCEL_OIDC_TOKEN", "private-build-token")
+    monkeypatch.setattr(live_auth.boto3, "client", lambda *a, **k: pytest.fail("SDK called"))
+    with pytest.raises(DatasetError):
+        live_auth.oidc_transport()
+    assert "token_missing" in caplog.text
+    assert "private-" not in caplog.text
+
+
+@pytest.mark.parametrize("code,expected", [("AccessDenied", "AccessDenied"), ("private-secret-code", "sts_failed")])
+def test_runtime_token_sts_error_redacted(monkeypatch, caplog, code, expected):
+    from botocore.exceptions import ClientError
+    monkeypatch.setenv("VERCEL_ENV", "preview")
+    monkeypatch.setenv("AWS_ROLE_ARN", "private-role")
+    monkeypatch.setenv("VERCEL_OIDC_TOKEN", "private-build-token")
+    def assume(**kwargs):
+        assert kwargs["WebIdentityToken"] == "request-token"
+        raise ClientError({"Error": {"Code": code, "Message": "private-secret"}}, "AssumeRoleWithWebIdentity")
+    monkeypatch.setattr(live_auth.boto3, "client", lambda *a, **k: SimpleNamespace(assume_role_with_web_identity=assume))
+    with pytest.raises(DatasetError, match="authentication_failed"):
+        live_auth.oidc_transport("request-token")
+    assert expected in caplog.text
+    assert "private-" not in caplog.text and "request-token" not in caplog.text
