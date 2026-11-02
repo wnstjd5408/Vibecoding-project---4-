@@ -58,3 +58,23 @@ human_approved가 false이면 정식 결과는 pending을 유지한다.
 
 실제 출력·원장·사용량·검수 기록은 비공개 경로에 보관한다.
 공개 PR에는 합성 테스트와 공개 가능한 검증 요약만 포함한다.
+
+## Few-shot prompt v2
+
+`wiki-live-v2-fewshot` sends two independent source/output demonstrations
+(stack and database transaction) before the actual final user payload. The
+demonstrations teach definition, mechanism, a concrete situation/problem/application,
+and specific cautions. They are not answers from the development or sealed datasets.
+Source IDs are scoped to each input; output links resolve only against the current
+case. The system prompt and demonstrations are both covered by `prompt_hash`, and
+the complete request is covered by `requests_hash` and the existing byte limit.
+
+Source references: [Python stacks](https://docs.python.org/3/tutorial/datastructures.html#using-lists-as-stacks)
+and [PostgreSQL transactions](https://www.postgresql.org/docs/18/tutorial-transactions.html).
+Scenario details are authored hypothetical examples, not measured product behavior.
+
+Old approvals cannot execute the changed prompt. Keep old ledgers and reviews with
+their original code version; create new approval records only after new execution
+authorization. No paid run is implied by this change. Missing facts in current
+case evidence still need a separate reviewed revision; demonstrations cannot fix
+that gap. Offline tests verify plumbing, not teaching quality or factual accuracy.

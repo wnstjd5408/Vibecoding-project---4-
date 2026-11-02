@@ -82,6 +82,56 @@ def test_plan_excludes_answers_and_maps_citations(cases):
         assert set(plan["sources"][slot]) == {"1", "2"}
 
 
+def test_fewshot_examples_are_valid_and_current_payload_is_last(cases):
+    from evals.wiki_examples import EXAMPLES, example_messages
+    from evals.live_output import validate_output
+    for payload, answer in EXAMPLES:
+        validate_output(json.dumps(answer, ensure_ascii=False), payload["sources"])
+        for heading in ("정의", "작동 원리", "활용 예시", "주의사항"):
+            assert f"**{heading}**\n" in answer["explanation"]
+        assert payload["term"] not in [c["term"] for c in cases]
+    messages = make_plan(cases)["requests"]["WDEV01:U"]["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant", "user", "assistant", "user"]
+    current = json.loads(messages[-1]["content"][0]["text"])
+    assert current["term"] == cases[0]["term"]
+    assert current["sources"]["1"] == cases[0]["internal_evidence"][0]["text"]
+    messages[0]["content"][0]["text"] = "mutated"
+    assert example_messages()[0]["content"][0]["text"] != "mutated"
+
+
+def test_example_change_invalidates_approval_before_call(cases, tmp_path, monkeypatch):
+    import evals.wiki_live as wiki
+    approval, _ = prepared(cases, tmp_path)
+    original = wiki.example_messages
+    def changed():
+        messages = original()
+        messages[0]["content"][0]["text"] += " "
+        return messages
+    monkeypatch.setattr(wiki, "example_messages", changed)
+    transport = Scripted()
+    with pytest.raises(DatasetError, match="approval_mismatch"):
+        run(cases, manifest(cases), approval, transport, phase="canary", mode="mock")
+    assert transport.calls == []
+
+
+def test_fewshot_bytes_count_toward_request_limit(cases, monkeypatch):
+    import evals.wiki_live as wiki
+    monkeypatch.setattr(wiki, "example_messages", lambda: [
+        {"role": "user", "content": [{"text": "x" * 16000}]}])
+    with pytest.raises(DatasetError, match="request_byte_limit"):
+        make_plan(cases)
+
+
+def test_example_citations_do_not_expand_current_allowlist(cases):
+    from evals.live_output import validate_output
+    cases[0]["internal_evidence"] = []
+    plan = make_plan(cases)
+    assert set(plan["sources"]["WDEV01:U"]) == {"1"}
+    with pytest.raises(DatasetError, match="unknown_source"):
+        validate_output(response()["output"]["message"]["content"][0]["text"],
+                        plan["sources"]["WDEV01:U"])
+
+
 def test_canary_then_remaining_and_resume_are_idempotent(cases, tmp_path):
     approval, ledger = prepared(cases, tmp_path)
     transport = Scripted()
