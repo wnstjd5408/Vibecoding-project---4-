@@ -1,5 +1,7 @@
 # GitHub Actions와 배포 검사
 
+Staging 보호의 설정안·MEG-168 제품 CI 의존성·관리자 적용 및 안전한 차단 시험은 [Staging 브랜치 보호](staging-protection.md)를 따른다. 설정 파일의 존재나 PR 병합은 실제 ruleset 적용을 뜻하지 않는다.
+
 이 문서는 저장소의 현재 워크플로를 설명한다. 제품 테스트 CI 추가나 브랜치 정책 변경은 포함하지 않는다. 기준은 [PR metadata](../.github/workflows/pr-metadata.yml), [Infra CD](../.github/workflows/infra-cd.yml), [DB Backup](../.github/workflows/db-backup.yml), [운영 절차](harness/ops.md)다.
 
 ## 현재 자동화 범위
