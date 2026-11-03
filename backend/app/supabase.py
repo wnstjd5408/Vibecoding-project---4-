@@ -796,6 +796,97 @@ class SupabaseClient:
             raise SupabaseUnavailable("quiz_followups update matched no row for an unanswered slot")
         return rows[0]["user_answer"]
 
+    def get_quiz_item_for_followup(self, user_id: str, item_id: int) -> dict[str, Any] | None:
+        """E13: 그 사용자 자신의 퀴즈 문항. 남의 문항은 없는 문항과 같게 None이다.
+
+        꼬리 질문을 만들 재료(문제·정답·해설·내 답)와 꼬리 질문 슬롯 전부(seq 순)를 함께 읽는다. 슬롯에는 예약 시각(created_at)이
+        있어 질문이 비어 있는 오래된 슬롯을 가려낼 수 있다(API spec S4).
+        """
+        rows = self._select(
+            "quiz_items",
+            {
+                "id": f"eq.{int(item_id)}",
+                "quiz_sets.user_id": f"eq.{uuid.UUID(user_id)}",
+                "select": "id,question,answer,explanation,quiz_sets!inner(user_id),"
+                "quiz_answers(user_answer),quiz_followups(seq,question,user_answer,created_at)",
+                "quiz_followups.order": "seq.asc",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    def reserve_followup_slot(self, item_id: int, seq: int) -> bool | None:
+        """E13: (item_id, seq) 슬롯을 비워 둔 채로 넣어 번호를 예약한다. 예약했으면 True다.
+
+        같은 슬롯이 이미 있으면(다른 요청이 먼저 예약) 기본 키 충돌이라 False다. 문항이 그 사이 지워졌으면 None이다.
+        제약 이름은 v05 마이그레이션의 기본 이름이다. 바꾸면 이 판정이 틀어지므로 여기와 시험을 함께 고친다.
+        """
+        response = self._request(
+            "POST",
+            "/rest/v1/quiz_followups",
+            json={"item_id": int(item_id), "seq": int(seq)},
+            headers={**self._headers(), "Prefer": "return=minimal"},
+        )
+        if response.status_code in (200, 201, 204):
+            return True
+        code, message = _error_field(response, "code"), _error_field(response, "message") or ""
+        if response.status_code == 409 and code == "23505" and "quiz_followups_pkey" in message:
+            return False
+        if response.status_code == 409 and code == "23503" and "quiz_followups_item_id_fkey" in message:
+            return None
+        raise SupabaseConfigError(f"quiz_followups insert status {response.status_code}")
+
+    def fill_followup_slot(self, item_id: int, seq: int, question: str) -> bool:
+        """E13: 예약한 슬롯에 질문을 채운다. 질문이 비어 있는 슬롯에만 하므로 채웠으면 True, 슬롯이 없어졌으면 False다."""
+        response = self._request(
+            "PATCH",
+            "/rest/v1/quiz_followups",
+            params={"item_id": f"eq.{int(item_id)}", "seq": f"eq.{int(seq)}", "question": "is.null", "select": "seq"},
+            json={"question": question},
+            headers={**self._headers(), "Prefer": "return=representation"},
+        )
+        if response.status_code != 200:
+            raise SupabaseConfigError(f"quiz_followups update status {response.status_code}")
+        return bool(response.json())
+
+    def release_followup_slot(self, item_id: int, seq: int) -> None:
+        """E13: 실패한 예약을 지워 번호를 돌려준다. 질문도 답도 없는 슬롯만 지운다(이미 채워진 슬롯은 건드리지 않는다)."""
+        response = self._request(
+            "DELETE",
+            "/rest/v1/quiz_followups",
+            params={
+                "item_id": f"eq.{int(item_id)}",
+                "seq": f"eq.{int(seq)}",
+                "question": "is.null",
+                "user_answer": "is.null",
+            },
+            headers={**self._headers(), "Prefer": "return=minimal"},
+        )
+        if response.status_code not in (200, 204):
+            raise SupabaseConfigError(f"quiz_followups delete status {response.status_code}")
+
+    def delete_stale_followup_slot(self, item_id: int, seq: int, created_before: str) -> bool:
+        """E13(S4): 함수가 죽어 질문 없이 남은 오래된 슬롯을 지운다. created_before(UTC ISO) 이전에 예약한 빈 슬롯만 지운다.
+
+        지웠으면 True다. 그 사이 질문이 채워졌거나 다시 예약됐다면 조건에 맞지 않아 False다.
+        """
+        response = self._request(
+            "DELETE",
+            "/rest/v1/quiz_followups",
+            params={
+                "item_id": f"eq.{int(item_id)}",
+                "seq": f"eq.{int(seq)}",
+                "question": "is.null",
+                "user_answer": "is.null",
+                "created_at": f"lt.{created_before}",
+                "select": "seq",
+            },
+            headers={**self._headers(), "Prefer": "return=representation"},
+        )
+        if response.status_code != 200:
+            raise SupabaseConfigError(f"quiz_followups delete status {response.status_code}")
+        return bool(response.json())
+
     def release_quiz_claim(self, set_id: int, attempt: int) -> None:
         """생성에 실패한 선점을 풀어 다음 호출이 바로 다시 선점하게 한다(failed, 선점 만료 시각 없음).
 
