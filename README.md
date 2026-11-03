@@ -1,6 +1,11 @@
 # Vibecoding project 4
 
+프런트·백엔드 공통: [Docker Compose 실행 안내](docs/local-compose-guide.md)로 기존 로컬 DB와 앱을 준비·실행·종료할 수 있다.
+
 clone한 뒤 아래 [설정](#설정) 1~3단계를 순서대로 진행한다. 약 10분 걸린다.
+
+프런트·백엔드 개발자 모두 [공통 로컬 개발 환경 가이드](docs/backend-local-guide.md)를 따른다.
+로컬 DB 설정, 합성 테스트 계정·데이터 준비, 실제 로그인 확인까지 순서대로 안내한다.
 
 ## 필요한 도구
 

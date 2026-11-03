@@ -1,6 +1,6 @@
 // 가짜 응답을 한곳에 모았다. API spec v0.2 3절 예시와 2.2절 응답 모양을 따르고, 값은 모두 합성이다.
 // 실제 API가 생기면 해당 엔드포인트의 항목만 지우거나 apiSource를 real로 두면 된다.
-import type { ApiErrorBody, NoteListResponse } from '../types.ts'
+import type { ApiErrorBody, FieldError, NoteListResponse } from '../types.ts'
 import { getMockSession, setMockSession } from './session.ts'
 
 import { adminReportRoutes } from './adminReportMocks.ts'
@@ -40,6 +40,8 @@ const ACCOUNTS = {
 
 // E06 예시 2의 용어 7을 즐겨찾기했는지. 가짜 응답이 흉내 낸다.
 let favoriteTerm7 = false
+// E10 가짜 응답이 같은 대상의 재신고(200)를 흉내 내려고 기억하는 신고 대상. 새로 고치면 비워진다.
+const reportedTargets = new Set<string>()
 
 const SUBJECTS = [
   { id: 1, name: '네트워크', note_count: 2 },
@@ -99,6 +101,18 @@ const RICH_NOTE = {
   images: {},
   glossary_terms: [{ term_id: 7, key: 'exampleterm', label: 'ExampleTerm' }],
   glossary_spans: spansOf(RICH_BODY, 'ExampleTerm', 7),
+}
+
+// E24로 이 세션에서 발급한 이메일. 같은 이메일을 다시 발급하면 409 email_exists를 시험할 수 있게 둔다(새로 고치면 사라진다).
+const issuedEmails = new Set<string>()
+
+// fields[].reason별 고정 문구(API spec 1.4.3, backend/app/errors.py FIELD_MESSAGES와 같다). 화면은 이 문구가 아니라 reason으로 분기한다.
+const FIELD_MESSAGES: Record<string, string> = {
+  required: 'Value is required',
+  too_long: 'Value is too long',
+  out_of_range: 'Value is out of range',
+  invalid_format: 'Value format is invalid',
+  invalid_value: 'Value is not allowed or refers to a missing item',
 }
 
 const routes: Route[] = [
@@ -202,11 +216,87 @@ const routes: Route[] = [
     pattern: /^\/api\/term-views$/,
     handle: () => ({ status: 200, body: { recorded: getMockSession() !== 'visitor' } }),
   },
-  // E09 AI 설명. 방문자는 항상 401 login_required다. 로그인한 사용자 응답은 이 화면들이 쓰지 않아 만들지 않는다(등록 안 된 경로와 같은 404).
+  // E09 AI 설명. 방문자는 항상 401 login_required다. 로그인한 사용자는 예시 노트 11의 선택 위치로 세 갈래 응답을 받는다(3절 예시 3).
+  //  - UnknownWord(27~38): 새로 만든 공유 설명, ExampleTerm(6~17): 사전에 있는 용어, 그 밖: 저장하지 않는 1회용 설명
   {
     method: 'POST',
     pattern: /^\/api\/ai\/explanations$/,
-    handle: () => (getMockSession() === 'visitor' ? loginRequired() : notFound()),
+    handle: ({ body }) => {
+      if (getMockSession() === 'visitor') return loginRequired()
+      const { note_id, selection } = (body ?? {}) as { note_id?: number; selection?: { start?: number; end?: number } }
+      if (note_id !== 11 || !selection) return notFound()
+      if (selection.start === 27 && selection.end === 38) {
+        return {
+          status: 200,
+          body: {
+            source: 'ai',
+            term: { id: 12, key: 'unknownword', label: 'UnknownWord' },
+            explanation: { id: 31, body: '합성 AI 설명입니다.', review_status: 'pending', cached: false },
+            reportable: true,
+            is_favorite: false,
+          },
+        }
+      }
+      if (selection.start === 6 && selection.end === 17) {
+        return {
+          status: 200,
+          body: {
+            source: 'glossary',
+            term: { id: 7, key: 'exampleterm', label: 'ExampleTerm' },
+            body_markdown: '합성 설명 문장입니다.',
+            images: [{ id: 3, url: GLOSSARY_IMAGE, alt: '합성 구조도' }],
+            is_favorite: false,
+          },
+        }
+      }
+      return { status: 200, body: { source: 'ai', term: null, explanation: { id: null, body: '합성 1회용 AI 설명입니다.' }, reportable: false } }
+    },
+  },
+  // E11 오늘의 퀴즈. 방문자는 401 login_required, 로그인한 사용자는 예시 5의 ready(둘째 문항은 이미 답함)를 받는다. 답하기 전 문항에는 정답·해설이 없다.
+  // 그 밖의 다섯 상태(not_open·none·generating·failed·ai_limit_reached)는 가짜 응답이 아니라 시험의 합성 HTTP 응답으로 만든다.
+  {
+    method: 'POST',
+    pattern: /^\/api\/quiz\/today$/,
+    handle: () => {
+      if (getMockSession() === 'visitor') return loginRequired()
+      return {
+        status: 200,
+        body: {
+          status: 'ready',
+          quiz_date: '2026-10-23',
+          items: [
+            { id: 41, difficulty: '중', question: '합성 질문 1입니다.', answered: false, followups: [], can_request_followup: false },
+            {
+              id: 42,
+              difficulty: '하',
+              question: '합성 질문 2입니다.',
+              answered: true,
+              your_answer: '합성 답변',
+              correct_answer: '합성 정답',
+              explanation: '합성 해설',
+              followups: [{ seq: 1, question: '합성 꼬리 질문', answered: false }],
+              can_request_followup: false,
+            },
+          ],
+        },
+      }
+    },
+  },
+  // E10 신고. 방문자는 401 login_required다. 로그인한 사용자는 AI 설명 31·퀴즈 문항 41·42만 신고할 수 있고(그 밖은 404),
+  // 같은 대상을 다시 신고하면 200으로 기존 신고를 돌려준다(예시 7).
+  {
+    method: 'POST',
+    pattern: /^\/api\/reports$/,
+    handle: ({ body }) => {
+      if (getMockSession() === 'visitor') return loginRequired()
+      const { target } = (body ?? {}) as { target?: { type?: string; id?: number } }
+      const known = (target?.type === 'ai_explanation' && target.id === 31) || (target?.type === 'quiz_item' && (target.id === 41 || target.id === 42))
+      if (!known) return notFound()
+      const key = `${target.type}:${target.id}`
+      const again = reportedTargets.has(key)
+      reportedTargets.add(key)
+      return { status: again ? 200 : 201, body: { id: 5, status: 'open' } }
+    },
   },
   // E08 즐겨찾기. 방문자는 항상 401 login_required다.
   {
@@ -217,6 +307,39 @@ const routes: Route[] = [
       if (termId !== '7') return notFound()
       favoriteTerm7 = Boolean((body as { favorited?: boolean } | undefined)?.favorited)
       return { status: 200, body: { term_id: 7, is_favorite: favoriteTerm7 } }
+    },
+  },
+  // E24 계정 발급(POST /api/admin/users, 운영자만). 요청 본문은 백엔드 CreateAccountRequest와 같다: { email, display_name, initial_password }(모르는 필드는 422).
+  // 이미 있는 이메일은 409 conflict(detail email_exists), 값이 잘못되면 422 validation_failed와 fields[]다. 새로 만든 계정은 일반 사용자(member)다.
+  {
+    method: 'POST',
+    pattern: /^\/api\/admin\/users$/,
+    handle: ({ body }) => {
+      const denied = operatorOnly()
+      if (denied) return denied
+      const input = (body ?? {}) as Record<string, unknown>
+      const { email, display_name: displayName, initial_password: password } = input
+      const fields: FieldError[] = []
+      const bad = (name: string, reason: string) => fields.push({ name, reason, message: FIELD_MESSAGES[reason] })
+      for (const name of Object.keys(input)) {
+        if (!['email', 'display_name', 'initial_password'].includes(name)) bad(name, 'invalid_format')
+      }
+      if (typeof email !== 'string' || email.trim() === '') bad('email', 'required')
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) bad('email', 'invalid_format')
+      if (typeof displayName !== 'string' || displayName.trim() === '') bad('display_name', 'required')
+      else if (displayName.trim().length > 100) bad('display_name', 'too_long')
+      if (typeof password !== 'string' || password === '') bad('initial_password', 'required')
+      else if (new TextEncoder().encode(password).length > 72) bad('initial_password', 'too_long')
+      if (fields.length > 0) {
+        const error: ApiErrorBody = { error: { code: 'validation_failed', message: 'One or more fields are invalid', request_id: 'r-mock-0001', fields } }
+        return { status: 422, body: error }
+      }
+      const normalized = (email as string).trim().toLowerCase()
+      if (normalized in ACCOUNTS || issuedEmails.has(normalized)) {
+        return mockError(409, 'conflict', 'An account with this email already exists', 'email_exists')
+      }
+      issuedEmails.add(normalized)
+      return { status: 201, body: { user: { email: normalized, display_name: (displayName as string).trim(), role: 'member' } } }
     },
   },
 ]

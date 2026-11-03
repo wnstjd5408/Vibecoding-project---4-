@@ -2,10 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiFetch, isApiError } from '../api/client.ts'
 import type { FavoriteResponse, GlossaryResponse, TermViewResponse } from '../api/types.ts'
 import { useAuth } from '../auth/useAuth.ts'
-import { BottomSheet } from '../components/BottomSheet.tsx'
 import { Badge } from '../components/Badge.tsx'
 import { Button } from '../components/Button.tsx'
 import { FavoriteToggle } from '../components/FavoriteToggle.tsx'
+import { ResponsiveSheet } from '../components/ResponsiveSheet.tsx'
 import { StateMessage } from '../components/StateMessage.tsx'
 import { TermLink } from '../components/TermLink.tsx'
 import { NoteBody } from '../notes/NoteBody.tsx'
@@ -37,15 +37,18 @@ type TermSheetProps = {
   // 즐겨찾기 요청이 실패했을 때 부른다. 로그인 안내를 열었으면(401 login_required) true를 돌려주고, 그러면 이 시트는 그 안에서 닫힌다.
   // false면 이 시트가 짧은 오류 안내를 보인다.
   onLoginRequired: (error: unknown) => boolean
+  // PC 폭에서 용어 링크가 aria-controls로 가리킬 패널 id와, 패널을 닫을 때 포커스를 돌려줄 요소(마지막으로 누른 용어 링크)
+  panelId?: string
+  returnFocus?: () => HTMLElement | null
 }
 
-// 사전 용어 설명 바텀시트(F1-3). 열 때 E06으로 설명·이미지를 받고, 성공하면 E07로 열람을 한 번 기록한다.
+// 사전 용어 설명 바텀시트(F1-3). 1024px 이상에서는 같은 내용을 오른쪽 사이드 패널로 보인다(ResponsiveSheet). 열 때 E06으로 설명·이미지를 받고, 성공하면 E07로 열람을 한 번 기록한다.
 // 시트는 기존 BottomSheet를 그대로 쓴다. 제목 포커스, Esc·닫기·막 누르기, 연 요소로의 포커스 복귀는 BottomSheet가 맡는다.
-export function TermSheet({ open, onClose, openId, termId, label, onLoginRequired }: TermSheetProps) {
+export function TermSheet({ open, onClose, openId, termId, label, onLoginRequired, panelId, returnFocus }: TermSheetProps) {
   return (
-    <BottomSheet open={open} onClose={onClose} badge={<Badge tone="dictionary">{MESSAGES.badge}</Badge>} title={<TermLink>{label}</TermLink>}>
+    <ResponsiveSheet open={open} onClose={onClose} badge={<Badge tone="dictionary">{MESSAGES.badge}</Badge>} title={<TermLink>{label}</TermLink>} panelId={panelId} returnFocus={returnFocus}>
       {open && termId !== null ? <TermSheetContent key={openId} termId={termId} onLoginRequired={onLoginRequired} /> : null}
-    </BottomSheet>
+    </ResponsiveSheet>
   )
 }
 

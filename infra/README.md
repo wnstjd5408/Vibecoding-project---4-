@@ -354,6 +354,8 @@ GitHub Actions `DB Backup`(`.github/workflows/db-backup.yml`)이 매주 월요�
 
 **실패 알림**
 
+덤프 실패 진단은 `backend/scripts/diagnose_backup.py`가 고정 코드만 출력한다. URL·사용자명·비밀번호·호스트·오류 원문은 출력하지 않는다. `DB_URL_*`·`DB_PASSWORD_*`는 접속 문자열 형식, `DB_SESSION_POOLER_REQUIRED`는 Session pooler와 5432 포트 선택, `DB_AUTH_FAILED`는 인증, `DB_USER_OR_PROJECT_INVALID`는 사용자·프로젝트 지정, `DB_PERMISSION_DENIED`는 DB 권한을 확인한다. `DB_DNS_FAILED`·`DB_CONNECTION_*`·`DB_TLS_FAILED`는 네트워크, `DB_VERSION_MISMATCH`는 덤프 도구 버전, `DOCKER_UNAVAILABLE`·`CONTAINER_IMAGE_FAILED`는 컨테이너 실행 환경을 확인한다. 분류할 수 없으면 `DUMP_FAILURE_UNCLASSIFIED`만 출력하며 원문을 공개 로그에 붙이지 않는다. 형식 검사 통과는 비밀번호나 대상 프로젝트가 맞다는 증거가 아니다.
+
 예약 실행이 실패하면 GitHub이 워크플로의 예약(cron)을 마지막으로 바꾼 사람에게 메일을 보낸다. 이미지 행에 파일이 없으면 받은 파일은 올린 뒤 실패로 끝난다. 공개 저장소의 예약 실행은 60일 동안 저장소 활동이 없으면 GitHub이 꺼 버린다. 꺼져 있는 동안 새 백업은 생기지 않지만 마지막 8개는 남는다. **Actions → DB Backup → Enable workflow**로 다시 켠다.
 
 **백업 확인 (AC-2, 사람)**
@@ -470,3 +472,83 @@ aws s3api list-object-versions --bucket $bucket --prefix db/latest/backup.tar --
 - `sts_event_region`은 백엔드 `BEDROCK_REGION`과 같아야 한다. 백엔드 리전을 바꾸면 이 값도 바꾼다.
 - 로컬 검사: `terraform fmt -check -recursive`, `terraform init -backend=false`, `terraform validate`. `infra/`, `infra/github-oidc/`, `infra/vercel-oidc/`, `infra/db-backup/`에서 각각 실행한다. PR CI에서는 Terraform을 실행하지 않는다. `main` 병합 뒤의 CD만 실행한다.
 - provider를 올릴 때는 `terraform providers lock -platform=windows_amd64 -platform=linux_amd64 -platform=darwin_arm64 -platform=darwin_amd64`로 잠금 파일을 갱신해 커밋한다.
+
+### 백업 이미지 다운로드 진단 보완 (MEG-94)
+
+`backend/scripts/dump_database.sh`는 CLI 2.121.0 / PostgreSQL 17에 맞는
+`17.11.0.004` 이미지를 ECR에서 먼저 받고, 실패하면 공식 GHCR 미러에서 받는다.
+두 레지스트리가 모두 실패하면 DB에 연결하지 않고 중단한다. CLI를 올릴 때 이 이미지
+핀도 함께 확인한다. 로그 원문은 출력하거나 아티팩트로 올리지 않는다.
+
+워크플로 `Dump database` 단계는 다음과 같이 연결한다. 기존 `run: |` 아래의
+덤프 함수와 중복 블록 전체를 교체해야 한다.
+
+```yaml
+      - name: Dump database
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: bash backend/scripts/dump_database.sh
+```
+
+진단 코드 `IMAGE_RATE_LIMITED`는 요청 제한, `IMAGE_MANIFEST_MISSING`은 태그/플랫폼
+매니페스트 없음, `IMAGE_ACCESS_DENIED`는 이미지 접근 거부다. 이전
+`CONTAINER_IMAGE_FAILED` 코드만으로는 이 셋을 구분할 수 없다.
+
+### roles 덤프 실패 분리 진단
+
+`roles` 덤프가 실패하면 `CLI_EXIT_<숫자>`와 고정 오류 코드가 출력된다.
+이어 `probe_backup.py`가 준비된 동일 이미지로 세 단계를 검사한다.
+
+- `CONTAINER_TOOL`: pg_dumpall 실행 가능 여부.
+- `CONNECTION`: psql의 읽기 전용 `SELECT 1` 연결 검사.
+- `ROLES`: 동일 역할 옵션의 pg_dumpall 실행. 비밀번호 해시를 제외하고 결과 전체를 버린다.
+
+실패한 단계에서 검사를 멈춘다. 각 검사에는 30초 제한이 있고 타임아웃 컨테이너는
+정리한다. 연결 값은 Docker 명령 인수가 아닌 환경변수로 전달한다. stdout은 버리고
+stderr는 메모리에서 고정 코드로 분류하며, 원문이나 예외를 출력하지 않는다.
+세 단계가 모두 성공하면 `CLI_DUMP_PATH_FAILED`로 CLI 실행 경로와 DB 연결/권한
+문제를 구분한다. probe 성공은 백업 성공을 뜻하지 않으며 원래 워크플로는 실패로 끝난다.
+
+`sslmode`, `channel_binding` 이외 URL 쿼리 옵션은 잘못된 조건으로 검사하지 않도록
+`PROBE_URL_UNSUPPORTED`로 표시한다. 정상 CLI 덤프의 옵션과 동작은 변경하지 않는다.
+
+### 비밀번호·SSL·풀러 오류 구분
+
+연결 진단은 덤프와 다른 시작 옵션을 넣지 않는다. `PGOPTIONS`로 전달하던
+읽기 전용/타임아웃 설정은 제거했고, 연결 검사는 SQL의
+`BEGIN READ ONLY; SELECT 1; ROLLBACK;`으로 수행한다. 프로세스 시간 제한은 유지한다.
+
+`TLS` probe는 PostgreSQL SSLRequest 뒤 인증서와 호스트 이름을 검증하며 사용자명이나
+비밀번호를 전송하지 않는다. runner의 CA 저장소를 쓰므로 컨테이너 libpq의 SSL 정책과
+완전히 같지는 않다. TLS probe 성공만으로 비밀번호나 풀러 정상 여부를 판단하지 않는다.
+TLS probe가 실패해도 기존 psql 검사를 수행해 각각의 결과를 남긴다.
+
+| 진단 코드 | 확인된 범위 |
+|---|---|
+| `DB_AUTH_FAILED` | 서버의 비밀번호 인증 거절. 사용자명·프로젝트 연결 대상도 확인해야 한다 |
+| `DB_TLS_CERTIFICATE_FAILED`, `TLS_CERTIFICATE_FAILED` | 인증서/호스트 이름 검증 실패 |
+| `DB_TLS_NEGOTIATION_FAILED`, `TLS_HANDSHAKE_FAILED` | TLS 협상 실패 |
+| `DB_POOLER_AUTH_LOOKUP_FAILED` | 풀러가 내부 인증 정보를 조회하지 못함. 사용자 비밀번호 오류로 단정하지 않는다 |
+| `DB_POOLER_UPSTREAM_UNAVAILABLE` | 풀러에서 상위 DB 연결 실패 |
+| `DB_POOLER_AUTH_BLOCKED` | 인증 실패 누적으로 일시 차단 |
+| `DB_POOLER_CIRCUIT_OPEN` | 풀러 보호 회로 차단. 이 코드만으로 세부 원인은 불명 |
+| `DB_NETWORK_RESTRICTED` | 풀러 네트워크 허용 목록에서 거절 |
+| `DB_STARTUP_OPTIONS_REJECTED` | 시작 메시지/옵션 거절 |
+| `PSQL_FAILED` | 아직 분류되지 않은 오류. 비밀번호·SSL·풀러 중 하나로 추정하지 않는다 |
+
+고정 코드의 근거는 [공식 Supavisor 오류 정의](https://github.com/supabase/supavisor/tree/main/lib/supavisor/errors)와
+[회로 차단 설명](https://github.com/supabase/supavisor/blob/main/lib/supavisor/circuit_breaker.ex)이다.
+원문이나 호스트·사용자명·비밀번호는 출력하지 않는다. 이 진단은 비밀번호 초기화,
+SSL 검증 해제, 풀러/서버 설정 변경을 자동 수행하지 않는다.
+
+### Supabase CA를 사용하는 TLS 진단
+
+2026-10-30 실제 관리형 세션 풀러에서 시스템 CA만 사용한 검증은 실패했지만,
+대시보드가 제공하는 Supabase CA를 로드한 뒤 인증서 체인과 호스트 이름 검증이
+성공했다. `probe_backup.py`는 이제 `scripts/certs/supabase-prod-ca-2021.crt`를
+시스템 신뢰 저장소에 추가한다. `CERT_REQUIRED`와 호스트 이름 검증은 유지한다.
+
+이 변경은 TLS 진단의 누락된 CA를 고친다. DB 비밀번호, CLI 컨테이너의 SSL 정책,
+Supabase Network Restrictions는 변경하지 않는다. 네트워크 제한은 별도 해결이
+필요하며, 표준 GitHub-hosted runner 주소는 고정되어 있지 않으므로 일회성 IP 추가를
+주간 자동 백업의 영구 해결로 취급하지 않는다.

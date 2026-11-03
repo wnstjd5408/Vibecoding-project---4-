@@ -391,3 +391,449 @@ def test_notes_select_rejected_is_a_config_error():
 def test_notes_select_server_error_is_unavailable():
     with pytest.raises(SupabaseUnavailable):
         client_with(lambda r: httpx.Response(503)).list_subjects()
+
+
+# --- E05 노트 읽기·사전 용어·서명 URL (MEG-73) ---
+
+NOTE_SELECT = (
+    "id,revision,title,studied_on,body_markdown,"
+    "note_subjects(subjects(id,name)),note_sources(id,url,label),"
+    "note_images(notion_block_id,storage_path,alt)"
+)
+
+
+def test_get_note_for_non_operator_filters_published_in_db_and_skips_private_columns():
+    row = {"id": 11, "title": "t"}
+    seen, handler = capture([row])
+
+    assert client_with(handler).get_note(11, include_unpublished=False) == row
+    assert seen["path"] == "/rest/v1/notes"
+    assert seen["params"] == {"id": "eq.11", "select": NOTE_SELECT, "limit": "1", "is_published": "eq.true"}
+    # memo·needs_review·is_published 같은 비공개 열은 읽지 않는다.
+    assert not {"memo", "needs_review", "importance", "is_published"} & set(seen["params"]["select"].split(","))
+
+
+def test_get_note_for_operator_reads_unpublished_and_missing_is_none():
+    seen, handler = capture([])
+
+    assert client_with(handler).get_note(13, include_unpublished=True) is None
+    assert "is_published" not in seen["params"]
+
+
+def test_list_glossary_terms_reads_only_terms_with_a_glossary_entry():
+    seen, handler = capture([])
+
+    client_with(handler).list_glossary_terms()
+
+    assert seen["path"] == "/rest/v1/terms"
+    assert seen["params"] == {"select": "id,key,label,glossary_entries!inner(term_id)", "order": "id.asc"}
+
+
+def signing_client(handler, bucket: str | None = "note-images") -> SupabaseClient:
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    return SupabaseClient("https://project.supabase.co/", "sb_secret_test", http, note_image_bucket=bucket)
+
+
+def test_sign_note_images_signs_all_paths_in_one_call_and_drops_failed_items():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["body"] = request.content.decode()
+        seen["authorization"] = request.headers["authorization"]
+        # 로컬 Storage(2026-10-30)에서 본 모양. 서명 경로는 공백을 그대로 담아 온다. 토큰은 가짜다.
+        return httpx.Response(
+            200,
+            json=[
+                {"error": None, "path": "notes/11/a b+(1).png", "signedURL": "/object/sign/note-images/notes/11/a b+(1).png?token=fake-token"},
+                {"error": "Either the object does not exist or you do not have access to it", "path": "notes/11/gone.png", "signedURL": None},
+            ],
+        )
+
+    signed = signing_client(handler).sign_note_images(["notes/11/a b+(1).png", "notes/11/gone.png"], 300)
+
+    assert signed == {
+        "notes/11/a b+(1).png": "https://project.supabase.co/storage/v1/object/sign/note-images/notes/11/a%20b%2B%281%29.png?token=fake-token"
+    }
+    assert seen["path"] == "/storage/v1/object/sign/note-images"
+    assert '"expiresIn":300' in seen["body"].replace(" ", "")
+    assert seen["authorization"] == "Bearer sb_secret_test"
+
+
+def test_question_mark_in_a_storage_path_is_encoded_not_taken_as_the_query():
+    # Storage 키에는 ?가 들어갈 수 있다(2026-10-30 로컬 업로드 200). 마지막 ? 앞까지만 경로다.
+    body = [{"error": None, "path": "n/q?mark.png", "signedURL": "/object/sign/b.1/n/q?mark.png?token=fake-token"}]
+    client = signing_client(lambda r: httpx.Response(200, json=body), "b.1")
+
+    assert client.sign_note_images(["n/q?mark.png"], 300) == {
+        "n/q?mark.png": "https://project.supabase.co/storage/v1/object/sign/b.1/n/q%3Fmark.png?token=fake-token"
+    }
+
+
+@pytest.mark.parametrize("bad", ["/object/sign/b/a.png", 7, None])
+def test_an_odd_signed_item_drops_only_that_image(bad):
+    body = [
+        {"error": None, "path": "a.png", "signedURL": bad},
+        {"error": None, "path": "b.png", "signedURL": "/object/sign/b/b.png?token=fake-token"},
+    ]
+
+    signed = signing_client(lambda r: httpx.Response(200, json=body)).sign_note_images(["a.png", "b.png"], 300)
+
+    assert list(signed) == ["b.png"]
+
+
+@pytest.mark.parametrize("bucket", [None, "", "../other", "note images", ".", ".."])
+def test_sign_without_a_valid_bucket_is_a_config_error_and_sends_nothing(bucket):
+    def handler(request):
+        raise AssertionError("must not call Storage")
+
+    with pytest.raises(SupabaseConfigError):
+        signing_client(handler, bucket).sign_note_images(["notes/11/a.png"], 300)
+
+
+def test_sign_rejected_is_a_config_error():
+    with pytest.raises(SupabaseConfigError):
+        signing_client(lambda r: httpx.Response(400, json={"error": "Bucket not found"})).sign_note_images(["a.png"], 300)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [httpx.Response(503), httpx.Response(200, json={"not": "a list"}), httpx.Response(200, text="oops"), httpx.Response(200, json=[{}])],
+)
+def test_sign_outage_or_malformed_body_is_unavailable(response):
+    with pytest.raises(SupabaseUnavailable):
+        signing_client(lambda r: response).sign_note_images(["a.png"], 300)
+
+
+def test_from_env_reads_the_note_image_bucket(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setenv("NOTE_IMAGE_BUCKET", " note-images ")
+
+    assert SupabaseClient.from_env()._note_image_bucket == "note-images"
+
+    monkeypatch.delenv("NOTE_IMAGE_BUCKET")
+    assert SupabaseClient.from_env()._note_image_bucket is None
+
+
+# --- E06 사전 용어·E07 열람 기록 (MEG-75) ---
+
+
+GLOSSARY_SELECT = "id,key,label,glossary_entries!inner(body_markdown),glossary_images(id,storage_path,alt)"
+
+
+def test_get_glossary_entry_reads_one_glossary_term_with_ordered_images():
+    row = {"id": 7, "key": "k", "label": "K", "glossary_entries": {"body_markdown": "b"}, "glossary_images": []}
+    seen, handler = capture([row])
+
+    assert client_with(handler).get_glossary_entry(7) == row
+    assert seen["path"] == "/rest/v1/terms"
+    # 방문자는 즐겨찾기를 읽지 않는다.
+    assert seen["params"] == {
+        "id": "eq.7",
+        "select": GLOSSARY_SELECT,
+        "glossary_images.order": "id.asc",
+        "limit": "1",
+    }
+
+
+def test_get_glossary_entry_for_a_user_embeds_only_that_users_favorite():
+    seen, handler = capture([])
+
+    client_with(handler).get_glossary_entry(7, USER_ID)
+
+    assert seen["params"] == {
+        "id": "eq.7",
+        "select": GLOSSARY_SELECT + ",favorites(term_id)",
+        "favorites.user_id": f"eq.{USER_ID}",
+        "glossary_images.order": "id.asc",
+        "limit": "1",
+    }
+
+
+def test_get_glossary_entry_rejects_non_uuid_user_ids():
+    with pytest.raises(ValueError):
+        client_with(capture([])[1]).get_glossary_entry(7, "not-a-uuid")
+
+
+def test_get_glossary_entry_without_a_glossary_row_is_none():
+    _, handler = capture([])
+    assert client_with(handler).get_glossary_entry(9) is None
+
+
+def test_record_term_view_inserts_and_ignores_duplicates():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["prefer"] = request.headers["prefer"]
+        seen["body"] = request.content.decode()
+        return httpx.Response(201)
+
+    assert client_with(handler).record_term_view(USER_ID, 7, "2026-10-23") is True
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/rest/v1/term_views"
+    assert seen["prefer"] == "resolution=ignore-duplicates,return=minimal"
+    assert seen["body"].replace(" ", "") == f'{{"user_id":"{USER_ID}","term_id":7,"study_date":"2026-10-23"}}'
+
+
+# 2026-11-02 로컬 PostgREST가 준 외래 키 위반 본문(값만 합성).
+TERM_FK = {"code": "23503", "message": 'insert or update on table "term_views" violates foreign key constraint "term_views_term_id_fkey"'}
+USER_FK = {"code": "23503", "message": 'insert or update on table "term_views" violates foreign key constraint "term_views_user_id_fkey"'}
+
+
+def test_record_term_view_for_a_missing_term_is_false():
+    assert client_with(lambda r: httpx.Response(409, json=TERM_FK)).record_term_view(USER_ID, 7, "2026-10-23") is False
+
+
+@pytest.mark.parametrize(
+    "response",
+    [httpx.Response(409, json=USER_FK), httpx.Response(409, json={"code": "23503"}),
+     httpx.Response(409, json={"code": "23505"}), httpx.Response(401, json={"message": "Invalid API key"}),
+     httpx.Response(403, json={"code": "42501"}), httpx.Response(409, text="not json"),
+     httpx.Response(409, json=["not", "an", "object"])],
+)
+def test_record_term_view_other_rejections_are_config_errors(response):
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: response).record_term_view(USER_ID, 7, "2026-10-23")
+
+
+def test_record_term_view_outage_is_unavailable():
+    with pytest.raises(SupabaseUnavailable):
+        client_with(lambda r: httpx.Response(503)).record_term_view(USER_ID, 7, "2026-10-23")
+
+
+def glossary_client(bucket: str | None = "glossary-images") -> SupabaseClient:
+    def handler(request):
+        raise AssertionError("public URLs need no Storage call")
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    return SupabaseClient("https://project.supabase.co/", "sb_secret_test", http, glossary_image_bucket=bucket)
+
+
+def test_glossary_image_url_is_the_public_object_url_with_an_encoded_path():
+    assert glossary_client().glossary_image_url("terms/7/a b+(1)?.png") == (
+        "https://project.supabase.co/storage/v1/object/public/glossary-images/terms/7/a%20b%2B%281%29%3F.png"
+    )
+
+
+@pytest.mark.parametrize("path", ["../note-images/x.png", "terms/../../x.png", "/abs.png", "terms//x.png", "./x.png", "terms/"])
+def test_glossary_image_url_rejects_empty_or_dot_segments(path):
+    # 브라우저가 ../를 정규화하면 다른 버킷의 공개 주소가 된다.
+    with pytest.raises(SupabaseConfigError):
+        glossary_client().glossary_image_url(path)
+
+
+@pytest.mark.parametrize("bucket", [None, "", "../other", "glossary images", ".", ".."])
+def test_glossary_image_url_without_a_valid_bucket_is_a_config_error(bucket):
+    with pytest.raises(SupabaseConfigError):
+        glossary_client(bucket).glossary_image_url("terms/7/a.png")
+
+
+def test_from_env_reads_the_glossary_image_bucket(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setenv("GLOSSARY_IMAGE_BUCKET", " glossary-images ")
+
+    assert SupabaseClient.from_env()._glossary_image_bucket == "glossary-images"
+
+    monkeypatch.delenv("GLOSSARY_IMAGE_BUCKET")
+    assert SupabaseClient.from_env()._glossary_image_bucket is None
+
+
+# --- E09(MEG-87)가 쓰는 조회·저장 ---
+
+
+def test_note_for_explain_reads_only_the_four_columns_and_filters_private_notes_in_the_db():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, dict(request.url.params)))
+        return httpx.Response(200, json=[{"id": 11, "revision": 3, "is_published": True, "body_markdown": "본문"}])
+
+    client = client_with(handler)
+    assert client.get_note_for_explain(11, include_unpublished=False)["revision"] == 3
+    client.get_note_for_explain(11, include_unpublished=True)
+
+    columns = "id,revision,is_published,body_markdown"
+    assert seen[0] == ("/rest/v1/notes", {"id": "eq.11", "select": columns, "limit": "1", "is_published": "eq.true"})
+    assert seen[1] == ("/rest/v1/notes", {"id": "eq.11", "select": columns, "limit": "1"})
+    assert client_with(lambda r: httpx.Response(200, json=[])).get_note_for_explain(99, True) is None
+
+
+def test_term_for_explain_filters_embedded_explanations_and_favorites_to_active_and_mine():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json=[{"id": 9, "key": "k"}])
+
+    assert client_with(handler).find_term_for_explain("k", USER_ID) == {"id": 9, "key": "k"}
+    params = seen["params"]
+    assert params["key"] == "eq.k" and params["limit"] == "1"
+    assert params["ai_explanations.invalidated_at"] == "is.null"
+    assert params["favorites.user_id"] == f"eq.{USER_ID}"
+    assert params["glossary_images.order"] == "id.asc"
+    for embedded in ("glossary_entries(body_markdown)", "ai_explanations(id,body,review_status)", "favorites(term_id)"):
+        assert embedded in params["select"]
+    assert client_with(lambda r: httpx.Response(200, json=[])).find_term_for_explain("k", USER_ID) is None
+
+
+def test_ledger_rows_are_looked_up_by_request_key_prefix_for_the_session_user_only():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"], seen["params"] = request.url.path, dict(request.url.params)
+        return httpx.Response(200, json=[{"status": "settled", "attempt_no": 1, "created_at": "2026-11-02T05:00:00+00:00"}])
+
+    key = f"{USER_ID}:3f2b8c1e-0000-4000-8000-000000000001"
+    rows = client_with(handler).list_ledger_rows(USER_ID, key)
+
+    assert rows[0]["status"] == "settled"
+    assert seen["path"] == "/rest/v1/ai_usage_ledger"
+    assert seen["params"]["idempotency_key"] == f"like.{key}:*"
+    assert seen["params"]["user_id"] == f"eq.{USER_ID}"
+
+
+def test_store_ai_explanation_sends_p_arguments_and_strips_the_out_prefix():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"], seen["json"] = request.url.path, request.read()
+        return httpx.Response(200, json=[{"out_outcome": "stored", "out_term_id": 5, "out_explanation_id": 8,
+                                          "out_body": "설명", "out_review_status": "pending"}])
+
+    result = client_with(handler).store_ai_explanation(note_id=1, note_revision=2, term_key="k", body="설명")
+
+    assert result == {"outcome": "stored", "term_id": 5, "explanation_id": 8, "body": "설명", "review_status": "pending"}
+    assert seen["path"] == "/rest/v1/rpc/ai_store_explanation"
+    assert b'"p_note_id":1' in seen["json"] and b'"p_term_key":"k"' in seen["json"]
+
+
+# --- E10(MEG-88)이 쓰는 대상 확인과 신고 저장 ---
+
+DUP = {"code": "23505", "message": 'duplicate key value violates unique constraint "reports_open_ai_explanation_idx"'}
+FK = {"code": "23503", "message": 'insert or update on table "reports" violates foreign key constraint "reports_ai_explanation_id_fkey"'}
+
+
+def test_report_target_check_for_an_explanation_requires_it_to_be_valid_and_for_a_quiz_item_to_be_mine():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, dict(request.url.params)))
+        return httpx.Response(200, json=[{"id": 1}])
+
+    client = client_with(handler)
+    assert client.report_target_exists("ai_explanation", 31, USER_ID) is True
+    assert client.report_target_exists("quiz_item", 41, USER_ID) is True
+
+    assert seen[0] == ("/rest/v1/ai_explanations", {"id": "eq.31", "invalidated_at": "is.null", "select": "id", "limit": "1"})
+    assert seen[1][0] == "/rest/v1/quiz_items"
+    assert seen[1][1]["id"] == "eq.41" and seen[1][1]["quiz_sets.user_id"] == f"eq.{USER_ID}"
+    assert "quiz_sets!inner(user_id)" in seen[1][1]["select"]
+    assert client_with(lambda r: httpx.Response(200, json=[])).report_target_exists("quiz_item", 41, USER_ID) is False
+    with pytest.raises(ValueError):
+        client.report_target_exists("note", 1, USER_ID)
+
+
+def test_create_report_returns_the_new_row_as_created():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"], seen["path"], seen["params"] = request.method, request.url.path, dict(request.url.params)
+        seen["body"], seen["prefer"] = request.read(), request.headers["prefer"]
+        return httpx.Response(201, json=[{"id": 5, "status": "open"}])
+
+    row, created = client_with(handler).create_report(USER_ID, "quiz_item", 41, "합성")
+
+    assert (row, created) == ({"id": 5, "status": "open"}, True)
+    assert (seen["method"], seen["path"], seen["prefer"]) == ("POST", "/rest/v1/reports", "return=representation")
+    assert seen["params"] == {"select": "id,status"}
+    assert b'"quiz_item_id":41' in seen["body"] and b"ai_explanation_id" not in seen["body"]
+
+
+def test_create_report_reads_the_existing_open_report_when_the_open_unique_index_rejects_the_insert():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, dict(request.url.params)))
+        if request.method == "POST":
+            return httpx.Response(409, json=DUP)
+        return httpx.Response(200, json=[{"id": 5, "status": "open"}])
+
+    row, created = client_with(handler).create_report(USER_ID, "ai_explanation", 31, "x")
+
+    assert (row, created) == ({"id": 5, "status": "open"}, False)
+    assert calls[1][1] == {"user_id": f"eq.{USER_ID}", "ai_explanation_id": "eq.31", "status": "eq.open",
+                           "select": "id,status", "limit": "1"}
+
+
+def test_create_report_retries_once_when_the_conflicting_report_was_resolved_in_between():
+    posts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts.append(1)
+            return httpx.Response(409, json=DUP) if len(posts) == 1 else httpx.Response(201, json=[{"id": 6, "status": "open"}])
+        return httpx.Response(200, json=[])
+
+    row, created = client_with(handler).create_report(USER_ID, "ai_explanation", 31, "x")
+
+    assert (row["id"], created, len(posts)) == (6, True, 2)
+
+
+def test_create_report_without_a_live_target_is_none_and_other_rejections_are_config_errors():
+    assert client_with(lambda r: httpx.Response(409, json=FK)).create_report(USER_ID, "ai_explanation", 31, "x") is None
+    # 사용자 쪽 외래 키나 알 수 없는 제약은 대상 없음이 아니라 설정 오류(500)다
+    user_fk = {"code": "23503", "message": 'violates foreign key constraint "reports_user_id_fkey"'}
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(409, json=user_fk)).create_report(USER_ID, "ai_explanation", 31, "x")
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(400, json={"code": "23514", "message": "check"})).create_report(
+            USER_ID, "ai_explanation", 31, "x")
+    with pytest.raises(SupabaseUnavailable):
+        client_with(lambda r: httpx.Response(503)).create_report(USER_ID, "ai_explanation", 31, "x")
+
+
+QUIZ_DUP = {"code": "23505", "message": 'duplicate key value violates unique constraint "reports_open_quiz_item_idx"'}
+QUIZ_FK = {"code": "23503", "message": 'violates foreign key constraint "reports_quiz_item_id_fkey"'}
+
+
+def test_create_report_for_a_quiz_item_uses_the_quiz_item_column_everywhere():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, dict(request.url.params)))
+        if request.method == "POST":
+            return httpx.Response(409, json=QUIZ_DUP)
+        return httpx.Response(200, json=[{"id": 8, "status": "open"}])
+
+    row, created = client_with(handler).create_report(USER_ID, "quiz_item", 41, "x")
+
+    assert (row["id"], created) == (8, False)
+    assert calls[1][1]["quiz_item_id"] == "eq.41" and "ai_explanation_id" not in calls[1][1]
+    assert client_with(lambda r: httpx.Response(409, json=QUIZ_FK)).create_report(USER_ID, "quiz_item", 41, "x") is None
+
+
+@pytest.mark.parametrize(
+    ("target_type", "error"),
+    [
+        # 열이 엇갈린 제약, 열린 신고가 아닌 유일 제약은 대상 없음·중복이 아니라 설정 오류다
+        ("quiz_item", FK),
+        ("ai_explanation", QUIZ_FK),
+        ("ai_explanation", {"code": "23505", "message": 'duplicate key value violates unique constraint "reports_pkey"'}),
+    ],
+    ids=["fk-of-another-column", "fk-of-the-other-target", "other-unique-constraint"],
+)
+def test_create_report_does_not_misread_other_constraint_violations(target_type, error):
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(409, json=error)).create_report(USER_ID, target_type, 31, "x")
+
+
+def test_create_report_that_conflicts_twice_without_an_open_report_is_a_503_not_a_config_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json=DUP) if request.method == "POST" else httpx.Response(200, json=[])
+
+    with pytest.raises(SupabaseUnavailable):
+        client_with(handler).create_report(USER_ID, "ai_explanation", 31, "x")

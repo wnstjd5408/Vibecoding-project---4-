@@ -68,3 +68,50 @@ export type TermViewResponse = { recorded: boolean }
 
 // E08 PUT /api/favorites/{term_id}
 export type FavoriteResponse = { term_id: number; is_favorite: boolean }
+
+// E09 POST /api/ai/explanations. 헤더 Idempotency-Key. selection은 body_markdown 원문의 코드포인트 위치이고 끝은 포함하지 않는다.
+export type ExplainRequest = { note_id: number; note_revision: number; selection: { start: number; end: number } }
+
+// 응답은 세 갈래다(3절 예시 3). source가 ai이고 term이 null이면 저장하지 않는 1회용 설명이라 즐겨찾기·신고·열람 기록이 없다.
+export type ExplainResponse =
+  | {
+      source: 'ai'
+      term: { id: number; key: string; label: string } | null
+      explanation: { id: number | null; body: string; review_status?: string; cached?: boolean }
+      reportable: boolean
+      is_favorite?: boolean
+    }
+  | {
+      source: 'glossary'
+      term: { id: number; key: string; label: string }
+      body_markdown: string
+      images: { id: number; url: string; alt: string }[]
+      is_favorite?: boolean
+    }
+
+// E10 POST /api/reports (3절 예시 7). 새 신고는 201, 같은 사용자·같은 대상의 열린 신고가 이미 있으면 200으로 기존 id를 돌려준다.
+export type ReportTarget = { type: 'ai_explanation' | 'quiz_item'; id: number }
+export type ReportRequest = { target: ReportTarget; body: string }
+export type ReportResponse = { id: number; status: string }
+
+// E11 POST /api/quiz/today. 여섯 상태는 모두 HTTP 200이다(6.3). 답하기 전 문항에는 정답·해설이 오지 않는다.
+// 답한 문항에는 your_answer·correct_answer·explanation·followups가 더 온다(재접속 때 진행 상황 복원).
+export type QuizItem = {
+  id: number
+  difficulty: string
+  question: string
+  answered: boolean
+  your_answer?: string
+  correct_answer?: string
+  explanation?: string
+  followups: { seq: number; question: string; answered: boolean }[]
+  can_request_followup: boolean
+}
+
+export type QuizTodayResponse =
+  | { status: 'ready'; quiz_date: string; items: QuizItem[] }
+  | { status: 'not_open' }
+  | { status: 'none' }
+  | { status: 'generating'; retry_after_seconds?: number }
+  | { status: 'failed' }
+  | { status: 'ai_limit_reached' }

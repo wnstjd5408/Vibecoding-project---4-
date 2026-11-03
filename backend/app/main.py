@@ -1,13 +1,36 @@
 from fastapi import FastAPI
 
-from app import accounts, notes
+from app import (
+    accounts,
+    admin_glossary,
+    admin_reports,
+    ai_explain,
+    eval_staging,
+    glossary,
+    notes,
+    quiz,
+    quiz_answers,
+    quiz_followups,
+    reports,
+)
 from app.common import install_common_layer
+from app import favorites
 
 app = FastAPI(title="Vibecoding project 4 API")
 # 엔드포인트 라우터는 prefix="/api"로 만들어 여기에 붙인다. 공통 헤더·Origin 검사는 /api 아래에만 적용한다.
 install_common_layer(app)
 app.include_router(accounts.router)
+app.include_router(eval_staging.router)
 app.include_router(notes.router)
+app.include_router(glossary.router)
+app.include_router(ai_explain.router)
+app.include_router(admin_glossary.router)
+app.include_router(admin_reports.router)
+app.include_router(quiz.router)
+app.include_router(quiz_answers.router)
+app.include_router(quiz_followups.router)
+app.include_router(reports.router)
+app.include_router(favorites.router)
 
 
 @app.get("/health", include_in_schema=False)
