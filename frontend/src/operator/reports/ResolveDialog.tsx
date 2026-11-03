@@ -28,6 +28,8 @@ export function ResolveDialog({ report, busy, error, onConfirm, onClose }: Resol
   const hintId = useId()
   // 기본값은 끈다(Q-N7).
   const [invalidate, setInvalidate] = useState(false)
+  // 무효화할 AI 설명이 있는 신고(용어 설명)에서만 고른다. E26은 문항 신고의 invalidate_explanation을 무시하므로 문항에서는 선택지를 보이지 않는다.
+  const explainable = report.kind === '용어 설명'
 
   // 브라우저 기본 모달(dialog)을 써서 배경 조작을 막고 Esc로 닫는다.
   useEffect(() => {
@@ -53,20 +55,24 @@ export function ResolveDialog({ report, busy, error, onConfirm, onClose }: Resol
         {MESSAGES.title}
       </h2>
       <p className={styles.dialogReport}>{report.title}</p>
-      <label className={styles.check}>
-        <input type="checkbox" checked={invalidate} aria-describedby={hintId} onChange={(event) => setInvalidate(event.target.checked)} />
-        {MESSAGES.invalidate}
-      </label>
-      <p id={hintId} className={styles.hint}>
-        {MESSAGES.invalidateHint}
-      </p>
+      {explainable ? (
+        <>
+          <label className={styles.check}>
+            <input type="checkbox" checked={invalidate} aria-describedby={hintId} onChange={(event) => setInvalidate(event.target.checked)} />
+            {MESSAGES.invalidate}
+          </label>
+          <p id={hintId} className={styles.hint}>
+            {MESSAGES.invalidateHint}
+          </p>
+        </>
+      ) : null}
       {error ? (
         <p role="alert" className={styles.error}>
           오류: {error}
         </p>
       ) : null}
       <div className={styles.row}>
-        <Button onClick={() => onConfirm(invalidate)} aria-disabled={busy ? 'true' : undefined}>
+        <Button onClick={() => onConfirm(explainable && invalidate)} aria-disabled={busy ? 'true' : undefined}>
           {MESSAGES.confirm}
         </Button>
         <Button variant="primary" onClick={onClose} aria-disabled={busy ? 'true' : undefined}>
