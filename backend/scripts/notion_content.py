@@ -15,7 +15,7 @@ def plain(items: list) -> str:
 
 
 def escaped(text: str) -> str:
-    return re.sub(r"([\\`*_{}\[\]<>!|])", r"\\\1", text)
+    return re.sub(r"([\\`*_{}\[\]<>!|~])", r"\\\1", text)
 
 
 def rich_text(items: list) -> str:
@@ -25,6 +25,8 @@ def rich_text(items: list) -> str:
         text = escaped(raw)
         annotation = item.get("annotations", {})
         if annotation.get("code"):
+            # 인라인 코드는 한 줄로 저장한다. 줄바꿈 하나(\r\n은 하나)를 공백 한 칸으로 바꾸고 기존 공백은 합치지 않는다.
+            raw = re.sub(r"\r\n|\r|\n", " ", raw)
             fence = "`" * max(1, max((len(x) + 1 for x in re.findall(r"`+", raw)), default=1))
             text = f"{fence} {raw} {fence}"
         else:

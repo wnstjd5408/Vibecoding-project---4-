@@ -177,20 +177,10 @@ def test_text_after_or_beside_code_is_still_unescaped(body):
 
 
 def test_code_block_opened_in_a_list_item_ends_with_the_item():
-    # 취소선 글자 "~1 약"을 가져오면 "- ~~~1 약~~"가 된다. CommonMark에서는 목록 항목 안의 코드 블록이라
-    # 항목이 끝나면 함께 끝난다. 뒤 문단까지 코드로 보면 A\*를 놓친다.
-    page = "00000000-0000-4000-8000-000000000001"
-    tree = {
-        page: [
-            {"id": "00000000-0000-4000-8000-000000000002", "type": "bulleted_list_item",
-             "bulleted_list_item": {"rich_text": [{"plain_text": "~1 약", "annotations": {"strikethrough": True}}]}},
-            {"id": "00000000-0000-4000-8000-000000000003", "type": "paragraph",
-             "paragraph": {"rich_text": [{"plain_text": "뒤 문단 A*"}]}},
-        ]
-    }
-    notion = Mock()
-    notion.children.side_effect = lambda block_id: tree[block_id]
-    body = convert(notion, page).markdown
+    # 목록 항목 첫 줄이 "- ~~~1 약~~"이면 CommonMark에서는 목록 항목 안의 코드 블록이라 항목이 끝나면 함께 끝난다.
+    # 뒤 문단까지 코드로 보면 A\*를 놓친다. (MEG-142 이후 변환기는 일반 텍스트의 ~를 \~로 저장해 이 모양을 만들지 않으므로
+    # 위치 계산이 이 입력을 처리하는지 원문을 직접 넣어 확인한다.)
+    body = "- ~~~1 약~~\n\n뒤 문단 A\\*"
     assert body.startswith("- ~~~1")
 
     assert cut(body, find_spans(body, [(21, "A*")])) == [(21, "A\\*")]
