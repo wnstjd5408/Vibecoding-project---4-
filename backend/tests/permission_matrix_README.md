@@ -17,7 +17,7 @@ uv run python -m scripts.local_backend prepare --base-port 58320
 # CLI 출력에는 로컬 자격증명이 있으므로 helper가 출력을 수집하고 표시하지 않는다.
 uv run python -c "from scripts.local_backend import cli; cli('start', '-x', 'realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor'); print('Local Auth/REST/Storage ready')"
 $env:MEG69_LOCAL='1'
-uv run pytest tests/test_permission_matrix_local.py -v -rs --tb=short
+uv run pytest tests/permission_matrix_local.py -v -rs --tb=short
 Remove-Item Env:MEG69_LOCAL
 uv run python -m scripts.local_backend stop
 ```
@@ -58,11 +58,13 @@ main 기준 E15~E18(MEG-79)은 미구현이다. 기본 행렬 12개와 세션/Or
 명시적으로 건너뛴다. 특히 E17 공개 전환은 입력은 준비했지만 실행 검증은 아직 안 됐다.
 미구현 표시는 테스트 성공으로 세지 않는다.
 
-`test_endpoint_inventory`는 외부 환경 없이 실행된다. 구현된 경로가 사라지면 실패하고,
+`test_permission_matrix_inventory.py`는 외부 환경 없이 기본 CI에서 실행된다. 구현된 경로가 사라지면 실패하고,
 미구현 표시된 경로가 추가돼도 실패한다. API 병합 뒤에는 `pending`을 해제하고 해당 행의
 성공 응답·데이터 조건을 보강한 후 로컬 행렬을 다시 실행한다. 경로 부재를 자동으로
 건너뛰어 회귀를 숨기지 않는다.
 
-`MEG69_LOCAL`이 없으면 실제 통합 시험은 전부 건너뛴다. 이때 기본 pytest 통과만으로
-권한 AC를 충족했다고 판단하지 않는다. PR에는 기본 78개 조합과 보강 케이스의 통과·실패·
-건너뜀 수를 구분하고 기준 커밋을 기록한다.
+기본 pytest는 `test_*.py`만 수집하므로 로컬 행렬 파일은 위 명령처럼 명시적으로 실행한다.
+기존 CI의 필수 시험 무건너뜀 정책은 그대로 유지한다. 로컬 파일을 명시했더라도
+`MEG69_LOCAL`이 없으면 실제 통합 시험은 전부 건너뛴다. 기본 pytest/CI 통과만으로 권한
+AC를 충족했다고 판단하지 않는다. PR에는 기본 78개 조합과 보강 케이스의 통과·실패·건너뜀
+수를 구분하고 기준 커밋을 기록한다.

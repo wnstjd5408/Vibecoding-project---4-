@@ -1,7 +1,7 @@
 """MEG-69: real local API permission matrix. See permission_matrix_README.md.
 
-Without MEG69_LOCAL=1 only the route inventory check runs. Missing environment
-is reported as skipped, never as successful authorization verification.
+Run this file explicitly; the default unit suite has no local Supabase stack.
+Missing environment is reported as skipped, never as successful verification.
 """
 
 import os
@@ -14,17 +14,6 @@ from permission_local import (
     LocalMatrix, install,
 )
 from permission_matrix import BY_ID, ENDPOINTS, ROLES, expected
-
-
-def test_endpoint_inventory():
-    paths = app.openapi()["paths"]
-    assert [e.id for e in ENDPOINTS] == [f"E{i:02}" for i in range(1, 27)]
-    for e in ENDPOINTS:
-        present = e.method.lower() in paths.get(e.path, {})
-        if e.pending:
-            assert not present, f"{e.id} is now implemented: remove pending and validate its fixtures"
-        else:
-            assert present, f"{e.id} route vanished; do not silently skip a regression"
 
 
 @pytest.fixture(scope="module")
