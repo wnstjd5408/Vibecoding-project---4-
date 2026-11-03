@@ -1,0 +1,71 @@
+/* 목업 F4-3a·F4-3b: 제목과 안내 아래에 560px 카드 */
+.title {
+  margin: 0 0 var(--space-2);
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 700;
+}
+
+.lead {
+  margin: 0 0 var(--space-6);
+  color: var(--ink-muted);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 560px;
+  padding: var(--space-6);
+  background: var(--surface-200);
+  border: 1px solid var(--surface-300);
+  border-radius: var(--radius-lg);
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 700;
+}
+
+.cardTitle:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 4px;
+}
+
+/* 발급 결과: 항목 이름은 연하게, 값은 진하게 */
+.details {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.details dt {
+  color: var(--ink-muted);
+}
+
+.details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.hint {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.error {
+  margin: 0;
+  color: var(--red-pen);
+  font-size: 14px;
+  line-height: 22px;
+}

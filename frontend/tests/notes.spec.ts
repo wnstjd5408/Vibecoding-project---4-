@@ -2070,3 +2070,617 @@ test('서버 대기 시각은 요청을 시작한 세션 번호로 조회한다(
   expect(result.same).toBe(true)
   expect(result.other).toBeNull()
 })
+
+// ---- MEG-140 노트 본문의 mermaid 코드 블록을 다이어그램 그림으로 보여준다. 실제 노트 화면과 합성 HTTP 응답으로 시험한다. ----
+// 언어 표시가 있는 울타리(```mermaid)만 그린다. 실제 Notion 노트에 표시가 남는 것은 MEG-149(가져오기)가 끝나야 한다. 이 시험은 합성 노트다.
+
+const FLOW = '```mermaid\ngraph TD\n  A[시작] --> B[끝]\n```'
+const diagram = (page: Page) => page.getByRole('img', { name: 'mermaid 다이어그램' })
+
+async function openMermaidNote(page: Page, body: string) {
+  await setupAi(page, { member: false, body })
+  await page.goto('/notes/31')
+  await page.locator('[data-note-body]').waitFor()
+}
+
+test('AC-1 mermaid 블록이 든 노트를 열면 그 자리에 다이어그램 그림이 보이고 원문 코드는 보이지 않는다', async ({ page }) => {
+  await openMermaidNote(page, `앞 문단\n\n${FLOW}\n\n뒤 문단`)
+  await expect(diagram(page)).toBeVisible()
+  expect(await diagram(page).evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true)
+  const body = page.locator('[data-note-body]')
+  await expect(body.getByText('graph TD')).toBeHidden() // 원문은 눈에 보이지 않는 접근성 설명에만 있다
+  await expect(body.locator('pre')).toHaveCount(0)
+  await expect(body.getByText('앞 문단')).toBeVisible()
+  await expect(body.getByText('뒤 문단')).toBeVisible()
+})
+
+test('AC-1 한 노트의 mermaid 블록 여러 개가 모두 그려진다', async ({ page }) => {
+  await openMermaidNote(page, `${FLOW}\n\n사이 문단\n\n\`\`\`mermaid\nsequenceDiagram\n  가->>나: 안녕\n\`\`\``)
+  await expect(diagram(page)).toHaveCount(2)
+  await expect(diagram(page).first()).toBeVisible()
+  await expect(diagram(page).nth(1)).toBeVisible()
+})
+
+test('AC-2 문법이 틀린 mermaid 블록은 노트를 깨지 않고 원래 코드 블록으로 보인다', async ({ page }) => {
+  await openMermaidNote(page, '앞 문단\n\n```mermaid\ngraph TD\n  A[ --> \n```\n\n뒤 문단')
+  const body = page.locator('[data-note-body]')
+  await expect(body.locator('pre')).toContainText('graph TD')
+  await expect(diagram(page)).toHaveCount(0)
+  await expect(body.getByText('뒤 문단')).toBeVisible()
+  // mermaid가 오류를 그리며 문서에 남기는 요소가 없다
+  await expect(page.getByText('Syntax error in text')).toHaveCount(0)
+})
+
+test('AC-3 mermaid 라벨에 넣은 HTML·스크립트는 실행되지 않는다', async ({ page }) => {
+  const injected = '```mermaid\ngraph TD\n  A["<img src=x onerror=window.__pwned=1>"] --> B["<script>window.__pwned=2</script>"]\n  click A call window.__pwned()\n```'
+  await openMermaidNote(page, injected)
+  const body = page.locator('[data-note-body]')
+  // 그림으로 그려지거나 코드 블록으로 돌아가거나 어느 쪽이든, 이 둘 중 하나는 보여야 한다
+  await expect(diagram(page).or(body.locator('pre'))).toBeVisible()
+  await page.waitForTimeout(500)
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: unknown }).__pwned)).toBeUndefined()
+  expect(await page.evaluate(() => document.querySelectorAll('img[src="x"]').length)).toBe(0)
+})
+
+test('AC-4 mermaid가 아닌 코드 블록과 사전 용어 형광펜, 본문은 그대로 보인다', async ({ page }) => {
+  await openMermaidNote(page, `\`\`\`js\nconst a = 1\n\`\`\`\n\n${FLOW}\n\n\`\`\`\n언어 없는 코드\n\`\`\``)
+  const body = page.locator('[data-note-body]')
+  await expect(diagram(page)).toBeVisible()
+  await expect(body.locator('pre')).toHaveCount(2) // js와 언어 없는 코드 블록은 그대로다
+  await expect(body.locator('pre').first()).toContainText('const a = 1')
+  await expect(body.locator('pre').nth(1)).toContainText('언어 없는 코드')
+})
+
+test('mermaid가 없는 노트를 열 때는 mermaid 코드를 내려받지 않는다(지연 로드)', async ({ page }) => {
+  const requested: string[] = []
+  // 우리 소스 파일(MermaidBlock.tsx 등)이 아니라 라이브러리 요청만 본다
+  page.on('request', (request) => { if (/\/node_modules\/\.vite\/deps\/(mermaid|chunk-)/i.test(request.url()) && /mermaid/i.test(request.url())) requested.push(request.url()) })
+  await openMermaidNote(page, '그냥 문단\n\n```js\nconst a = 1\n```')
+  await expect(page.locator('[data-note-body] pre')).toContainText('const a = 1')
+  await page.waitForTimeout(500)
+  expect(requested).toEqual([])
+})
+
+const diagramSource = async (page: Page) => decodeURIComponent((await diagram(page).getAttribute('src')) ?? '').toLowerCase()
+
+test('다이어그램 색은 디자인 토큰을 따르고 그림자를 쓰지 않는다', async ({ page }) => {
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  const svg = await diagramSource(page)
+  expect(svg).toContain('#16202f') // --ink
+  expect(svg).toContain('#76818f') // --line-strong
+  expect(svg).not.toContain('lineargradient')
+  expect(svg).not.toContain('<foreignobject') // 글자는 SVG 글자로 그린다(그림 안에서 HTML 글꼴에 기대지 않는다)
+})
+
+test('좁은 화면에서 넓은 다이어그램은 글자를 읽을 수 있는 크기를 지키고 가로로 스크롤한다', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const steps = Array.from({ length: 7 }, (_, index) => `S${index}[${index + 1}번째 단계]`).join(' --> ')
+  await openMermaidNote(page, `\`\`\`mermaid\ngraph LR\n  ${steps}\n\`\`\``)
+  await expect(diagram(page)).toBeVisible()
+  const size = await diagram(page).evaluate((img: HTMLImageElement) => {
+    const box = img.parentElement!
+    return { shown: img.getBoundingClientRect().width, natural: img.naturalWidth, scrolls: box.scrollWidth > box.clientWidth }
+  })
+  expect(size.natural).toBeGreaterThan(390) // 이 그림은 화면보다 넓다
+  expect(Math.round(size.shown)).toBe(size.natural) // 줄이지 않고 원래 크기로 보인다
+  expect(size.scrolls).toBe(true) // 대신 가로로 스크롤한다
+})
+
+test('좁은 화면에서도 작은 다이어그램은 늘어나지 않고 원래 크기다', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  const size = await diagram(page).evaluate((img: HTMLImageElement) => ({ shown: img.getBoundingClientRect().width, natural: img.naturalWidth }))
+  expect(Math.round(size.shown)).toBe(size.natural)
+})
+
+test('디자인 규칙: 어떤 종류의 다이어그램에도 그림자·neo 모양이 적용되지 않는다', async ({ page }) => {
+  await openMermaidNote(page, `${FLOW}\n\n\`\`\`mermaid\nsequenceDiagram\n  가->>나: 안녕\n\`\`\`\n\n\`\`\`mermaid\nclassDiagram\n  A <|-- B\n\`\`\``)
+  await expect(diagram(page)).toHaveCount(3)
+  await expect(diagram(page).nth(2)).toBeVisible()
+  // 문서 속 <style>에는 쓰이지 않는 neo 전용 규칙이 글자로 남아 있으므로, 글자 검색이 아니라 실제 요소의 속성을 본다
+  const found = await page.evaluate(() => [...document.querySelectorAll('[data-note-body] img')].map((img) => {
+    const text = decodeURIComponent((img as HTMLImageElement).src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+    const doc = new DOMParser().parseFromString(text, 'image/svg+xml')
+    return { neo: doc.querySelectorAll('[data-look="neo"]').length, filtered: doc.querySelectorAll('[filter]').length }
+  }))
+  expect(found).toEqual([{ neo: 0, filtered: 0 }, { neo: 0, filtered: 0 }, { neo: 0, filtered: 0 }])
+})
+
+test('data-theme="dark" 안에서는 어두운 토큰 색으로 그린다', async ({ page }) => {
+  // 이 앱에서 어두운 토큰은 data-theme 속성이 있을 때만 적용된다(자동 다크 모드 없음).
+  await page.addInitScript(() => {
+    const timer = setInterval(() => {
+      if (document.documentElement) {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        clearInterval(timer)
+      }
+    }, 0)
+  })
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  const svg = await diagramSource(page)
+  expect(svg).toContain('#eef1f5') // 어두운 --ink
+  expect(svg).not.toContain('#16202f')
+})
+
+// 독립 검토 반영: 약한 시험 보강(지연 로드의 양성 대조, 그려진 그림의 내용 검사), 작성자의 설정 지시문 차단, 더 많은 다이어그램 종류.
+const decodedSvgs = (page: Page) => page.evaluate(() => [...document.querySelectorAll('[data-note-body] img')].map((img) => {
+  const text = decodeURIComponent((img as HTMLImageElement).src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml')
+  const handlers = [...doc.querySelectorAll('*')].flatMap((element) => [...element.attributes].filter((attribute) => /^on/i.test(attribute.name)).map((attribute) => attribute.name))
+  const scriptLinks = [...doc.querySelectorAll('*')].flatMap((element) => [...element.attributes].filter((attribute) => /href$/i.test(attribute.name) && /^\s*javascript:/i.test(attribute.value)).map((attribute) => attribute.value))
+  return { scripts: doc.querySelectorAll('script').length, images: doc.querySelectorAll('img').length, handlers, scriptLinks, neo: doc.querySelectorAll('[data-look="neo"]').length, filtered: doc.querySelectorAll('[filter]').length }
+}))
+
+test('AC-3 그려진 그림 안에 스크립트·이미지 태그·이벤트 처리기·javascript: 링크가 없다(라벨은 글자로만 남는다)', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n  A["<img src=x onerror=window.__pwned=1>"] --> B["<b>굵게</b> <script>window.__pwned=2</script>"]\n```')
+  await expect(diagram(page)).toBeVisible() // 이 입력은 그림으로 그려져야 한다(코드로 돌아가면 이 시험이 알려 준다)
+  expect(await decodedSvgs(page)).toEqual([{ scripts: 0, images: 0, handlers: [], scriptLinks: [], neo: 0, filtered: 0 }])
+})
+
+test('지연 로드 시험이 실제로 요청을 잡는다(mermaid가 있는 노트에서는 라이브러리 요청이 생긴다)', async ({ page }) => {
+  const requested: string[] = []
+  page.on('request', (request) => { if (/\/node_modules\/\.vite\/deps\/(mermaid|chunk-)/i.test(request.url()) && /mermaid/i.test(request.url())) requested.push(request.url()) })
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  expect(requested.length).toBeGreaterThan(0)
+})
+
+test('노트 작성자는 설정 지시문과 머리말로 모양·테마를 바꿀 수 없다(디자인 토큰 고정)', async ({ page }) => {
+  const directive = '```mermaid\n%%{init: {"look": "neo", "theme": "dark", "themeVariables": {"primaryColor": "#ff0000"}}}%%\ngraph TD\n  A[시작] --> B[끝]\n```'
+  const frontmatter = '```mermaid\n---\nconfig:\n  look: neo\n  theme: forest\n---\ngraph TD\n  A[시작] --> B[끝]\n```'
+  await openMermaidNote(page, `${directive}\n\n${frontmatter}`)
+  await expect(diagram(page)).toHaveCount(2)
+  await expect(diagram(page).nth(1)).toBeVisible()
+  expect(await decodedSvgs(page)).toEqual([
+    { scripts: 0, images: 0, handlers: [], scriptLinks: [], neo: 0, filtered: 0 },
+    { scripts: 0, images: 0, handlers: [], scriptLinks: [], neo: 0, filtered: 0 },
+  ])
+  for (const index of [0, 1]) {
+    const svg = decodeURIComponent((await diagram(page).nth(index).getAttribute('src')) ?? '').toLowerCase()
+    expect(svg).toContain('#16202f') // 디자인 토큰의 --ink
+    expect(svg).not.toContain('#ff0000')
+  }
+})
+
+test('디자인 규칙: 상태·관계·여정·파이 같은 다른 종류에서도 그림자·neo 모양이 없다', async ({ page }) => {
+  await openMermaidNote(page, [
+    '```mermaid\nstateDiagram-v2\n  [*] --> 대기\n  대기 --> 완료\n```',
+    '```mermaid\nerDiagram\n  USER ||--o{ NOTE : writes\n```',
+    '```mermaid\njourney\n  title 하루\n  section 아침\n    일어나기: 3: 나\n```',
+    '```mermaid\npie title 비율\n  "가" : 60\n  "나" : 40\n```',
+  ].join('\n\n'))
+  await expect(diagram(page)).toHaveCount(4)
+  await expect(diagram(page).nth(3)).toBeVisible()
+  const found = await decodedSvgs(page)
+  expect(found.map((item) => ({ neo: item.neo, filtered: item.filtered }))).toEqual(Array.from({ length: 4 }, () => ({ neo: 0, filtered: 0 })))
+})
+
+// PR #98 Codex 리뷰 P2 반영: 일반 스타일 문법(classDef·class·style·linkStyle·:::)으로 디자인 토큰 색을 우회하지 못하게 하고,
+// 그려진 그림의 접근 가능한 이름에 원문 내용을 남긴다.
+test('디자인 토큰: classDef·class·style·linkStyle·:::로 지정한 색은 그림에 적용되지 않고 그림은 그대로 그려진다', async ({ page }) => {
+  const styled = [
+    '```mermaid\ngraph TD\n  A[시작] --> B[끝]\n  classDef custom fill:#ff0000,color:#00ff00,stroke:#0000ff;\n  class A custom;\n```',
+    '```mermaid\ngraph TD\n  A[시작]:::custom --> B[끝]\n  classDef custom fill:#ff0001,color:#00ff01,stroke:#0000fe;\n```',
+    '```mermaid\ngraph TD\n  A[시작] --> B[끝]\n  style A fill:#ff0002,stroke:#00ff02,color:#0000fd\n  linkStyle 0 stroke:#ff0003,stroke-width:4px\n```',
+    '```mermaid\nstateDiagram-v2\n  [*] --> 대기\n  대기 --> 완료\n  classDef warn fill:#ff0004,color:#00ff04\n  class 대기 warn\n```',
+  ].join('\n\n')
+  await openMermaidNote(page, styled)
+  await expect(diagram(page)).toHaveCount(4) // 스타일 줄만 지우고 그림은 그린다(코드로 돌아가지 않는다)
+  await expect(diagram(page).nth(3)).toBeVisible()
+  for (let index = 0; index < 4; index += 1) {
+    const svg = decodeURIComponent((await diagram(page).nth(index).getAttribute('src')) ?? '').toLowerCase()
+    for (const color of ['#ff0000', '#00ff00', '#0000ff', '#ff0001', '#00ff01', '#0000fe', '#ff0002', '#00ff02', '#0000fd', '#ff0003', '#ff0004', '#00ff04']) expect(svg, `${index}번째 그림에 ${color}`).not.toContain(color)
+  }
+})
+
+test('스타일 줄을 지워도 클래스 다이어그램의 class 선언은 그대로 그려진다(과하게 지우지 않는다)', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nclassDiagram\n  class Animal {\n    +String name\n  }\n  class Dog\n  Animal <|-- Dog\n```')
+  await expect(diagram(page)).toBeVisible()
+  const svg = decodeURIComponent((await diagram(page).getAttribute('src')) ?? '')
+  expect(svg).toContain('Animal')
+  expect(svg).toContain('Dog')
+})
+
+test('디자인 토큰: 시퀀스 다이어그램의 rect·box 색 지정도 적용되지 않고 그림은 그대로 그려진다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nsequenceDiagram\n  box rgb(255, 0, 7) 서버쪽\n    participant 서버\n  end\n  participant 사용자\n  rect rgb(0, 255, 8)\n    사용자->>서버: 요청\n  end\n  rect rgba(1, 2, 255, 0.5)\n    서버-->>사용자: 응답\n  end\n```')
+  await expect(diagram(page)).toBeVisible()
+  const svg = decodeURIComponent((await diagram(page).getAttribute('src')) ?? '').toLowerCase()
+  for (const color of ['rgb(255, 0, 7)', 'rgb(0, 255, 8)', 'rgba(1, 2, 255', 'rgb(255,0,7)', 'rgb(0,255,8)']) expect(svg).not.toContain(color)
+  expect(svg).toContain('서버쪽') // 이름은 남고 색만 사라진다
+})
+
+// PR #98 Codex 재리뷰 반영: 세미콜론으로 이어 쓴 스타일, 긴 원문의 접근 가능한 설명(잘리지 않음), Mermaid 접근성 문법(accTitle·accDescr).
+test('디자인 토큰: 세미콜론으로 이어 쓴 style·classDef·class도 지워지고 그림은 그대로 그려진다', async ({ page }) => {
+  await openMermaidNote(page, [
+    '```mermaid\ngraph TD; A[Start] --> B[End]; style A fill:#ff0000;\n```',
+    '```mermaid\ngraph TD; A[시작] --> B[끝]; classDef warn fill:#ff0010,color:#00ff10; class A warn; linkStyle 0 stroke:#0000ee;\n```',
+    '```mermaid\ngraph TD\n  A[시작]:::warn --> B[끝]; classDef warn fill:#ff0011\n```',
+  ].join('\n\n'))
+  await expect(diagram(page)).toHaveCount(3)
+  await expect(diagram(page).nth(2)).toBeVisible()
+  for (let index = 0; index < 3; index += 1) {
+    const svg = decodeURIComponent((await diagram(page).nth(index).getAttribute('src')) ?? '').toLowerCase()
+    for (const color of ['#ff0000', '#ff0010', '#00ff10', '#0000ee', '#ff0011']) expect(svg, `${index}번째 그림에 ${color}`).not.toContain(color)
+  }
+})
+
+test('세미콜론 처리는 따옴표·괄호 안의 라벨을 훼손하지 않는다', async ({ page }) => {
+  // 따옴표 없는 라벨의 ;는 Mermaid에서도 문장 끝이라 따옴표로 감싼 라벨만 시험한다
+  await openMermaidNote(page, '```mermaid\ngraph TD\n  A["앞; 뒤"] --> B["문장; style X fill 같은 글"]; C["괄호; 안"] --> A\n```')
+  await expect(diagram(page)).toBeVisible()
+  // mermaid가 라벨을 단어별 tspan으로 나눠 그리므로 SVG 원문이 아니라 그림에 보이는 글자(textContent)로 확인한다
+  const shown = await diagram(page).evaluate((img: HTMLImageElement) => {
+    const text = decodeURIComponent(img.src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+    // <style>의 글자는 빼고 <text>의 글자만 모으며, 줄바꿈에 따른 공백 차이를 없애려고 공백을 모두 지운다
+    return [...new DOMParser().parseFromString(text, 'image/svg+xml').querySelectorAll('text')].map((element) => element.textContent ?? '').join('').replace(/\s+/g, '')
+  })
+  expect(shown).toContain('앞;뒤')
+  expect(shown).toContain('문장;styleXfill같은글')
+  expect(shown).toContain('괄호;안')
+})
+
+test('접근성: 그림의 접근 가능한 이름은 짧고, 전체 원문은 접근 가능한 설명으로 전달된다', async ({ page }) => {
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  await expect(diagram(page)).toHaveAccessibleName('mermaid 다이어그램')
+  await expect(diagram(page)).toHaveAccessibleDescription(/원문: graph TD; A\[시작\] --> B\[끝\]/)
+  // 원문은 눈에 보이지 않는다(코드로 보이지 않는다)
+  await expect(page.locator('[data-note-body]').getByText('graph TD')).toBeHidden()
+})
+
+test('접근성: 긴 원문도 잘리지 않아 마지막 노드와 관계까지 접근 가능한 설명에 남는다', async ({ page }) => {
+  const lines = Array.from({ length: 81 }, (_, index) => `N${index}[노드${index}] --> N${index + 1}[노드${index + 1}]`).join('\n  ')
+  await openMermaidNote(page, `\`\`\`mermaid\ngraph TD\n  ${lines}\n\`\`\``)
+  await expect(diagram(page)).toBeVisible()
+  const description = await diagram(page).evaluate((img: HTMLImageElement) => document.getElementById(img.getAttribute('aria-describedby') ?? '')?.textContent ?? '')
+  expect(description.length).toBeGreaterThan(1000) // 예전의 1,000자 제한을 넘는다
+  expect(description).toContain('N0[노드0] --> N1[노드1]')
+  expect(description).toContain('N80[노드80] --> N81[노드81]') // 마지막 관계
+  expect(description.endsWith('…')).toBe(false)
+  await expect(diagram(page)).toHaveAccessibleDescription(/N80\[노드80\] --> N81\[노드81\]/)
+})
+
+test('접근성: Mermaid의 accTitle·accDescr를 접근 가능한 이름·설명에 반영한다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n  accTitle: 요청 흐름\n  accDescr: 브라우저가 서버에 요청하고 응답을 받는다\n  A[브라우저] --> B[서버]\n```')
+  await expect(diagram(page)).toBeVisible()
+  await expect(diagram(page)).toHaveAccessibleName('mermaid 다이어그램: 요청 흐름')
+  await expect(diagram(page)).toHaveAccessibleDescription(/브라우저가 서버에 요청하고 응답을 받는다.*원문: /)
+})
+
+// PR #98 Codex 3차 리뷰 반영: 따옴표 안의 글(여러 줄 포함)은 스타일 처리에서 건드리지 않고, 이름으로 지정한 색도 지운다.
+const shownText = (page: Page, index = 0) => diagram(page).nth(index).evaluate((img: HTMLImageElement) => {
+  const text = decodeURIComponent(img.src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+  return [...new DOMParser().parseFromString(text, 'image/svg+xml').querySelectorAll('text')].map((element) => element.textContent ?? '').join('').replace(/\s+/g, '')
+})
+
+test('따옴표 안의 :::는 라벨 글자로 남고 그림이 그대로 그려진다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n A["Address :::example"] --> B[End]\n```')
+  await expect(diagram(page)).toBeVisible() // 닫는 따옴표가 지워져 문법 오류로 코드가 되면 이 시험이 알려 준다
+  expect(await shownText(page)).toContain('Address:::example')
+})
+
+test('여러 줄 따옴표 라벨 속 style·classDef·class로 시작하는 줄도 라벨 내용으로 남는다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n A["first line\nstyle guide\nclassDef notes\nclass these items\nlast line"] --> B[End]\n```')
+  await expect(diagram(page)).toBeVisible()
+  const shown = await shownText(page)
+  for (const piece of ['firstline', 'styleguide', 'classDefnotes', 'classtheseitems', 'lastline']) expect(shown).toContain(piece)
+})
+
+test('디자인 토큰: 시퀀스 box에 이름으로 지정한 색은 지우고 그룹 이름은 남긴다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nsequenceDiagram\nbox Aqua Server\n participant A\nend\nA->>A: hello\n```')
+  await expect(diagram(page)).toBeVisible()
+  const svg = decodeURIComponent((await diagram(page).getAttribute('src')) ?? '').toLowerCase()
+  expect(svg).not.toContain('aqua')
+  expect(await shownText(page)).toContain('Server')
+})
+
+test('box의 첫 글자가 색 이름이 아니면 그룹 이름을 그대로 둔다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nsequenceDiagram\nbox Backend Team\n participant A\nend\nA->>A: hello\n```')
+  await expect(diagram(page)).toBeVisible()
+  expect(await shownText(page)).toContain('BackendTeam')
+})
+
+// ---- MEG-144 PC 사이드 패널(1024px 이상). 용어가 둘인 긴 노트와 합성 HTTP 응답으로 실제 fetch 경로를 시험한다. ----
+// 실제 백엔드의 E06·E08·E09와 실제 Windows 브라우저(Edge·Chrome) 대조(AC-6)는 확인하지 못한다.
+const PC_VIEWPORT = { width: 1280, height: 800 }
+const FILLER = Array.from({ length: 40 }, (_, index) => `긴 본문의 ${index + 1}번째 문단입니다. 스크롤해도 헤더와 패널의 위치가 유지되는지 보려고 길게 이어 씁니다.`).join('\n\n')
+const TWO_TERMS_BODY = `앞 ExampleTerm 중간 SecondTerm 뒤\n\n${FILLER}`
+const twoTermsNote = {
+  id: 11, revision: 1, title: '두 용어 노트', studied_on: null, subjects: [], sources: [], images: {},
+  body_markdown: TWO_TERMS_BODY,
+  glossary_terms: [{ term_id: 7, key: 'exampleterm', label: 'ExampleTerm' }, { term_id: 8, key: 'secondterm', label: 'SecondTerm' }],
+  glossary_spans: [
+    { term_id: 7, start: TWO_TERMS_BODY.indexOf('ExampleTerm'), end: TWO_TERMS_BODY.indexOf('ExampleTerm') + 'ExampleTerm'.length },
+    { term_id: 8, start: TWO_TERMS_BODY.indexOf('SecondTerm'), end: TWO_TERMS_BODY.indexOf('SecondTerm') + 'SecondTerm'.length },
+  ],
+}
+
+async function setupPcTerms(page: Page, options: { favoriteStatus?: number } = {}) {
+  const calls = { glossary7: 0, glossary8: 0, favorites: 0, views: 0 }
+  await page.route('**/api/me', (route) => route.fulfill({ json: { authenticated: true, role: 'member', display_name: '합성 사용자' } }))
+  await page.route('**/api/notes/11', (route) => route.fulfill({ json: twoTermsNote }))
+  await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
+  await page.route('**/api/glossary/7', (route) => {
+    calls.glossary7 += 1
+    return route.fulfill({ json: { ...glossary(), is_favorite: false } })
+  })
+  await page.route('**/api/glossary/8', (route) => {
+    calls.glossary8 += 1
+    return route.fulfill({ json: { term: { id: 8, key: 'secondterm', label: 'SecondTerm' }, body_markdown: '둘째 용어의 합성 설명입니다.', images: [], is_favorite: false } })
+  })
+  await page.route('**/api/term-views', (route) => {
+    calls.views += 1
+    return route.fulfill({ json: { recorded: true } })
+  })
+  await page.route('**/api/favorites/7', (route) => {
+    calls.favorites += 1
+    if (options.favoriteStatus && options.favoriteStatus !== 200) return route.fulfill(serverError(options.favoriteStatus))
+    return route.fulfill({ json: { term_id: 7, is_favorite: true } })
+  })
+  return calls
+}
+
+const firstTerm = (page: Page) => page.getByRole('link', { name: 'ExampleTerm' })
+const secondTerm = (page: Page) => page.getByRole('link', { name: 'SecondTerm' })
+const firstPanel = (page: Page) => page.getByRole('dialog', { name: 'ExampleTerm' })
+const secondPanel = (page: Page) => page.getByRole('dialog', { name: 'SecondTerm' })
+
+test.describe('PC 폭 패널(실제 fetch 경로)', () => {
+  test.use({ viewport: PC_VIEWPORT })
+
+  test('AC-3 열린 패널에서 다른 용어를 누르면 내용만 바뀌고 포커스는 누른 링크에 남으며, 닫으면 마지막 링크로 돌아간다', async ({ page }) => {
+    const calls = await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page)).toBeVisible()
+    await expect(firstPanel(page).getByRole('heading', { name: 'ExampleTerm' })).toBeFocused() // 처음 열 때만 제목으로
+    await secondTerm(page).click()
+    await expect(secondPanel(page)).toBeVisible()
+    await expect(page.getByRole('dialog')).toHaveCount(1) // 패널은 하나이고 내용만 바뀐다
+    await expect(secondPanel(page).getByText('둘째 용어의 합성 설명입니다.')).toBeVisible()
+    await expect(secondTerm(page)).toBeFocused() // 제목으로 다시 옮기지 않는다
+    await expect(secondTerm(page)).toHaveAttribute('aria-expanded', 'true')
+    await expect(firstTerm(page)).toHaveAttribute('aria-expanded', 'false')
+    expect(calls.glossary8).toBeGreaterThan(0) // 둘째 용어의 설명을 받았다(개발 모드의 StrictMode가 효과를 두 번 실행하므로 횟수는 단정하지 않는다)
+    await page.keyboard.press('Escape')
+    await expect(secondPanel(page)).toBeHidden()
+    await expect(secondTerm(page)).toBeFocused() // 마지막으로 누른 링크
+    await expect(secondTerm(page)).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  test('AC-4 패널 안 즐겨찾기 성공은 눌림과 안내로 보인다', async ({ page }) => {
+    await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await firstPanel(page).getByRole('button', { name: '즐겨찾기', exact: true }).click()
+    await expect(firstPanel(page).getByRole('button', { name: '즐겨찾기함' })).toBeVisible()
+    await expect(firstPanel(page).getByRole('status').filter({ hasText: '즐겨찾기에 저장했어요' })).toHaveCount(1)
+  })
+
+  test('AC-4 즐겨찾기 저장이 실패하면 패널 안에 오류 안내가 보이고 눌림 상태는 그대로다', async ({ page }) => {
+    await setupPcTerms(page, { favoriteStatus: 500 })
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await firstPanel(page).getByRole('button', { name: '즐겨찾기', exact: true }).click()
+    await expect(firstPanel(page).getByRole('alert')).toContainText('즐겨찾기를 저장하지 못했어요')
+    await expect(firstPanel(page).getByRole('button', { name: '즐겨찾기', exact: true })).toBeVisible()
+    await expect(firstPanel(page)).toBeVisible()
+  })
+
+  test('AC-7 스크롤해도 헤더는 위에 남고 패널은 헤더 아래에 붙으며, 패널이 열린 채 본문이 스크롤된다', async ({ page }) => {
+    await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page)).toBeVisible()
+    await page.evaluate(() => window.scrollTo(0, 900))
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(300) // 본문 스크롤이 잠겨 있지 않다
+    const header = await page.getByRole('banner').boundingBox()
+    const sheet = await firstPanel(page).boundingBox()
+    expect(Math.round(header?.y ?? -1)).toBe(0) // 헤더는 화면 위에 그대로
+    expect(Math.round(sheet?.y ?? -1)).toBe(Math.round((header?.y ?? 0) + (header?.height ?? 0))) // 패널은 헤더 바로 아래에 붙어 빈 띠가 없다
+    expect(Math.round((sheet?.y ?? 0) + (sheet?.height ?? 0))).toBe(PC_VIEWPORT.height)
+    await expect(page.getByRole('banner').getByRole('link', { name: '목록' })).toBeVisible()
+  })
+
+  test('기록: 패널이 열린 채 창 폭을 1024px 아래로 줄이면 같은 용어가 바텀시트로 바뀌어 열려 있고, 다시 넓히면 패널로 돌아온다', async ({ page }) => {
+    await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page)).toBeVisible()
+    expect(await firstPanel(page).evaluate((element) => element.matches(':modal'))).toBe(false)
+    const isModal = () => firstPanel(page).evaluate((element) => element.matches(':modal'))
+    await page.setViewportSize({ width: 800, height: 800 })
+    await expect(firstPanel(page)).toBeVisible() // 열림 상태는 유지된다(내용은 새로 그려진다)
+    await expect.poll(isModal).toBe(true) // 창 크기 변화를 React가 반영할 때까지 기다린다
+    await page.setViewportSize(PC_VIEWPORT)
+    await expect(firstPanel(page)).toBeVisible()
+    await expect.poll(isModal).toBe(false)
+  })
+
+  test('기록: 1024px에서도 본문이 패널에 가려지지 않는다(공간이 모자라 본문 열이 줄어든다)', async ({ page }) => {
+    await setupPcTerms(page)
+    await page.setViewportSize({ width: 1024, height: 800 })
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page)).toBeVisible()
+    const article = await page.locator('article').boundingBox()
+    const sheet = await firstPanel(page).boundingBox()
+    expect((article?.x ?? 0) + (article?.width ?? 0)).toBeLessThanOrEqual(sheet?.x ?? 0)
+    expect(Math.round(article?.width ?? 0)).toBeLessThan(720)
+    expect(Math.round(article?.width ?? 0)).toBeGreaterThan(300)
+  })
+})
+
+// 독립 검토 반영: 창 폭이 1024px 경계를 넘어도 열린 패널의 내용을 다시 부르지 않는다(AI 설명은 호출 한도·비용이 걸려 있다).
+test.describe('PC 폭 패널: 창 폭 전환 중 요청', () => {
+  test.use({ viewport: PC_VIEWPORT })
+
+  test('열린 용어 패널은 창 폭이 경계를 넘어도 E06·E07을 다시 부르지 않고 내용이 그대로다', async ({ page }) => {
+    const calls = await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    await expect.poll(() => calls.views).toBeGreaterThan(0)
+    const before = { glossary: calls.glossary7, views: calls.views }
+    const isModal = () => firstPanel(page).evaluate((element) => element.matches(':modal'))
+    await page.setViewportSize({ width: 800, height: 800 })
+    await expect.poll(isModal).toBe(true)
+    await expect(firstPanel(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    await page.setViewportSize(PC_VIEWPORT)
+    await expect.poll(isModal).toBe(false)
+    await expect(firstPanel(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    await page.waitForTimeout(300)
+    expect({ glossary: calls.glossary7, views: calls.views }).toEqual(before) // 요청이 늘지 않았다
+  })
+
+  test('열린 AI 설명 패널은 창 폭이 경계를 넘어도 E09를 다시 부르지 않는다', async ({ page }) => {
+    const { calls } = await setupAi(page, { member: true })
+    await page.goto('/notes/31')
+    await askAi(page)
+    const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+    await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+    const before = calls.length
+    expect(before).toBeGreaterThan(0)
+    const isModal = () => sheet.evaluate((element) => element.matches(':modal'))
+    await page.setViewportSize({ width: 800, height: 800 })
+    await expect.poll(isModal).toBe(true)
+    await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+    await page.setViewportSize(PC_VIEWPORT)
+    await expect.poll(isModal).toBe(false)
+    await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+    await page.waitForTimeout(300)
+    expect(calls).toHaveLength(before) // E09 요청이 늘지 않았다
+  })
+})
+
+// ---- MEG-166 계정 전환 뒤 이전 즐겨찾기(E08) 응답이 현재 화면에 반영되지 않게 한다. 실제 로그아웃·로그인 흐름과 합성 HTTP 응답으로 시험한다. ----
+// MEG-76 로컬 검증 S7: 회원 A의 E08 응답을 보류한 채 로그아웃하거나 B로 전환하면, 늦게 도착한 A의 응답이 현재 시트의 버튼을 덮어썼다.
+// 합성 응답 시험이며 실제 백엔드 결과는 로컬 검증에서 따로 확인한다.
+
+type FavoriteUser = 'a' | 'b'
+
+async function setupFavoriteSwitch(page: Page, respondFirst: (held: Promise<void>) => Promise<{ status: number; json: object }>) {
+  const held = gate()
+  const state = {
+    loggedIn: true,
+    user: 'a' as FavoriteUser,
+    saved: { a: false, b: false } as Record<FavoriteUser, boolean>,
+    bodies: [] as { favorited: boolean }[],
+    release: held.release,
+  }
+  await page.route('**/api/me', (route) => route.fulfill({ json: state.loggedIn ? { authenticated: true, role: 'member', display_name: '같은이름' } : { authenticated: false } }))
+  await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
+  await page.route('**/api/notes/11', (route) => route.fulfill({ json: termNote }))
+  await page.route('**/api/term-views', (route) => route.fulfill({ json: { recorded: state.loggedIn } }))
+  await page.route('**/api/glossary/7', (route) => route.fulfill({ json: state.loggedIn ? { ...glossary(), is_favorite: state.saved[state.user] } : glossary() }))
+  await page.route('**/api/auth/logout', (route) => {
+    state.loggedIn = false
+    return route.fulfill({ status: 204 })
+  })
+  await page.route('**/api/auth/login', (route) => {
+    const email = (route.request().postDataJSON() as { email: string }).email
+    state.user = email.startsWith('a') ? 'a' : 'b'
+    state.loggedIn = true
+    return route.fulfill({ json: { user: { role: 'member', display_name: '같은이름' } } })
+  })
+  await page.route('**/api/favorites/7', async (route) => {
+    const body = route.request().postDataJSON() as { favorited: boolean }
+    state.bodies.push(body)
+    if (state.bodies.length === 1) return route.fulfill(await respondFirst(held.promise)) // 첫 요청(A)만 보류한다
+    state.saved[state.user] = body.favorited
+    return route.fulfill({ json: { term_id: 7, is_favorite: body.favorited } })
+  })
+  return state
+}
+
+// A가 즐겨찾기를 눌러 E08이 진행 중일 때 시트를 닫고 로그아웃한다. email이 있으면 그 계정으로 다시 로그인해 같은 노트로 돌아온다.
+async function leaveAccountA(page: Page, email?: string) {
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: /^내 계정/ }).click()
+  await page.getByRole('menuitem', { name: '로그아웃' }).click()
+  await expect(page).toHaveURL(/\/$/)
+  if (email) {
+    await goInAppQuiz(page, '/login')
+    await page.getByLabel('이메일').fill(email)
+    await page.getByLabel('비밀번호').fill('example-password')
+    await page.getByRole('button', { name: '로그인' }).click()
+    await expect(page).toHaveURL(/\/quiz$/)
+  }
+  await goInAppQuiz(page, '/notes/11')
+  await page.locator('[data-note-body]').waitFor()
+}
+
+async function startPendingFavoriteAsA(page: Page, state: Awaited<ReturnType<typeof setupFavoriteSwitch>>) {
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await favoriteOff(page).click()
+  await expect.poll(() => state.bodies.length).toBe(1) // A의 E08이 서버에 도착했고 응답만 보류 중이다
+}
+
+const aSucceeds = (held: Promise<void>) => held.then(() => ({ status: 200, json: { term_id: 7, is_favorite: true } }))
+const aFailsLoginRequired = (held: Promise<void>) => held.then(() => ({ status: 401, json: loginRequiredFailure().body }))
+
+test('MEG-166 AC-1 A의 E08 성공 응답을 보류하고 로그아웃해 방문자로 같은 용어를 열어도, 늦은 응답이 버튼을 켜거나 안내를 띄우지 않는다', async ({ page }) => {
+  const state = await setupFavoriteSwitch(page, aSucceeds)
+  await startPendingFavoriteAsA(page, state)
+  await leaveAccountA(page)
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+  state.release() // 늦게 도착한 A의 성공
+  await page.waitForTimeout(400)
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+  await expect(favoriteOn(page)).toHaveCount(0)
+  await expect(page.getByText('즐겨찾기에 저장했어요')).toHaveCount(0)
+  await expect(loginPromptSheet(page)).toHaveCount(0)
+})
+
+test('MEG-166 AC-2 A의 응답을 보류하고 B로 전환하면 B의 상태가 유지되고, B의 다음 클릭은 B의 현재 상태에 맞는 요청을 보낸다', async ({ page }) => {
+  const state = await setupFavoriteSwitch(page, aSucceeds)
+  await startPendingFavoriteAsA(page, state)
+  await leaveAccountA(page, 'b@example.test')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+  expect(await favoriteOff(page).getAttribute('aria-disabled')).not.toBe('true') // A의 진행 중 요청 때문에 막히지 않는다
+  state.release()
+  await page.waitForTimeout(400)
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false') // B의 E06 상태 그대로
+  await expect(favoriteOn(page)).toHaveCount(0)
+  await favoriteOff(page).click() // B의 현재 상태(꺼짐)에 맞는 요청: 켜기
+  await expect(favoriteOn(page)).toBeVisible()
+  expect(state.bodies).toEqual([{ favorited: true }, { favorited: true }])
+  expect(state.saved.b).toBe(true)
+})
+
+test('MEG-166 AC-3 세션 전환 전 시작한 실패 응답(401 login_required)은 현재 화면에 로그인 안내·오류를 띄우거나 요청 상태를 막지 않는다', async ({ page }) => {
+  const state = await setupFavoriteSwitch(page, aFailsLoginRequired)
+  await startPendingFavoriteAsA(page, state)
+  await leaveAccountA(page)
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  expect(await favoriteOff(page).getAttribute('aria-disabled')).not.toBe('true') // 응답이 도착하기 전에도 A의 진행 중 요청으로 막히지 않는다
+  state.release() // 늦게 도착한 A의 401
+  await page.waitForTimeout(400)
+  await expect(loginPromptSheet(page)).toHaveCount(0)
+  await expect(termSheet(page)).toBeVisible() // 용어 시트가 닫히지 않는다
+  await expect(termSheet(page).getByRole('alert')).toHaveCount(0)
+  expect(await favoriteOff(page).getAttribute('aria-disabled')).not.toBe('true')
+})
+
+test('MEG-166 같은 계정이라도 로그아웃 후 다시 로그인하면 이전 요청을 이어받지 않고 E06의 값으로 맞춘다', async ({ page }) => {
+  const state = await setupFavoriteSwitch(page, aSucceeds)
+  await startPendingFavoriteAsA(page, state)
+  await leaveAccountA(page, 'a@example.test')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false') // E06은 저장 전 상태(꺼짐)다
+  expect(await favoriteOff(page).getAttribute('aria-disabled')).not.toBe('true')
+  state.release()
+  await page.waitForTimeout(400)
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false') // 이전 세션의 응답으로 바뀌지 않는다
+})

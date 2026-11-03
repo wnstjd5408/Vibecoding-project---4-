@@ -59,21 +59,23 @@ function NoteList() {
   }
 
   return <div className={styles.page}>
-    <AppHeader title="CS 학습 노트" actions={<>
+    <AppHeader title="CS 학습 노트" wide actions={<>
       {auth.role === 'operator' && <Link className={styles.link} to={operatorPaths.home}>운영자 메뉴</Link>}
       {auth.role === 'visitor'
         ? <LinkButton to={userPaths.login}>로그인</LinkButton>
         : <AccountMenu />}
     </>} />
-    <main>
+    <main className={styles.main}>
       <h1 className={styles.heading}>과목</h1>
-      <div className={styles.filters} role="group" aria-label="과목 선택">
-        <Chip selected={!subject} onClick={() => selectSubject()}>전체</Chip>
-        {subjects.map((item) => <Chip key={item.id} selected={subject === String(item.id)} onClick={() => selectSubject(item.id)}>{item.name}</Chip>)}
+      <div className={styles.toolbar}>
+        <div className={styles.filters} role="group" aria-label="과목 선택">
+          <Chip selected={!subject} onClick={() => selectSubject()}>전체</Chip>
+          {subjects.map((item) => <Chip key={item.id} selected={subject === String(item.id)} onClick={() => selectSubject(item.id)}>{item.name}</Chip>)}
+        </div>
+        <div className={styles.quiz}>{auth.role === 'visitor'
+          ? <button type="button" className={styles.linkButton} onClick={() => openLoginPrompt({ body: LOGIN_PROMPT_MESSAGES.quizBody })}>오늘의 퀴즈</button>
+          : <Link className={styles.link} to={userPaths.quiz}>오늘의 퀴즈</Link>}</div>
       </div>
-      <div className={styles.quiz}>{auth.role === 'visitor'
-        ? <button type="button" className={styles.linkButton} onClick={() => openLoginPrompt({ body: LOGIN_PROMPT_MESSAGES.quizBody })}>오늘의 퀴즈</button>
-        : <Link className={styles.link} to={userPaths.quiz}>오늘의 퀴즈</Link>}</div>
       <section className={styles.notes} aria-label="노트 목록" aria-busy={!current}>
         {!current ? <div className={styles.message}><StateMessage kind="loading" title="노트를 불러오는 중이에요" headingLevel={2} /></div>
           : 'error' in current ? <div className={styles.message}><StateMessage kind="error" title={current.error} headingLevel={2}

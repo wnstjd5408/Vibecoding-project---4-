@@ -1,8 +1,12 @@
 # 개발 가이드 (팀원용)
 
+실제 로컬 DB와 앱 실행은 [Docker Compose 공통 안내](docs/local-compose-guide.md)를 따른다. 기존 Supabase·합성 데이터를 재사용하며 앱 종료와 데이터 초기화를 구분한다.
+
 Claude Code로 바이브코딩하는 팀원을 위한 안내다. 사람과 Claude가 같이 읽는다. Claude에게 작업을 맡길 때는 이 파일과 [AGENTS.md](AGENTS.md)를 따르게 한다. 두 문서가 다르면 AGENTS.md가 우선하고 아래 "계정" 절의 예외만 이 파일을 따른다.
 
 ## 처음 한 번 (약 30분)
+
+앱과 실제 DB까지 실행할 때는 [프런트·백엔드 공통 로컬 가이드](docs/backend-local-guide.md)를 따른다. Docker 기반 로컬 Supabase, 합성 데이터, FastAPI·React 연결과 계정 발급 검증을 안내한다. `/api/health`나 mock 응답만 확인한 것은 DB/Auth 검증 완료가 아니다. 각자 전용 폴더에서 진행하고 실행 환경·기준 커밋·통과/미검증 결과를 담당 티켓에 남긴다.
 
 1. [README.md](README.md)의 "필요한 도구"와 "설정" 1~3단계를 끝낸다. 커밋 이메일은 GitHub noreply 주소를 쓴다(공개 저장소).
 2. 저장소 초대를 받는다. 권한은 Write다. 관리자(Admin) 권한이 보이면 리뷰어(저장소 관리자)에게 Write로 낮춰 달라고 한다. Claude가 이 계정으로 커밋하므로 관리자 권한은 두지 않는다.

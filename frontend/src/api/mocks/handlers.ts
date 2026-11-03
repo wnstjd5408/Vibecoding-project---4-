@@ -1,12 +1,13 @@
 // 가짜 응답을 한곳에 모았다. API spec v0.2 3절 예시와 2.2절 응답 모양을 따르고, 값은 모두 합성이다.
 // 실제 API가 생기면 해당 엔드포인트의 항목만 지우거나 apiSource를 real로 두면 된다.
-import type { ApiErrorBody, NoteListResponse } from '../types.ts'
+import type { ApiErrorBody, FieldError, NoteListResponse } from '../types.ts'
 import { getMockSession, setMockSession } from './session.ts'
 
+import { adminReportRoutes } from './adminReportMocks.ts'
 export type MockRequest = { method: string; path: string; query: URLSearchParams; body: unknown }
 export type MockResponse = { status: number; body?: unknown }
 
-type Route = {
+export type Route = {
   method: string
   pattern: RegExp
   handle: (request: MockRequest, params: string[]) => MockResponse
@@ -102,7 +103,20 @@ const RICH_NOTE = {
   glossary_spans: spansOf(RICH_BODY, 'ExampleTerm', 7),
 }
 
+// E24로 이 세션에서 발급한 이메일. 같은 이메일을 다시 발급하면 409 email_exists를 시험할 수 있게 둔다(새로 고치면 사라진다).
+const issuedEmails = new Set<string>()
+
+// fields[].reason별 고정 문구(API spec 1.4.3, backend/app/errors.py FIELD_MESSAGES와 같다). 화면은 이 문구가 아니라 reason으로 분기한다.
+const FIELD_MESSAGES: Record<string, string> = {
+  required: 'Value is required',
+  too_long: 'Value is too long',
+  out_of_range: 'Value is out of range',
+  invalid_format: 'Value format is invalid',
+  invalid_value: 'Value is not allowed or refers to a missing item',
+}
+
 const routes: Route[] = [
+  ...adminReportRoutes,
   // 백엔드 상태 확인. 개발 서버 프록시가 실제 백엔드의 /health로 이어 주는 경로와 같은 모양이다.
   { method: 'GET', pattern: /^\/api\/health$/, handle: () => ({ status: 200, body: { status: 'ok' } }) },
   // E01 로그인. 맞지 않으면 사유를 구분하지 않고 401 invalid_credentials다.
@@ -293,6 +307,39 @@ const routes: Route[] = [
       if (termId !== '7') return notFound()
       favoriteTerm7 = Boolean((body as { favorited?: boolean } | undefined)?.favorited)
       return { status: 200, body: { term_id: 7, is_favorite: favoriteTerm7 } }
+    },
+  },
+  // E24 계정 발급(POST /api/admin/users, 운영자만). 요청 본문은 백엔드 CreateAccountRequest와 같다: { email, display_name, initial_password }(모르는 필드는 422).
+  // 이미 있는 이메일은 409 conflict(detail email_exists), 값이 잘못되면 422 validation_failed와 fields[]다. 새로 만든 계정은 일반 사용자(member)다.
+  {
+    method: 'POST',
+    pattern: /^\/api\/admin\/users$/,
+    handle: ({ body }) => {
+      const denied = operatorOnly()
+      if (denied) return denied
+      const input = (body ?? {}) as Record<string, unknown>
+      const { email, display_name: displayName, initial_password: password } = input
+      const fields: FieldError[] = []
+      const bad = (name: string, reason: string) => fields.push({ name, reason, message: FIELD_MESSAGES[reason] })
+      for (const name of Object.keys(input)) {
+        if (!['email', 'display_name', 'initial_password'].includes(name)) bad(name, 'invalid_format')
+      }
+      if (typeof email !== 'string' || email.trim() === '') bad('email', 'required')
+      else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) bad('email', 'invalid_format')
+      if (typeof displayName !== 'string' || displayName.trim() === '') bad('display_name', 'required')
+      else if (displayName.trim().length > 100) bad('display_name', 'too_long')
+      if (typeof password !== 'string' || password === '') bad('initial_password', 'required')
+      else if (new TextEncoder().encode(password).length > 72) bad('initial_password', 'too_long')
+      if (fields.length > 0) {
+        const error: ApiErrorBody = { error: { code: 'validation_failed', message: 'One or more fields are invalid', request_id: 'r-mock-0001', fields } }
+        return { status: 422, body: error }
+      }
+      const normalized = (email as string).trim().toLowerCase()
+      if (normalized in ACCOUNTS || issuedEmails.has(normalized)) {
+        return mockError(409, 'conflict', 'An account with this email already exists', 'email_exists')
+      }
+      issuedEmails.add(normalized)
+      return { status: 201, body: { user: { email: normalized, display_name: (displayName as string).trim(), role: 'member' } } }
     },
   },
 ]
