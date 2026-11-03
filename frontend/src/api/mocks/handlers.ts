@@ -1,8 +1,8 @@
 // 가짜 응답을 한곳에 모았다. API spec v0.2 3절 예시와 2.2절 응답 모양을 따르고, 값은 모두 합성이다.
 // 실제 API가 생기면 해당 엔드포인트의 항목만 지우거나 apiSource를 real로 두면 된다.
-import type { ApiErrorBody } from '../types.ts'
-import { adminNoteRoutes, readNoteForMock, readNoteList } from './adminNoteMocks.ts'
+import type { ApiErrorBody, NoteListResponse } from '../types.ts'
 import { getMockSession, setMockSession } from './session.ts'
+import { adminNoteRoutes, readNoteForMock, readNoteList } from './adminNoteMocks.ts'
 
 export type MockRequest = { method: string; path: string; query: URLSearchParams; body: unknown }
 export type MockResponse = { status: number; body?: unknown }
@@ -102,9 +102,9 @@ const RICH_NOTE = {
 }
 
 const routes: Route[] = [
-  ...adminNoteRoutes,
   // 백엔드 상태 확인. 개발 서버 프록시가 실제 백엔드의 /health로 이어 주는 경로와 같은 모양이다.
   { method: 'GET', pattern: /^\/api\/health$/, handle: () => ({ status: 200, body: { status: 'ok' } }) },
+  ...adminNoteRoutes,
   // E01 로그인. 맞지 않으면 사유를 구분하지 않고 401 invalid_credentials다.
   {
     method: 'POST',
@@ -144,7 +144,10 @@ const routes: Route[] = [
     method: 'GET',
     pattern: /^\/api\/notes$/,
     // 운영자 노트 화면(E16~E18 가짜 응답)에서 만들거나 고친 노트가 목록에도 보이도록 그 저장소의 내용을 준다.
-    handle: ({ query }) => ({ status: 200, body: readNoteList(query.get('subject_id')) }),
+    handle: ({ query }) => {
+      const body: NoteListResponse = readNoteList(query.get('subject_id'))
+      return { status: 200, body }
+    },
   },
   // E05 노트 읽기. 예시 1의 노트 11과, 마크다운 문법·이모지가 섞인 시험용 노트 12만 있다.
   {
