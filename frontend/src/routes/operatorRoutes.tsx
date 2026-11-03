@@ -1,4 +1,5 @@
 import AccountsPage from '../operator/accounts/AccountsPage.tsx'
+import OperatorMyInfoPage from '../operator/OperatorMyInfoPage.tsx'
 import type { RouteObject } from 'react-router'
 import Placeholder from '../pages/Placeholder.tsx'
 import { operatorPaths } from './paths.ts'
@@ -21,5 +22,9 @@ export const operatorRoutes: RouteObject[] = [
   {
     path: operatorPaths.accounts,
     element: <AccountsPage />,
+  },
+  {
+    path: operatorPaths.myInfo,
+    element: <OperatorMyInfoPage />,
   },
 ]
