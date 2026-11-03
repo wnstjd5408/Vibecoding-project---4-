@@ -2382,3 +2382,176 @@ test('box의 첫 글자가 색 이름이 아니면 그룹 이름을 그대로 �
   await expect(diagram(page)).toBeVisible()
   expect(await shownText(page)).toContain('BackendTeam')
 })
+
+// ---- MEG-144 PC 사이드 패널(1024px 이상). 용어가 둘인 긴 노트와 합성 HTTP 응답으로 실제 fetch 경로를 시험한다. ----
+// 실제 백엔드의 E06·E08·E09와 실제 Windows 브라우저(Edge·Chrome) 대조(AC-6)는 확인하지 못한다.
+const PC_VIEWPORT = { width: 1280, height: 800 }
+const FILLER = Array.from({ length: 40 }, (_, index) => `긴 본문의 ${index + 1}번째 문단입니다. 스크롤해도 헤더와 패널의 위치가 유지되는지 보려고 길게 이어 씁니다.`).join('\n\n')
+const TWO_TERMS_BODY = `앞 ExampleTerm 중간 SecondTerm 뒤\n\n${FILLER}`
+const twoTermsNote = {
+  id: 11, revision: 1, title: '두 용어 노트', studied_on: null, subjects: [], sources: [], images: {},
+  body_markdown: TWO_TERMS_BODY,
+  glossary_terms: [{ term_id: 7, key: 'exampleterm', label: 'ExampleTerm' }, { term_id: 8, key: 'secondterm', label: 'SecondTerm' }],
+  glossary_spans: [
+    { term_id: 7, start: TWO_TERMS_BODY.indexOf('ExampleTerm'), end: TWO_TERMS_BODY.indexOf('ExampleTerm') + 'ExampleTerm'.length },
+    { term_id: 8, start: TWO_TERMS_BODY.indexOf('SecondTerm'), end: TWO_TERMS_BODY.indexOf('SecondTerm') + 'SecondTerm'.length },
+  ],
+}
+
+async function setupPcTerms(page: Page, options: { favoriteStatus?: number } = {}) {
+  const calls = { glossary7: 0, glossary8: 0, favorites: 0, views: 0 }
+  await page.route('**/api/me', (route) => route.fulfill({ json: { authenticated: true, role: 'member', display_name: '합성 사용자' } }))
+  await page.route('**/api/notes/11', (route) => route.fulfill({ json: twoTermsNote }))
+  await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
+  await page.route('**/api/glossary/7', (route) => {
+    calls.glossary7 += 1
+    return route.fulfill({ json: { ...glossary(), is_favorite: false } })
+  })
+  await page.route('**/api/glossary/8', (route) => {
+    calls.glossary8 += 1
+    return route.fulfill({ json: { term: { id: 8, key: 'secondterm', label: 'SecondTerm' }, body_markdown: '둘째 용어의 합성 설명입니다.', images: [], is_favorite: false } })
+  })
+  await page.route('**/api/term-views', (route) => {
+    calls.views += 1
+    return route.fulfill({ json: { recorded: true } })
+  })
+  await page.route('**/api/favorites/7', (route) => {
+    calls.favorites += 1
+    if (options.favoriteStatus && options.favoriteStatus !== 200) return route.fulfill(serverError(options.favoriteStatus))
+    return route.fulfill({ json: { term_id: 7, is_favorite: true } })
+  })
+  return calls
+}
+
+const firstTerm = (page: Page) => page.getByRole('link', { name: 'ExampleTerm' })
+const secondTerm = (page: Page) => page.getByRole('link', { name: 'SecondTerm' })
+const firstPanel = (page: Page) => page.getByRole('dialog', { name: 'ExampleTerm' })
+const secondPanel = (page: Page) => page.getByRole('dialog', { name: 'SecondTerm' })
+
+test.describe('PC 폭 패널(실제 fetch 경로)', () => {
+  test.use({ viewport: PC_VIEWPORT })
+
+  test('AC-3 열린 패널에서 다른 용어를 누르면 내용만 바뀌고 포커스는 누른 링크에 남으며, 닫으면 마지막 링크로 돌아간다', async ({ page }) => {
+    const calls = await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page)).toBeVisible()
+    await expect(firstPanel(page).getByRole('heading', { name: 'ExampleTerm' })).toBeFocused() // 처음 열 때만 제목으로
+    await secondTerm(page).click()
+    await expect(secondPanel(page)).toBeVisible()
+    await expect(page.getByRole('dialog')).toHaveCount(1) // 패널은 하나이고 내용만 바뀐다
+    await expect(secondPanel(page).getByText('둘째 용어의 합성 설명입니다.')).toBeVisible()
+    await expect(secondTerm(page)).toBeFocused() // 제목으로 다시 옮기지 않는다
+    await expect(secondTerm(page)).toHaveAttribute('aria-expanded', 'true')
+    await expect(firstTerm(page)).toHaveAttribute('aria-expanded', 'false')
+    expect(calls.glossary8).toBeGreaterThan(0) // 둘째 용어의 설명을 받았다(개발 모드의 StrictMode가 효과를 두 번 실행하므로 횟수는 단정하지 않는다)
+    await page.keyboard.press('Escape')
+    await expect(secondPanel(page)).toBeHidden()
+    await expect(secondTerm(page)).toBeFocused() // 마지막으로 누른 링크
+    await expect(secondTerm(page)).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  test('AC-4 패널 안 즐겨찾기 성공은 눌림과 안내로 보인다', async ({ page }) => {
+    await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await firstPanel(page).getByRole('button', { name: '즐겨찾기', exact: true }).click()
+    await expect(firstPanel(page).getByRole('button', { name: '즐겨찾기함' })).toBeVisible()
+    await expect(firstPanel(page).getByRole('status').filter({ hasText: '즐겨찾기에 저장했어요' })).toHaveCount(1)
+  })
+
+  test('AC-4 즐겨찾기 저장이 실패하면 패널 안에 오류 안내가 보이고 눌림 상태는 그대로다', async ({ page }) => {
+    await setupPcTerms(page, { favoriteStatus: 500 })
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await firstPanel(page).getByRole('button', { name: '즐겨찾기', exact: true }).click()
+    await expect(firstPanel(page).getByRole('alert')).toContainText('즐겨찾기를 저장하지 못했어요')
+    await expect(firstPanel(page).getByRole('button', { name: '즐겨찾기', exact: true })).toBeVisible()
+    await expect(firstPanel(page)).toBeVisible()
+  })
+
+  test('AC-7 스크롤해도 헤더는 위에 남고 패널은 헤더 아래에 붙으며, 패널이 열린 채 본문이 스크롤된다', async ({ page }) => {
+    await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page)).toBeVisible()
+    await page.evaluate(() => window.scrollTo(0, 900))
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(300) // 본문 스크롤이 잠겨 있지 않다
+    const header = await page.getByRole('banner').boundingBox()
+    const sheet = await firstPanel(page).boundingBox()
+    expect(Math.round(header?.y ?? -1)).toBe(0) // 헤더는 화면 위에 그대로
+    expect(Math.round(sheet?.y ?? -1)).toBe(Math.round((header?.y ?? 0) + (header?.height ?? 0))) // 패널은 헤더 바로 아래에 붙어 빈 띠가 없다
+    expect(Math.round((sheet?.y ?? 0) + (sheet?.height ?? 0))).toBe(PC_VIEWPORT.height)
+    await expect(page.getByRole('banner').getByRole('link', { name: '목록' })).toBeVisible()
+  })
+
+  test('기록: 패널이 열린 채 창 폭을 1024px 아래로 줄이면 같은 용어가 바텀시트로 바뀌어 열려 있고, 다시 넓히면 패널로 돌아온다', async ({ page }) => {
+    await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page)).toBeVisible()
+    expect(await firstPanel(page).evaluate((element) => element.matches(':modal'))).toBe(false)
+    const isModal = () => firstPanel(page).evaluate((element) => element.matches(':modal'))
+    await page.setViewportSize({ width: 800, height: 800 })
+    await expect(firstPanel(page)).toBeVisible() // 열림 상태는 유지된다(내용은 새로 그려진다)
+    await expect.poll(isModal).toBe(true) // 창 크기 변화를 React가 반영할 때까지 기다린다
+    await page.setViewportSize(PC_VIEWPORT)
+    await expect(firstPanel(page)).toBeVisible()
+    await expect.poll(isModal).toBe(false)
+  })
+
+  test('기록: 1024px에서도 본문이 패널에 가려지지 않는다(공간이 모자라 본문 열이 줄어든다)', async ({ page }) => {
+    await setupPcTerms(page)
+    await page.setViewportSize({ width: 1024, height: 800 })
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page)).toBeVisible()
+    const article = await page.locator('article').boundingBox()
+    const sheet = await firstPanel(page).boundingBox()
+    expect((article?.x ?? 0) + (article?.width ?? 0)).toBeLessThanOrEqual(sheet?.x ?? 0)
+    expect(Math.round(article?.width ?? 0)).toBeLessThan(720)
+    expect(Math.round(article?.width ?? 0)).toBeGreaterThan(300)
+  })
+})
+
+// 독립 검토 반영: 창 폭이 1024px 경계를 넘어도 열린 패널의 내용을 다시 부르지 않는다(AI 설명은 호출 한도·비용이 걸려 있다).
+test.describe('PC 폭 패널: 창 폭 전환 중 요청', () => {
+  test.use({ viewport: PC_VIEWPORT })
+
+  test('열린 용어 패널은 창 폭이 경계를 넘어도 E06·E07을 다시 부르지 않고 내용이 그대로다', async ({ page }) => {
+    const calls = await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    await expect.poll(() => calls.views).toBeGreaterThan(0)
+    const before = { glossary: calls.glossary7, views: calls.views }
+    const isModal = () => firstPanel(page).evaluate((element) => element.matches(':modal'))
+    await page.setViewportSize({ width: 800, height: 800 })
+    await expect.poll(isModal).toBe(true)
+    await expect(firstPanel(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    await page.setViewportSize(PC_VIEWPORT)
+    await expect.poll(isModal).toBe(false)
+    await expect(firstPanel(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    await page.waitForTimeout(300)
+    expect({ glossary: calls.glossary7, views: calls.views }).toEqual(before) // 요청이 늘지 않았다
+  })
+
+  test('열린 AI 설명 패널은 창 폭이 경계를 넘어도 E09를 다시 부르지 않는다', async ({ page }) => {
+    const { calls } = await setupAi(page, { member: true })
+    await page.goto('/notes/31')
+    await askAi(page)
+    const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+    await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+    const before = calls.length
+    expect(before).toBeGreaterThan(0)
+    const isModal = () => sheet.evaluate((element) => element.matches(':modal'))
+    await page.setViewportSize({ width: 800, height: 800 })
+    await expect.poll(isModal).toBe(true)
+    await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+    await page.setViewportSize(PC_VIEWPORT)
+    await expect.poll(isModal).toBe(false)
+    await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+    await page.waitForTimeout(300)
+    expect(calls).toHaveLength(before) // E09 요청이 늘지 않았다
+  })
+})

@@ -824,3 +824,131 @@ def test_store_ai_explanation_sends_p_arguments_and_strips_the_out_prefix():
     assert result == {"outcome": "stored", "term_id": 5, "explanation_id": 8, "body": "설명", "review_status": "pending"}
     assert seen["path"] == "/rest/v1/rpc/ai_store_explanation"
     assert b'"p_note_id":1' in seen["json"] and b'"p_term_key":"k"' in seen["json"]
+
+
+# --- E10(MEG-88)이 쓰는 대상 확인과 신고 저장 ---
+
+DUP = {"code": "23505", "message": 'duplicate key value violates unique constraint "reports_open_ai_explanation_idx"'}
+FK = {"code": "23503", "message": 'insert or update on table "reports" violates foreign key constraint "reports_ai_explanation_id_fkey"'}
+
+
+def test_report_target_check_for_an_explanation_requires_it_to_be_valid_and_for_a_quiz_item_to_be_mine():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, dict(request.url.params)))
+        return httpx.Response(200, json=[{"id": 1}])
+
+    client = client_with(handler)
+    assert client.report_target_exists("ai_explanation", 31, USER_ID) is True
+    assert client.report_target_exists("quiz_item", 41, USER_ID) is True
+
+    assert seen[0] == ("/rest/v1/ai_explanations", {"id": "eq.31", "invalidated_at": "is.null", "select": "id", "limit": "1"})
+    assert seen[1][0] == "/rest/v1/quiz_items"
+    assert seen[1][1]["id"] == "eq.41" and seen[1][1]["quiz_sets.user_id"] == f"eq.{USER_ID}"
+    assert "quiz_sets!inner(user_id)" in seen[1][1]["select"]
+    assert client_with(lambda r: httpx.Response(200, json=[])).report_target_exists("quiz_item", 41, USER_ID) is False
+    with pytest.raises(ValueError):
+        client.report_target_exists("note", 1, USER_ID)
+
+
+def test_create_report_returns_the_new_row_as_created():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"], seen["path"], seen["params"] = request.method, request.url.path, dict(request.url.params)
+        seen["body"], seen["prefer"] = request.read(), request.headers["prefer"]
+        return httpx.Response(201, json=[{"id": 5, "status": "open"}])
+
+    row, created = client_with(handler).create_report(USER_ID, "quiz_item", 41, "합성")
+
+    assert (row, created) == ({"id": 5, "status": "open"}, True)
+    assert (seen["method"], seen["path"], seen["prefer"]) == ("POST", "/rest/v1/reports", "return=representation")
+    assert seen["params"] == {"select": "id,status"}
+    assert b'"quiz_item_id":41' in seen["body"] and b"ai_explanation_id" not in seen["body"]
+
+
+def test_create_report_reads_the_existing_open_report_when_the_open_unique_index_rejects_the_insert():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, dict(request.url.params)))
+        if request.method == "POST":
+            return httpx.Response(409, json=DUP)
+        return httpx.Response(200, json=[{"id": 5, "status": "open"}])
+
+    row, created = client_with(handler).create_report(USER_ID, "ai_explanation", 31, "x")
+
+    assert (row, created) == ({"id": 5, "status": "open"}, False)
+    assert calls[1][1] == {"user_id": f"eq.{USER_ID}", "ai_explanation_id": "eq.31", "status": "eq.open",
+                           "select": "id,status", "limit": "1"}
+
+
+def test_create_report_retries_once_when_the_conflicting_report_was_resolved_in_between():
+    posts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts.append(1)
+            return httpx.Response(409, json=DUP) if len(posts) == 1 else httpx.Response(201, json=[{"id": 6, "status": "open"}])
+        return httpx.Response(200, json=[])
+
+    row, created = client_with(handler).create_report(USER_ID, "ai_explanation", 31, "x")
+
+    assert (row["id"], created, len(posts)) == (6, True, 2)
+
+
+def test_create_report_without_a_live_target_is_none_and_other_rejections_are_config_errors():
+    assert client_with(lambda r: httpx.Response(409, json=FK)).create_report(USER_ID, "ai_explanation", 31, "x") is None
+    # 사용자 쪽 외래 키나 알 수 없는 제약은 대상 없음이 아니라 설정 오류(500)다
+    user_fk = {"code": "23503", "message": 'violates foreign key constraint "reports_user_id_fkey"'}
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(409, json=user_fk)).create_report(USER_ID, "ai_explanation", 31, "x")
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(400, json={"code": "23514", "message": "check"})).create_report(
+            USER_ID, "ai_explanation", 31, "x")
+    with pytest.raises(SupabaseUnavailable):
+        client_with(lambda r: httpx.Response(503)).create_report(USER_ID, "ai_explanation", 31, "x")
+
+
+QUIZ_DUP = {"code": "23505", "message": 'duplicate key value violates unique constraint "reports_open_quiz_item_idx"'}
+QUIZ_FK = {"code": "23503", "message": 'violates foreign key constraint "reports_quiz_item_id_fkey"'}
+
+
+def test_create_report_for_a_quiz_item_uses_the_quiz_item_column_everywhere():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, dict(request.url.params)))
+        if request.method == "POST":
+            return httpx.Response(409, json=QUIZ_DUP)
+        return httpx.Response(200, json=[{"id": 8, "status": "open"}])
+
+    row, created = client_with(handler).create_report(USER_ID, "quiz_item", 41, "x")
+
+    assert (row["id"], created) == (8, False)
+    assert calls[1][1]["quiz_item_id"] == "eq.41" and "ai_explanation_id" not in calls[1][1]
+    assert client_with(lambda r: httpx.Response(409, json=QUIZ_FK)).create_report(USER_ID, "quiz_item", 41, "x") is None
+
+
+@pytest.mark.parametrize(
+    ("target_type", "error"),
+    [
+        # 열이 엇갈린 제약, 열린 신고가 아닌 유일 제약은 대상 없음·중복이 아니라 설정 오류다
+        ("quiz_item", FK),
+        ("ai_explanation", QUIZ_FK),
+        ("ai_explanation", {"code": "23505", "message": 'duplicate key value violates unique constraint "reports_pkey"'}),
+    ],
+    ids=["fk-of-another-column", "fk-of-the-other-target", "other-unique-constraint"],
+)
+def test_create_report_does_not_misread_other_constraint_violations(target_type, error):
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(409, json=error)).create_report(USER_ID, target_type, 31, "x")
+
+
+def test_create_report_that_conflicts_twice_without_an_open_report_is_a_503_not_a_config_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json=DUP) if request.method == "POST" else httpx.Response(200, json=[])
+
+    with pytest.raises(SupabaseUnavailable):
+        client_with(handler).create_report(USER_ID, "ai_explanation", 31, "x")
