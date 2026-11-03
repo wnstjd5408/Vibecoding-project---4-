@@ -22,8 +22,12 @@ type Context = {
   images: NoteReadResponse['images']
   // 불러오지 못해 글자로 대신 보이는 이미지 토큰
   brokenImages: ReadonlySet<string>
-  onTerm: (termId: number) => void
+  // 용어를 눌렀을 때 부른다. 누른 링크를 함께 넘겨, 패널을 닫을 때 그 링크로 포커스를 돌려줄 수 있게 한다.
+  onTerm: (termId: number, link: HTMLElement) => void
   onImageError: (token: string, failedUrl: string) => void
+  // PC 사이드 패널과 이을 때(aria-controls)와 지금 열린 용어(aria-expanded). 바텀시트(모바일)에서는 주지 않는다.
+  panelId?: string
+  expandedTermId?: number | null
 }
 
 type NoteBodyProps = {
@@ -31,8 +35,11 @@ type NoteBodyProps = {
   spans: NoteReadResponse['glossary_spans']
   images: NoteReadResponse['images']
   brokenImages: ReadonlySet<string>
-  onTerm: (termId: number) => void
+  onTerm: (termId: number, link: HTMLElement) => void
   onImageError: (token: string, failedUrl: string) => void
+  // PC 폭에서 용어 링크를 사이드 패널과 잇는다: 패널 id(aria-controls)와 지금 패널에 열린 용어(aria-expanded)
+  panelId?: string
+  expandedTermId?: number | null
   // 시트 안 설명처럼 작은 글자로 그린다. 노트 본문이 아니라서 선택 위치 계산 대상(data-note-body)에서 뺀다.
   compact?: boolean
 }
@@ -40,12 +47,12 @@ type NoteBodyProps = {
 // 노트 본문을 마크다운 구문 트리로 읽어 React 요소로 그린다. 본문은 HTML로 해석하지 않는다.
 // 본문 속 HTML은 글자 그대로 보이고, dangerouslySetInnerHTML은 쓰지 않는다.
 // 글자 조각마다 원문 위치를 data 속성으로 달아 두어(selection.ts) 드래그한 범위를 원문 위치로 바꿀 수 있다.
-export function NoteBody({ body, spans, images, brokenImages, onTerm, onImageError, compact = false }: NoteBodyProps) {
+export function NoteBody({ body, spans, images, brokenImages, onTerm, onImageError, panelId, expandedTermId, compact = false }: NoteBodyProps) {
   const tree = useMemo(() => fromMarkdown(body, {
     extensions: [gfmTable()], mdastExtensions: [gfmTableFromMarkdown()],
   }), [body])
   const prepared = useMemo(() => prepareSpans(body, spans), [body, spans])
-  const context: Context = { body, spans: prepared, images, brokenImages, onTerm, onImageError }
+  const context: Context = { body, spans: prepared, images, brokenImages, onTerm, onImageError, panelId, expandedTermId }
   return <div className={compact ? `${styles.body} ${styles.compact}` : styles.body} {...(compact ? {} : { 'data-note-body': '' })}>{blocks(tree, context)}</div>
 }
 
@@ -66,7 +73,8 @@ function segments(value: string, pieces: Piece[] | null, context: Context): Reac
     const termId = segment.termId
     return termId === undefined
       ? <span key={segment.srcStart} {...attrs}>{segment.text}</span>
-      : <TermLink key={segment.srcStart} href={`#term-${termId}`} data-term-id={termId} onClick={() => context.onTerm(termId)} {...attrs}>{segment.text}</TermLink>
+      : <TermLink key={segment.srcStart} href={`#term-${termId}`} data-term-id={termId} onClick={(event) => context.onTerm(termId, event.currentTarget)}
+          {...(context.panelId === undefined ? null : { 'aria-expanded': context.expandedTermId === termId, 'aria-controls': context.panelId })} {...attrs}>{segment.text}</TermLink>
   })
 }
 
