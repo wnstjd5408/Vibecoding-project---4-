@@ -7,9 +7,9 @@ import { isApiError } from '../../api/client.ts'
 import { AiBox, Button, LinkButton, StateMessage, TextField } from '../../components/index.ts'
 import { Badge } from '../../components/Badge.tsx'
 import { operatorPaths } from '../../routes/paths.ts'
-import { useOperatorGuard } from '../useOperatorGuard.ts'
+import { useOperatorApi } from '../useOperatorApi.ts'
 import { IMAGE_REJECTED_MESSAGE, IMAGE_TYPES, isAllowedImage } from './imageRules.ts'
-import { getReport, saveDictionaryEntry } from './reportsApi.ts'
+import { ImageNotSavedError, getReport, saveDictionaryEntry } from './reportsApi.ts'
 import type { Report } from './reportsApi.ts'
 import styles from './Reports.module.css'
 
@@ -17,6 +17,7 @@ import styles from './Reports.module.css'
 const MESSAGES = {
   required: '용어 이름과 바른 설명을 입력해 주세요.',
   saveFailed: '저장하지 못했어요. 잠시 뒤에 다시 시도해 주세요.',
+  imageNotSaved: '설명은 저장했지만 이미지를 올리지 못했어요. 같은 내용으로 다시 저장하면 이미지를 다시 올려요.',
   notice: '안내: 저장하면 이 용어는 사전 설명이 먼저 보이고 AI 설명은 무효가 돼요. 신고 상태는 신고 목록에서 따로 바꿔요.',
   saved: '사전 설명을 저장했어요.',
 } as const
@@ -25,7 +26,7 @@ type Load = { key: string; report: Report } | { key: string; state: 'notFound' |
 
 export default function CorrectReportPage() {
   const { reportId } = useParams()
-  const { onApiError } = useOperatorGuard()
+  const operatorFetch = useOperatorApi()
   const [attempt, setAttempt] = useState(0)
   const [load, setLoad] = useState<Load | null>(null)
 
@@ -35,17 +36,14 @@ export default function CorrectReportPage() {
   useEffect(() => {
     let live = true
     const loadKey = `${reportId}:${attempt}`
-    getReport(Number(reportId)).then(
+    getReport(operatorFetch, Number(reportId)).then(
       (report) => live && setLoad({ key: loadKey, report }),
-      (failure) => {
-        if (!live || onApiError(failure)) return
-        setLoad({ key: loadKey, state: isApiError(failure, 'not_found') ? 'notFound' : 'failed' })
-      },
+      (failure) => live && setLoad({ key: loadKey, state: isApiError(failure, 'not_found') ? 'notFound' : 'failed' }),
     )
     return () => {
       live = false
     }
-  }, [reportId, attempt, onApiError])
+  }, [reportId, attempt, operatorFetch])
 
   return (
     <main>
@@ -99,7 +97,7 @@ type Upload = { file: File; url: string }
 
 function CorrectForm({ report }: { report: Report }) {
   const navigate = useNavigate()
-  const { onApiError } = useOperatorGuard()
+  const operatorFetch = useOperatorApi()
   // 용어 이름은 신고된 용어로 채워 두고 고칠 수 있다(목업과 같다).
   const [label, setLabel] = useState(report.title)
   const [description, setDescription] = useState('')
@@ -141,11 +139,17 @@ function CorrectForm({ report }: { report: Report }) {
     setBusy(true)
     setError('')
     try {
-      await saveDictionaryEntry(report.id, { label: label.trim(), description: description.trim() }, upload?.file ?? null)
+      await saveDictionaryEntry(operatorFetch, { label: label.trim(), description: description.trim() }, upload?.file ?? null)
       navigate(operatorPaths.reports, { state: { notice: MESSAGES.saved } })
     } catch (failure) {
-      // 권한 오류면 로그인 상태를 다시 읽어 경로 보호가 화면을 내보낸다. 그 밖에는 저장하지 못했다고 알린다.
-      if (!onApiError(failure)) setError(MESSAGES.saveFailed)
+      // 권한 상실이면 operatorFetch가 로그인 상태를 다시 읽어 경로 보호가 화면을 내보낸다. 그 밖에는 저장하지 못했다고 알린다.
+      // 설명은 저장됐는데 이미지만 실패했으면 성공으로 보이지 않게 따로 알리고, 이미지가 서버 규칙에 걸렸으면 그 안내를 보인다.
+      if (failure instanceof ImageNotSavedError) {
+        const rejected = isApiError(failure.cause, 'payload_too_large') || isApiError(failure.cause, 'unsupported_media_type') || isApiError(failure.cause, 'validation_failed')
+        setError(rejected ? `${MESSAGES.imageNotSaved} ${IMAGE_REJECTED_MESSAGE}` : MESSAGES.imageNotSaved)
+      } else {
+        setError(MESSAGES.saveFailed)
+      }
       setBusy(false)
     }
   }

@@ -1,12 +1,13 @@
 // 가짜 응답을 한곳에 모았다. API spec v0.2 3절 예시와 2.2절 응답 모양을 따르고, 값은 모두 합성이다.
 // 실제 API가 생기면 해당 엔드포인트의 항목만 지우거나 apiSource를 real로 두면 된다.
 import type { ApiErrorBody, NoteListResponse } from '../types.ts'
+import { adminReportRoutes } from './adminReportMocks.ts'
 import { getMockSession, setMockSession } from './session.ts'
 
 export type MockRequest = { method: string; path: string; query: URLSearchParams; body: unknown }
 export type MockResponse = { status: number; body?: unknown }
 
-type Route = {
+export type Route = {
   method: string
   pattern: RegExp
   handle: (request: MockRequest, params: string[]) => MockResponse
@@ -101,6 +102,7 @@ const RICH_NOTE = {
 }
 
 const routes: Route[] = [
+  ...adminReportRoutes,
   // 백엔드 상태 확인. 개발 서버 프록시가 실제 백엔드의 /health로 이어 주는 경로와 같은 모양이다.
   { method: 'GET', pattern: /^\/api\/health$/, handle: () => ({ status: 200, body: { status: 'ok' } }) },
   // E01 로그인. 맞지 않으면 사유를 구분하지 않고 401 invalid_credentials다.

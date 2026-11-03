@@ -5,7 +5,7 @@ import { useLocation } from 'react-router'
 import { Button, LinkButton, StateMessage } from '../../components/index.ts'
 import { Badge } from '../../components/Badge.tsx'
 import { reportCorrectPath } from '../../routes/paths.ts'
-import { useOperatorGuard } from '../useOperatorGuard.ts'
+import { useOperatorApi } from '../useOperatorApi.ts'
 import { ResolveDialog } from './ResolveDialog.tsx'
 import { listReports, resolveReport } from './reportsApi.ts'
 import type { Report, ReportStatus } from './reportsApi.ts'
@@ -27,7 +27,7 @@ function readNotice(state: unknown): string {
 
 export default function ReportsPage() {
   const location = useLocation()
-  const { onApiError } = useOperatorGuard()
+  const operatorFetch = useOperatorApi()
   const [status, setStatus] = useState<ReportStatus>('open')
   const [attempt, setAttempt] = useState(0)
   const [result, setResult] = useState<Result | null>(null)
@@ -42,17 +42,15 @@ export default function ReportsPage() {
 
   useEffect(() => {
     let live = true
-    listReports(status).then(
+    // 권한 상실(401·403)이면 operatorFetch가 이미 로그인 상태를 다시 읽는다. 여기서는 일반 실패와 같이 다룬다.
+    listReports(operatorFetch, status).then(
       (reports) => live && setResult({ query: `${status}:${attempt}`, reports }),
-      (failure) => {
-        if (!live || onApiError(failure)) return
-        setResult({ query: `${status}:${attempt}`, failed: true })
-      },
+      () => live && setResult({ query: `${status}:${attempt}`, failed: true }),
     )
     return () => {
       live = false
     }
-  }, [status, attempt, onApiError])
+  }, [status, attempt, operatorFetch])
 
   function closeDialog() {
     setTarget(null)
@@ -64,14 +62,14 @@ export default function ReportsPage() {
     setBusy(true)
     setDialogError('')
     try {
-      await resolveReport(target.id, { invalidateExplanation })
+      await resolveReport(operatorFetch, target.id, { invalidateExplanation })
       // 처리한 신고는 이 목록(열림)에서 빠진다.
       setResult((old) => (old && 'reports' in old ? { ...old, reports: old.reports.filter((report) => report.id !== target.id) } : old))
       setNotice(MESSAGES.resolved)
       closeDialog()
-    } catch (failure) {
-      // 권한 오류면 로그인 상태를 다시 읽어 경로 보호가 화면을 내보낸다. 그 밖에는 창 안에서 알린다.
-      if (!onApiError(failure)) setDialogError(MESSAGES.resolveFailed)
+    } catch {
+      // 권한 상실이면 operatorFetch가 로그인 상태를 다시 읽어 경로 보호가 화면을 내보낸다. 그 밖에는 창 안에서 알린다.
+      setDialogError(MESSAGES.resolveFailed)
     }
     setBusy(false)
   }
