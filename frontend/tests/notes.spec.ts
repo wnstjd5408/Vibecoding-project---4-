@@ -5,6 +5,66 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { fromMarkdown } from 'mdast-util-from-markdown'
 
+test('강조 보정은 문서 전체의 코드·여러 줄 링크·이미지를 승인해도 거부한다', () => {
+  const cases = [
+    { body: '  \t**word **', type: 'code' },
+    { body: '[\n**word **\n](https://example.test)', type: 'link' },
+    { body: '![\n**word **\n](note-image:abc)', type: 'image' },
+    { body: '[\n**word **\n][ref]\n\n[ref]: https://example.test', type: 'linkReference' },
+    { body: '![\n**word **\n][ref]\n\n[ref]: note-image:abc', type: 'imageReference' },
+  ]
+  const backend = fileURLToPath(new URL('../../backend/', import.meta.url))
+  for (const fixture of cases) {
+    const types: string[] = []
+    function visit(node: { type: string; children?: typeof node[] }) { types.push(node.type); node.children?.forEach(visit) }
+    visit(fromMarkdown(fixture.body))
+    expect(types).toContain(fixture.type)
+    const result = JSON.parse(execFileSync('uv', ['run', '--no-sync', '--directory', backend, 'python', '-X', 'utf8', '-c',
+      'import json,sys; from scripts.emphasis_recovery import survey,reviewed_changes; p=survey([{"id":1,"revision":1,"body_markdown":json.load(sys.stdin)}]); cs=p["notes"][0]["candidates"]; rejected=0\nfor c in cs:\n try: reviewed_changes(p,[c["candidate_id"]])\n except ValueError: rejected+=1\nprint(json.dumps({"eligible":sum(c["eligible"] for c in cs),"count":len(cs),"rejected":rejected,"changes":reviewed_changes(p,[])}))'],
+    { input: JSON.stringify(fixture.body), encoding: 'utf8' }))
+    expect(result.count).toBeGreaterThan(0)
+    expect(result.eligible).toBe(0)
+    expect(result.rejected).toBe(result.count)
+    expect(result.changes).toEqual([])
+  }
+})
+
+for (const width of [390, 1280]) {
+  test(`강조 마이그레이션 전후 Mermaid·span·선택 위치 (${width}px)`, async ({ page }) => {
+    const backend = fileURLToPath(new URL('../../backend/', import.meta.url))
+    const result = JSON.parse(execFileSync('uv', ['run', '--no-sync', '--directory', backend, 'python', '-X', 'utf8', '-c',
+      'import json; from dataclasses import asdict; from scripts.emphasis_recovery import survey,reviewed_changes; from app.glossary_spans import find_spans; body="😀 **한글용어 **(Example)\\n\\n```mermaid\\ngraph LR; A-->B\\n```"; plan=survey([{"id":11,"revision":1,"body_markdown":body}]); ids=[c["candidate_id"] for c in plan["notes"][0]["candidates"] if c["eligible"]]; after=reviewed_changes(plan,ids)[0]["after"]; print(json.dumps({"before":body,"after":after,"spans":[asdict(s) for s in find_spans(after,[(1,"한글용어")])]}))'],
+    { encoding: 'utf8' }))
+    await setup(page)
+    await page.setViewportSize({ width, height: 844 })
+    let applied = false
+    await page.route('**/api/notes/11', route => route.fulfill({ json: {
+      id: 11, revision: applied ? 2 : 1, title: '합성 마이그레이션', studied_on: null, subjects: [], sources: [],
+      body_markdown: applied ? result.after : result.before, images: {}, glossary_terms: [], glossary_spans: applied ? result.spans : [],
+    } }))
+    await page.goto('/notes/11')
+    const root = page.locator('[data-note-body]')
+    await expect(root.locator('strong')).toHaveCount(0)
+    await expect(root).toContainText('**한글용어 **')
+    applied = true
+    await page.reload()
+    await expect(root.locator('strong')).toHaveText('한글용어')
+    await expect(root.locator('[data-term-id="1"]')).toHaveText('한글용어')
+    await expect(root.locator('img')).toHaveCount(1)
+    await expect.poll(() => root.locator('img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
+    const range = await root.evaluate(async element => {
+      const { sourceRangeOfSelection } = await import('/src/notes/selection.ts')
+      const selection = document.createRange()
+      selection.selectNodeContents(element.querySelector('[data-term-id="1"]')!)
+      return sourceRangeOfSelection(element, selection)
+    })
+    expect(range).not.toBeNull()
+    expect(result.after.slice(range!.start, range!.end)).toBe('한글용어')
+    expect([...result.after.slice(0, range!.start)].length).toBe(result.spans[0].start)
+    expect([...result.after.slice(0, range!.end)].length).toBe(result.spans[0].end)
+  })
+}
+
 for (const width of [390, 1280]) {
   test(`Notion 강조 공백 가져오기와 실제 span·선택 위치 (${width}px)`, async ({ page }) => {
     const backend = fileURLToPath(new URL('../../backend/', import.meta.url))
