@@ -361,6 +361,76 @@ class SupabaseClient:
         rows = self._select("notes", params)
         return rows[0] if rows else None
 
+    def get_admin_note(self, note_id: int) -> dict[str, Any] | None:
+        """E15 전용 허용 열. 가져오기 식별자·시각은 읽지 않는다."""
+        rows = self._select("notes", {
+            "id": f"eq.{int(note_id)}", "limit": "1",
+            "select": "id,revision,title,body_markdown,studied_on,study_minutes,importance,understanding,"
+                      "needs_review,memo,is_published,parent_note_id,created_at,updated_at,"
+                      "note_subjects(subjects(id,name)),note_sources(id,url,label),"
+                      "note_images(notion_block_id,storage_path,alt)",
+        })
+        return rows[0] if rows else None
+
+    def create_note(self, fields: dict[str, Any]) -> dict[str, Any]:
+        response = self._request(
+            "POST", "/rest/v1/notes", params={"select": "id,revision"}, json=fields,
+            headers={**self._headers(), "Prefer": "return=representation"},
+        )
+        if response.status_code != 201:
+            raise SupabaseConfigError(f"notes insert status {response.status_code}")
+        return response.json()[0]
+
+    def update_note(self, note_id: int, fields: dict[str, Any], expected_revision: int | None) -> dict[str, Any]:
+        result = self.rpc("note_update", {
+            "p_note_id": int(note_id), "p_fields": fields, "p_expected_revision": expected_revision,
+        })
+        if not isinstance(result, dict) or result.get("status") not in ("ok", "not_found", "stale_revision"):
+            raise SupabaseConfigError("unexpected note_update result")
+        return result
+
+    def _note_bucket(self) -> str:
+        bucket = self._note_image_bucket
+        if not bucket or not _BUCKET_SHAPE.fullmatch(bucket):
+            raise SupabaseConfigError("NOTE_IMAGE_BUCKET is not set or invalid")
+        return bucket
+
+    def delete_note(self, note_id: int) -> dict[str, Any]:
+        # 커밋 전에 설정을 확인한다. 삭제 작업이 잘못된 버킷으로 기록돼서는 안 된다.
+        result = self.rpc("note_delete", {"p_note_id": int(note_id), "p_bucket": self._note_bucket()})
+        if not isinstance(result, dict) or result.get("status") not in ("ok", "not_found"):
+            raise SupabaseConfigError("unexpected note_delete result")
+        return result
+
+    def retry_note_image_deletions(self) -> None:
+        """커밋 뒤 오래된 pending부터 최대 100개. 5회 실패하면 failed로 남겨 SQL 점검 대상으로 둔다.
+
+        노트 버킷만 처리한다. 사전 업로드 보상 작업을 건드리면 진행 중인 업로드를 지울 수 있다.
+        한 배치의 Storage 요청이 실패하면 그 배치의 각 작업에 실패 1회를 기록한다.
+        한도 5회는 기술 검토 4절의 초기 제안값이며 SQL 함수가 집행한다.
+        """
+        bucket = self._note_bucket()
+        jobs = self._select("storage_delete_jobs", {
+            "bucket": f"eq.{bucket}", "status": "eq.pending", "select": "id,object_path",
+            "order": "id.asc", "limit": "100",
+        })
+        if not jobs:
+            return
+        payload = {"p_job_ids": [int(job["id"]) for job in jobs], "p_bucket": bucket}
+        try:
+            response = self._request("DELETE", f"/storage/v1/object/{bucket}",
+                                     json={"prefixes": sorted({job["object_path"] for job in jobs})},
+                                     headers=self._headers())
+            if response.status_code != 200:
+                raise SupabaseConfigError(f"storage delete status {response.status_code}")
+        except (SupabaseUnavailable, SupabaseConfigError) as exc:
+            # 외부 응답·예외 원문에는 경로·비밀값이 있을 수 있어 고정 분류만 저장한다.
+            kind = "storage_unavailable" if isinstance(exc, SupabaseUnavailable) else "storage_rejected"
+            self.rpc("note_image_delete_result", {**payload, "p_error_kind": kind})
+            raise
+        # 성공 기록의 DB 오류를 Storage 실패로 세지 않는다. 다음 요청에서 멱등 삭제를 재시도한다.
+        self.rpc("note_image_delete_result", {**payload, "p_error_kind": None})
+
     def list_glossary_terms(self) -> list[dict[str, Any]]:
         """사전 용어(glossary_entries 행이 있는 terms, S8)의 id·key·label을 id 오름차순으로 전부 준다.
 
