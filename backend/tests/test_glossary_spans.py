@@ -428,3 +428,52 @@ def test_emphasis_pairing_with_the_rule_of_three_and_far_openers_stays_fast():
 
     assert time.perf_counter() - started < 3
     assert any(term == 1 for term, _ in cut(body, spans))
+
+
+# ---- MEG-143 후속(Dustin 리뷰 2026-11-03): 한 묶음이 닫는 쪽과 여는 쪽으로 나뉘어 쓰이는 경우 ----
+def test_adjacent_bold_then_italic_hides_the_remaining_opening_star():
+    # Notion에서 굵은 B 바로 뒤에 기울임 A를 가져오면 `**B***A*`가 된다. 가운데 `***`는 앞 2개로 굵게를 닫고 남은 1개로 기울임을 연다.
+    body = "**B***A*"
+    spans = find_spans(body, [(1, "*A"), (2, "A")])
+
+    assert cut(body, spans) == [(2, "A")]
+    assert [(span.start, span.end) for span in spans] == [(6, 7)]
+
+
+def test_adjacent_italic_then_bold_does_not_match_a_star_prefixed_term():
+    body = "*A***B**"
+
+    assert cut(body, find_spans(body, [(1, "*B"), (2, "B")])) == [(2, "B")]
+
+
+def test_notion_import_of_adjacent_bold_and_italic_matches_the_plain_term():
+    page = "00000000-0000-4000-8000-000000000001"
+    tree = {page: [
+        {"id": "00000000-0000-4000-8000-000000000002", "type": "paragraph", "paragraph": {"rich_text": [
+            {"plain_text": "B", "annotations": {"bold": True}}, {"plain_text": "A", "annotations": {"italic": True}}]}},
+    ]}
+    notion = Mock()
+    notion.children.side_effect = lambda block_id: tree[block_id]
+    body = convert(notion, page).markdown
+
+    assert body == "**B***A*"
+    assert cut(body, find_spans(body, [(1, "*A"), (2, "A")])) == [(2, "A")]
+
+
+@pytest.mark.parametrize(
+    "source,delimiters",
+    [
+        # 실제 파서(mdast-util-from-markdown = 화면과 같은 파서)가 강조 구분 문자로 본 `*` 위치(앞의 "q "는 줄 첫머리 목록 표시를 피하려는 접두).
+        # 3의 배수 규칙은 앞서 일부를 쓰고 남은 길이로 센다(처음 길이로 세면 아래가 어긋난다).
+        ("q **A*.*.", [2, 3, 5, 7]),
+        ("q *A***A*", [2, 4]),
+        ("q *.***.*", [2, 4]),
+        ("q .*.*A**", [3, 5, 7, 8]),
+        ("q **B***A*", [2, 3, 5, 6, 7, 9]),
+        ("q ***A***", [2, 3, 4, 6, 7, 8]),
+    ],
+)
+def test_emphasis_delimiters_match_the_real_markdown_parser(source, delimiters):
+    from app.glossary_spans import _emphasis_delimiters
+
+    assert sorted(set(_emphasis_delimiters(source, lambda index: False))) == delimiters

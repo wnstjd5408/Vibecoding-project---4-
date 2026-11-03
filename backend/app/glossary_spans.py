@@ -298,7 +298,9 @@ def _emphasis_delimiters(text: str, skip) -> list[int]:
 
 def _line_emphasis_delimiters(text: str, start: int, end: int, skip) -> list[int]:
     # 1. `*` 묶음을 모으고 열 수 있는지(left-flanking)·닫을 수 있는지(right-flanking)를 정한다.
-    runs: list[list] = []  # [시작, 처음 길이, 남은 길이, 열 수 있음, 닫을 수 있음]
+    # [시작, 처음 길이, 남은 길이, 열 수 있음, 닫을 수 있음, 닫는 쪽으로 왼쪽부터 쓴 수, 여는 쪽으로 오른쪽부터 쓴 수]
+    # 한 묶음은 먼저 닫는 쪽(왼쪽 글자부터)으로 쓰이고 남은 글자가 나중에 여는 쪽(오른쪽 글자부터)으로 쓰일 수 있다(`**B***A*`의 `***`).
+    runs: list[list] = []
     index = start
     while index < end:
         if text[index] != "*" or skip(index):
@@ -313,7 +315,7 @@ def _line_emphasis_delimiters(text: str, start: int, end: int, skip) -> list[int
         after_space, after_punct = _is_space(after), _is_punctuation(after)
         left = not after_space and (not after_punct or before_space or before_punct)
         right = not before_space and (not before_punct or after_space or after_punct)
-        runs.append([index, run_end - index, run_end - index, left, right])
+        runs.append([index, run_end - index, run_end - index, left, right, 0, 0])
         index = run_end
 
     # 2. 닫는 묶음마다 거꾸로 올라가며 열 수 있는 묶음과 짝을 짓는다. 짝 사이의 묶음은 글자로 남는다.
@@ -326,7 +328,8 @@ def _line_emphasis_delimiters(text: str, start: int, end: int, skip) -> list[int
             for position in range(len(openers) - 1, max(len(openers) - _EMPHASIS_LOOKBACK, 0) - 1, -1):
                 opener = openers[position]
                 # 3의 배수 규칙: 한쪽이 열고 닫을 수 있을 때 길이의 합이 3의 배수이면(둘 다 3의 배수가 아니면) 짝이 아니다.
-                if (opener[4] or closer[3]) and (opener[1] + closer[1]) % 3 == 0 and not (opener[1] % 3 == 0 and closer[1] % 3 == 0):
+                # 길이는 앞서 일부를 쓰고 **남은** 길이다(화면이 쓰는 파서 mdast/micromark가 그렇게 센다. commonmark.js는 처음 길이를 센다).
+                if (opener[4] or closer[3]) and (opener[2] + closer[2]) % 3 == 0 and not (opener[2] % 3 == 0 and closer[2] % 3 == 0):
                     continue
                 found = position
                 break
@@ -334,9 +337,13 @@ def _line_emphasis_delimiters(text: str, start: int, end: int, skip) -> list[int
                 break
             opener = openers[found]
             use = 2 if opener[2] >= 2 and closer[2] >= 2 else 1
-            marks.extend(range(opener[0] + opener[2] - use, opener[0] + opener[2]))
-            used_before = closer[1] - closer[2]
-            marks.extend(range(closer[0] + used_before, closer[0] + used_before + use))
+            # 여는 묶음은 오른쪽 글자부터(이미 오른쪽에서 쓴 만큼 건너뛰고), 닫는 묶음은 왼쪽 글자부터(이미 왼쪽에서 쓴 만큼 건너뛰고) 쓴다.
+            opener_end = opener[0] + opener[1] - opener[6]
+            marks.extend(range(opener_end - use, opener_end))
+            closer_begin = closer[0] + closer[5]
+            marks.extend(range(closer_begin, closer_begin + use))
+            opener[6] += use
+            closer[5] += use
             opener[2] -= use
             closer[2] -= use
             del openers[found + 1 :]
