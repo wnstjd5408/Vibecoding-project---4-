@@ -1,0 +1,10 @@
+*
+!pyproject.toml
+!uv.lock
+!app/
+!app/**
+!evals/
+!evals/*.py
+app/**/__pycache__
+app/**/*.pyc
+**/.env*

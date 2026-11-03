@@ -1,5 +1,7 @@
 # 개발 가이드 (팀원용)
 
+실제 로컬 DB와 앱 실행은 [Docker Compose 공통 안내](docs/local-compose-guide.md)를 따른다. 기존 Supabase·합성 데이터를 재사용하며 앱 종료와 데이터 초기화를 구분한다.
+
 Claude Code로 바이브코딩하는 팀원을 위한 안내다. 사람과 Claude가 같이 읽는다. Claude에게 작업을 맡길 때는 이 파일과 [AGENTS.md](AGENTS.md)를 따르게 한다. 두 문서가 다르면 AGENTS.md가 우선하고 아래 "계정" 절의 예외만 이 파일을 따른다.
 
 ## 처음 한 번 (약 30분)
