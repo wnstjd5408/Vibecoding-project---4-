@@ -167,7 +167,7 @@ def test_audit_end_to_end_and_package(tmp_path):
     counts, report, changed = audit.audit(make_source(rows), notion)
     assert counts["notes_scanned"] == 5
     assert counts["notes_to_change"] == 1 and counts["blocks_to_change"] == 1
-    assert counts["excluded"] == {"content_mismatch": 1}
+    assert counts["excluded"] == {"content_mismatch": 1, "count_mismatch": 1}  # note 9 lost its code blocks
     assert counts["notion_unreadable"] == 1
     assert [c["note_id"] for c in changed] == [1]
 
@@ -256,3 +256,31 @@ def test_info_conflict_report_never_echoes_stored_text():
     result = audit.audit_note(body.replace("```\n", "```secret-note-text\n", 1), blocks)
     assert result["status"] == "info_conflict"
     assert "secret-note-text" not in json.dumps(result["detail"]) and result["detail"]["stored_info_length"] == 16
+
+
+def run_audit(body, tree):
+    row = {"id": 1, "notion_page_id": PAGE, "revision": 1, "updated_at": "x", "body_markdown": body}
+    notion = tree_notion(tree)
+    return audit.audit(make_source([row]), notion), notion
+
+
+def test_stored_note_with_other_language_is_reported_not_skipped():
+    # Notion says mermaid, but the stored only code block already carries `python`.
+    tree = {PAGE: [code(2, MERMAID, "mermaid")]}
+    (counts, report, changed), notion = run_audit("```python\n" + MERMAID + "\n```", tree)
+    assert notion.children.called
+    assert counts["excluded"] == {"info_conflict": 1} and counts["notes_to_change"] == 0 and changed == []
+    assert [r["status"] for r in report] == ["info_conflict"]
+
+
+def test_stored_note_that_lost_its_code_blocks_is_reported_not_skipped():
+    tree = {PAGE: [code(2, MERMAID, "mermaid")]}
+    (counts, report, changed), notion = run_audit("just text, no fences", tree)
+    assert counts["excluded"] == {"count_mismatch": 1} and changed == []
+    assert [r["status"] for r in report] == ["count_mismatch"]
+
+
+def test_note_whose_fences_are_all_marked_needs_no_notion_call():
+    tree = {PAGE: [code(2, MERMAID, "mermaid")]}
+    (counts, report, changed), notion = run_audit("```mermaid\n" + MERMAID + "\n```", tree)
+    assert not notion.children.called and report == [] and changed == []

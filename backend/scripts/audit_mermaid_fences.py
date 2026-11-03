@@ -245,7 +245,7 @@ class NotionReader(Notion):
 
 
 def audit(source, notion):
-    counts = {"notes_scanned": 0, "notes_with_bare_fence": 0, "notes_with_mermaid": 0,
+    counts = {"notes_scanned": 0, "notes_checked_against_notion": 0, "notes_with_mermaid": 0,
               "notes_to_change": 0, "blocks_to_change": 0, "blocks_already_marked": 0,
               "excluded": {}, "notion_unreadable": 0}
     report, changed = [], []
@@ -253,9 +253,11 @@ def audit(source, notion):
         counts["notes_scanned"] += 1
         body = row["body_markdown"]
         fences, _ = stored_fences(body)
-        if fences is not None and not any(f["info"] == "" for f in fences):
-            continue  # every stored fence already has a language; nothing to recover
-        counts["notes_with_bare_fence"] += 1
+        if fences and all(f["info"].lower() == "mermaid" for f in fences):
+            continue  # every stored fence is already marked mermaid; nothing to recover
+        # Anything else is checked against Notion, even without a bare fence: a stored fence with another
+        # language or a note that lost its code blocks must show up in the report, not vanish.
+        counts["notes_checked_against_notion"] += 1
         try:
             blocks = notion_code_blocks(notion, canonical_id(row["notion_page_id"]))
         except Exception:
