@@ -5,8 +5,8 @@
 처리 순서(6.5):
 1. 세션(의존성). 방문자는 401이고 DB·AI는 0건이다. 2. 경로 형식(404). 3. AI 요청 제한(429).
 4. 문항 확인: 남의 문항·없는 문항은 404. 5. 답하기 전이면 409 answer_first. AI 0건이다(AC-2).
-6. 슬롯 상태: 질문이 아직 비어 있는 슬롯(다른 요청이 만드는 중)이 있으면 409 in_progress, 슬롯이 둘이면 409 followup_limit_reached,
-   직전 질문에 답하지 않았으면 새로 만들지 않고 같은 질문을 돌려준다(AI 0건).
+6. 슬롯 상태: 질문이 아직 비어 있는 슬롯(다른 요청이 만드는 중)이 있으면 409 in_progress, 직전 질문(둘째 포함)에 답하지 않았으면
+   새로 만들지 않고 같은 질문을 돌려준다(AI 0건), 질문 둘을 받고 모두 답했으면 409 followup_limit_reached.
 7. 설정·배포 환경 검사(예약 전에 막는다, 5.4). 8. (item_id, seq) 슬롯을 비워 둔 채 넣어 번호를 예약한다. 다른 요청이 먼저
    예약했다면 기본 키 충돌이라 409 in_progress이고 AI는 부르지 않는다. 같은 seq를 동시에 요청해도 AI는 한 번만 불린다(AC-3).
 9. 예약한 요청만 run_ai_call(한도 예약 → 호출 → 정산)로 Bedrock을 부른다. 10. 응답을 검증해 슬롯에 질문을 채운다.
@@ -157,12 +157,15 @@ def request_followup(
     if any(not s.get("question") for s in slots):
         # 다른 요청이 만드는 중이다. 같은 요청을 Retry-After 뒤에 다시 보내면 된다(슬롯이 보호한다).
         raise _in_progress()
-    if len(slots) >= MAX_FOLLOWUPS:
-        raise ApiError("conflict", "followup_limit_reached", stage="validate")
     if slots and slots[-1].get("user_answer") is None:
-        # 직전 꼬리 질문에 아직 답하지 않았다. 새로 만들지 않고 같은 질문을 돌려준다(AI 0건).
+        # 직전 꼬리 질문에 아직 답하지 않았다. 새로 만들지 않고 같은 질문을 돌려준다(AI 0건). 둘째 질문도 같다. 둘째 질문을 받았지만
+        # 응답이 유실된 사용자가 재요청으로 되찾게 하려는 것이다. E11은 자정~08:30에 not_open이라 그쪽으로는 되찾을 수 없다.
+        # 이 검사가 한도 검사보다 앞이어도 새 질문이 늘지 않는다(생성은 아래에서 한도 안일 때만 한다).
         last = slots[-1]
         return {"seq": last["seq"], "question": last["question"], "followups_remaining": MAX_FOLLOWUPS - last["seq"]}
+    if len(slots) >= MAX_FOLLOWUPS:
+        # 질문 둘을 받았고 모두 답했다.
+        raise ApiError("conflict", "followup_limit_reached", stage="validate")
 
     # 설정·배포 환경 오류로 끝날 요청이 슬롯을 쓰지 않게 예약보다 먼저 검사한다(5.4).
     oidc_token = request.headers.get(OIDC_HEADER)

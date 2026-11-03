@@ -285,11 +285,54 @@ def test_two_followups_then_the_third_request_is_409_followup_limit_reached(clie
     assert [s[0] for s in slots_of(fake, FRESH)] == [1, 2]
 
 
-def test_a_item_with_two_questions_is_the_limit_even_if_the_second_is_unanswered(client, fake, bedrock):
+def set_second_unanswered(fake):
+    """문항 5(TWO_DONE)를 첫 질문에는 답했고 둘째 질문은 받았지만 답하지 않은 상태로 만든다."""
     fake.quiz_followups = [f for f in fake.quiz_followups if f["item_id"] != TWO_DONE]
     fake.quiz_followups.append({"item_id": TWO_DONE, "seq": 1, "question": "첫", "user_answer": "답", "created_at": iso(50)})
     fake.quiz_followups.append({"item_id": TWO_DONE, "seq": 2, "question": "둘째", "user_answer": None, "created_at": iso(50)})
+
+
+def test_an_unanswered_second_question_is_returned_again_not_the_limit(client, fake, bedrock, store):
+    # 둘째 질문을 받았지만 응답이 유실된 사용자의 재요청이다. 질문 대신 409를 주면 되찾을 길이 없다.
+    set_second_unanswered(fake)
+    response = followup(client, TWO_DONE)
+    assert response.status_code == 200
+    assert response.json() == {"seq": 2, "question": "둘째", "followups_remaining": 0}
+    assert bedrock.calls == 0 and store.reserve_calls == [] and fake.slot_calls == []  # 새 AI 호출·슬롯 없음
+    assert [s[0] for s in slots_of(fake, TWO_DONE)] == [1, 2]
+
+
+def test_a_lost_second_response_can_be_recovered_by_repeating_the_request(client, fake, bedrock):
+    # 첫 질문에 답한 뒤 둘째를 받는다. 응답을 쓰지 못한 것으로 보고 같은 요청을 다시 보낸다.
+    created = followup(client, ONE_DONE)  # 문항 3은 첫 질문에 이미 답한 상태다
+    assert created.json()["seq"] == 2
+    repeated = followup(client, ONE_DONE)
+    assert repeated.status_code == 200 and repeated.json() == created.json()
+    assert bedrock.calls == 1  # AI는 한 번만 불렸다
+
+
+def test_the_unanswered_second_question_is_recoverable_after_midnight_when_e11_is_not_open(client, fake, bedrock, monkeypatch):
+    set_second_unanswered(fake)
+    after_midnight = OPEN + 15.5 * 3600  # 다음 날 00:00 KST 이후
+    monkeypatch.setattr(session, "now", lambda: after_midnight)
+    assert client.post("/api/quiz/today", headers=headers("member-token")).json() == {"status": "not_open"}
+    response = followup(client, TWO_DONE)
+    assert response.status_code == 200
+    assert response.json() == {"seq": 2, "question": "둘째", "followups_remaining": 0}
+    assert bedrock.calls == 0
+
+
+def test_after_both_questions_are_answered_the_limit_applies_also_after_midnight(client, fake, bedrock, monkeypatch):
+    set_second_unanswered(fake)
+    next(f for f in fake.quiz_followups if f["item_id"] == TWO_DONE and f["seq"] == 2).update(user_answer="둘째 답")
+    monkeypatch.setattr(session, "now", lambda: OPEN + 15.5 * 3600)
     assert_error(followup(client, TWO_DONE), 409, "conflict", "followup_limit_reached")
+    assert bedrock.calls == 0
+
+
+def test_a_second_slot_still_being_made_is_in_progress_even_with_the_first_unanswered_check(client, fake, bedrock):
+    # 만드는 중인 슬롯은 미답 질문 반환보다 먼저 판정한다(질문이 비어 있어 돌려줄 것이 없다).
+    assert_error(followup(client, SECOND_IN_PROGRESS), 409, "conflict", "in_progress")
     assert bedrock.calls == 0
 
 
