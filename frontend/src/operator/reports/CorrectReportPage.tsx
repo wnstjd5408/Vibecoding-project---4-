@@ -158,7 +158,7 @@ function CorrectForm({ report }: { report: Report }) {
   return (
     <form className={styles.formCard} onSubmit={handleSubmit}>
       <h2 className={styles.formTitle}>사전 설명</h2>
-      <TextField label="용어 이름" required maxLength={100} value={label} onChange={(event) => setLabel(event.target.value)} />
+      <TextField label="용어 이름" required maxLength={200} value={label} onChange={(event) => setLabel(event.target.value)} />
       <TextField
         label="바른 설명"
         multiline

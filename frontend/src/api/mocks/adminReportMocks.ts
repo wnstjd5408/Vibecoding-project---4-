@@ -48,7 +48,7 @@ let nextImageId = 1
 const BIGINT = /^[1-9][0-9]{0,18}$/
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 const IMAGE_MAX_BYTES = 4 * 1024 * 1024
-const MAX_LABEL = 100
+const MAX_LABEL = 200
 
 function strictObject(body: unknown, allowed: string[]): { input: Record<string, unknown>; unknown: string[] } {
   const input = body !== null && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {}
