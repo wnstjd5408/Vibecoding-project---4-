@@ -1,5 +1,7 @@
 import type { RouteObject } from 'react-router'
 import Placeholder from '../pages/Placeholder.tsx'
+import CorrectReportPage from '../operator/reports/CorrectReportPage.tsx'
+import ReportsPage from '../operator/reports/ReportsPage.tsx'
 import { operatorPaths } from './paths.ts'
 
 // 운영자(PC) 화면 경로 묶음. 운영자 셸(MEG-78)이 이 배열을 children으로 가진 레이아웃 경로로 감싸 같은 라우터에 붙인다(routes/index.tsx).
@@ -15,7 +17,11 @@ export const operatorRoutes: RouteObject[] = [
   },
   {
     path: operatorPaths.reports,
-    element: <Placeholder screenId="F5-2" title="신고" ticket="운영자 화면 티켓(MEG-78 셸 이후)" />,
+    element: <ReportsPage />,
+  },
+  {
+    path: operatorPaths.reportCorrect,
+    element: <CorrectReportPage />,
   },
   {
     path: operatorPaths.accounts,
