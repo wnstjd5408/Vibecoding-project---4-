@@ -321,3 +321,32 @@ def test_normalize_key_matches_the_tr_rules():
 
 def test_empty_body_has_no_spans():
     assert find_spans("", TERMS) == []
+
+
+# --- visible_text (MEG-87): AI에 보낼 글 ---
+
+BS = chr(92)
+NL = chr(10)
+
+
+def _visible(text: str, low: int = 0, high: int | None = None) -> str:
+    from app.glossary_spans import code_mask, hidden_ranges, visible_text
+
+    return visible_text(text, low, len(text) if high is None else high, code_mask(text), hidden_ranges(text))
+
+
+def test_visible_text_unescapes_outside_code_and_keeps_backslashes_inside_code():
+    text = f'a{BS}+b 와 `a{BS}+b` 와 {BS}{BS} 끝'
+    assert _visible(text) == f'a+b 와 `a{BS}+b` 와 {BS} 끝'
+
+
+def test_visible_text_inside_a_fenced_block_is_literal():
+    fence = '```'
+    text = NL.join(['앞', fence, f'{BS}d+{BS}.', fence, f'뒤 {BS}*'])
+    assert _visible(text) == NL.join(['앞', fence, f'{BS}d+{BS}.', fence, '뒤 *'])
+
+
+def test_visible_text_drops_image_tokens_and_urls_and_respects_the_slice():
+    text = '그림 ![x](note-image:abc123) 과 https://example.test/a?b=1 끝'
+    assert 'abc123' not in _visible(text) and 'example.test' not in _visible(text)
+    assert _visible(text, text.index('과'), len(text)) == '과  끝'

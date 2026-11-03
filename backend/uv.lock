@@ -55,6 +55,7 @@ dependencies = [
     { name = "boto3" },
     { name = "fastapi", extra = ["standard"] },
     { name = "httpx" },
+    { name = "pillow" },
 ]
 
 [package.dev-dependencies]
@@ -77,6 +78,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.43.117" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.146.0" },
     { name = "httpx", specifier = ">=0.28" },
+    { name = "pillow", specifier = ">=13.0.0" },
 ]
 
 [package.metadata.requires-dev]

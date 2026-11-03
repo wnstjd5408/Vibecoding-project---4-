@@ -32,6 +32,20 @@ def study_date() -> str:
     return datetime.fromtimestamp(session.now(), _KST).date().isoformat()
 
 
+def glossary_payload(row: dict, supabase: SupabaseClient) -> dict:
+    """E06 응답의 term·body_markdown·images. E09의 사전 갈래(source: glossary)도 같은 모양을 쓴다."""
+    return {
+        "term": {"id": row["id"], "key": row["key"], "label": row["label"]},
+        "body_markdown": row["glossary_entries"]["body_markdown"],
+        "images": [
+            # storage_path는 따로 내보내지 않는다. 공개 주소 안에 들어가는 것만 예외다(1.9, 2026-11-02 결정).
+            # alt가 비어 있으면 빈 문자열이다(장식 이미지). 응답 형식은 문자열 하나로 유지한다.
+            {"id": image["id"], "url": supabase.glossary_image_url(image["storage_path"]), "alt": image["alt"] or ""}
+            for image in row["glossary_images"]
+        ],
+    }
+
+
 @router.get("/glossary/{term_id}", summary="E06 glossary term with image URLs")
 def read_glossary_term(
     term_id: str,
@@ -53,16 +67,7 @@ def read_glossary_term(
     if row is None:
         raise ApiError("not_found", stage="db")
 
-    body = {
-        "term": {"id": row["id"], "key": row["key"], "label": row["label"]},
-        "body_markdown": row["glossary_entries"]["body_markdown"],
-        "images": [
-            # storage_path는 따로 내보내지 않는다. 공개 주소 안에 들어가는 것만 예외다(1.9, 2026-11-02 결정).
-            # alt가 비어 있으면 빈 문자열이다(장식 이미지). 응답 형식은 문자열 하나로 유지한다.
-            {"id": image["id"], "url": supabase.glossary_image_url(image["storage_path"]), "alt": image["alt"] or ""}
-            for image in row["glossary_images"]
-        ],
-    }
+    body = glossary_payload(row, supabase)
     if user is not None:
         # 세션 사용자의 즐겨찾기 행만 같은 조회로 읽었다. 다른 사용자의 행은 오지 않는다.
         body["is_favorite"] = bool(row["favorites"])
