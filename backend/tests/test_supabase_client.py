@@ -426,7 +426,122 @@ def test_list_glossary_terms_reads_only_terms_with_a_glossary_entry():
     client_with(handler).list_glossary_terms()
 
     assert seen["path"] == "/rest/v1/terms"
-    assert seen["params"] == {"select": "id,key,label,glossary_entries!inner(term_id)", "order": "id.asc"}
+    assert seen["params"] == {"select": "id,key,label,glossary_entries!inner(term_id)", "order": "id.asc", "limit": "1000"}
+
+
+# ---- MEG-141 E05 사전 용어 조회의 1,000행 제한 해소: id 기준 키셋 페이지네이션 ----
+def postgrest_terms(ids, server_max_rows=1000):
+    """PostgREST처럼 `id=gt.N`·`order=id.asc`·`limit`을 읽고 서버 최대 행(기본 1000)에서 자르는 가짜 서버. 요청 params를 calls에 쌓는다."""
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        calls.append(params)
+        floor = int(params["id"][3:]) if "id" in params else 0
+        limit = min(int(params["limit"]), server_max_rows)
+        page = [{"id": i, "key": f"term{i}", "label": f"T{i}", "glossary_entries": {"term_id": i}} for i in sorted(ids) if i > floor][:limit]
+        return httpx.Response(200, json=page)
+
+    return calls, handler
+
+
+@pytest.mark.parametrize("count", [0, 1, 999, 1000, 1001, 1999, 2000, 2001, 5000])
+def test_list_glossary_terms_reads_every_term_across_page_boundaries(count):
+    calls, handler = postgrest_terms(range(1, count + 1))
+
+    rows = client_with(handler).list_glossary_terms()
+
+    ids = [row["id"] for row in rows]
+    assert ids == list(range(1, count + 1))  # 누락·중복 없이 id 오름차순
+    # 한 쪽이 꽉 찼을 때만 다음 쪽을 읽는다. 1000개 정확히면 빈 쪽을 하나 더 읽어 끝을 확인한다.
+    assert len(calls) == count // 1000 + 1
+
+
+def test_list_glossary_terms_uses_the_last_id_as_the_keyset_cursor():
+    calls, handler = postgrest_terms(range(1, 2501))
+
+    client_with(handler).list_glossary_terms()
+
+    assert "id" not in calls[0]
+    assert [call["id"] for call in calls[1:]] == ["gt.1000", "gt.2000"]
+    assert all(call["order"] == "id.asc" and call["limit"] == "1000" for call in calls)
+
+
+def test_list_glossary_terms_handles_sparse_ids_without_skipping_the_last_page():
+    ids = list(range(5, 4000, 3)) + [2_000_000, 2_000_001]  # 건너뛴 id와 큰 id가 섞여도 마지막 쪽의 용어가 남는다
+    calls, handler = postgrest_terms(ids)
+
+    rows = client_with(handler).list_glossary_terms()
+
+    assert [row["id"] for row in rows] == sorted(ids)
+    assert rows[-1]["id"] == 2_000_001
+
+
+def test_list_glossary_terms_at_exactly_the_page_limit_is_complete_and_not_an_error(monkeypatch, caplog):
+    # 상한(3쪽=3000개)에 정확히 도달했고 뒤에 용어가 없으면 전체 조회가 끝난 것이다. 오류가 아니다.
+    from app import supabase as module
+
+    monkeypatch.setattr(module, "GLOSSARY_MAX_PAGES", 3)
+    calls, handler = postgrest_terms(range(1, 3001))
+
+    with caplog.at_level("ERROR", logger="app.supabase"):
+        rows = client_with(handler).list_glossary_terms()
+
+    assert [row["id"] for row in rows] == list(range(1, 3001))
+    assert len(calls) == 4 and calls[-1]["limit"] == "1" and calls[-1]["id"] == "gt.3000"  # 3쪽 + 남은 용어 확인 1건
+    assert not caplog.records
+
+
+@pytest.mark.parametrize("count", [3001, 10_000])
+def test_list_glossary_terms_refuses_a_partial_list_when_terms_remain_beyond_the_page_limit(monkeypatch, caplog, count):
+    # 상한 뒤에도 용어가 남았다. 일부만 돌려주면 링크가 조용히 빠지므로 오류로 내고 로그를 남긴다.
+    from app import supabase as module
+
+    monkeypatch.setattr(module, "GLOSSARY_MAX_PAGES", 3)
+    calls, handler = postgrest_terms(range(1, count + 1))
+
+    with caplog.at_level("ERROR", logger="app.supabase"), pytest.raises(SupabaseConfigError, match="exceed 3000"):
+        client_with(handler).list_glossary_terms()
+
+    assert len(calls) == 4  # 상한까지 읽고 남은 용어를 한 건 확인한 뒤 멈춘다(무한히 반복하지 않는다)
+    assert any("refusing a partial list" in record.getMessage() for record in caplog.records)
+
+
+def test_list_glossary_terms_limit_probe_counts_only_glossary_terms():
+    # 상한 뒤에 남은 것이 사전 용어가 아닌 용어(AI 용어)뿐이면 정상이다: probe가 사전 용어(!inner)만 센다.
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        params = dict(request.url.params)
+        if params["limit"] == "1":
+            return httpx.Response(200, json=[])  # 서버가 !inner로 거른 결과
+        return httpx.Response(200, json=[{"id": i, "key": f"t{i}", "label": "x"} for i in range(1, 1001)])
+
+    from app import supabase as module
+
+    original = module.GLOSSARY_MAX_PAGES
+    module.GLOSSARY_MAX_PAGES = 1
+    try:
+        rows = client_with(handler).list_glossary_terms()
+    finally:
+        module.GLOSSARY_MAX_PAGES = original
+
+    assert len(rows) == 1000
+    assert seen[-1]["select"] == "id,key,label,glossary_entries!inner(term_id)"
+
+
+def test_list_glossary_terms_propagates_a_database_error_on_a_later_page():
+    state = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        state["n"] += 1
+        if state["n"] == 1:
+            return httpx.Response(200, json=[{"id": i, "key": f"t{i}", "label": "x"} for i in range(1, 1001)])
+        return httpx.Response(403, json={})
+
+    with pytest.raises(SupabaseConfigError):
+        client_with(handler).list_glossary_terms()  # 일부만 읽은 채 조용히 넘기지 않는다
 
 
 def signing_client(handler, bucket: str | None = "note-images") -> SupabaseClient:

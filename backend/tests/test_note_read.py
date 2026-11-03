@@ -320,13 +320,17 @@ def test_emoji_body_spans_cut_back_to_terms_over_http(client, fake):
     assert [t["term_id"] for t in result["glossary_terms"]] == [7, 9, 10, 11]
 
 
-def test_glossary_at_the_row_cap_is_logged(client, fake, caplog):
-    fake.glossary = [{"id": i, "key": f"k{i}", "label": f"K{i}"} for i in range(1000)]
+def test_a_term_beyond_the_first_thousand_still_gets_a_span(client, fake, caplog):
+    # MEG-141: 사전이 1,000개를 넘어도 E05는 마지막 쪽의 용어까지 찾는다. 1,000행에 닿았다는 경고 로그는 더 이상 남기지 않는다.
+    fake.glossary = [{"id": i, "key": f"k{i}", "label": f"K{i}"} for i in range(1, 1500)]
+    fake.add_note(17, "Late term", None, [], body_markdown="앞 k1 중간 k1499 끝")
 
     with caplog.at_level(logging.WARNING, logger="app.notes"):
-        assert read(client, NO_IMAGE_NOTE).status_code == 200
+        result = read(client, 17).json()
 
-    assert "stage=db glossary_terms=1000 reached row cap" in caplog.text
+    assert [t["term_id"] for t in result["glossary_terms"]] == [1, 1499]
+    assert [span["term_id"] for span in result["glossary_spans"]] == [1, 1499]
+    assert "reached row cap" not in caplog.text
 
 
 @pytest.mark.parametrize("term", ["A*", "__init__", "std::vector<T>"])
