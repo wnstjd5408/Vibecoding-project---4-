@@ -28,6 +28,29 @@ def canonical(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def editable_lines(body):
+    """Whitelist plain inline blocks using whole-document CommonMark context.
+
+    Inline children have no source ranges, so exclude their entire containing
+    block when it contains code, links, images or bracket syntax. This deliberate
+    over-exclusion also covers unresolved references and parser differences.
+    Code blocks (including mixed tab/space indentation) are never whitelisted.
+    """
+    if re.search(r"[\v\f\x1c-\x1e\x85\u2028\u2029]", body):
+        return set()  # Python splitlines and CommonMark disagree on these.
+    allowed = set()
+    for token in MarkdownIt("commonmark").parse(body):
+        if token.type != "inline" or token.map is None:
+            continue
+        if any(c in token.content for c in "[]`"):
+            continue
+        if any(child.type in {"code_inline", "link_open", "image", "html_inline"}
+               for child in token.children or []):
+            continue
+        allowed.update(range(*token.map))
+    return allowed
+
+
 def candidates(body):
     """Conservative single-run candidates. Discovery is NOT intent approval.
 
@@ -35,13 +58,16 @@ def candidates(body):
     reported for manual review; only a single isolated simple run is eligible.
     """
     mask = code_mask(body)
+    allowed = editable_lines(body)
     result = []
     offset = 0
-    for line in body.splitlines(keepends=True):
+    for line_number, line in enumerate(body.splitlines(keepends=True)):
         if "*" in line:
             entry = {"start": offset, "end": offset + len(line), "reason": "ambiguous", "eligible": False}
             matches = list(re.finditer(r"(?<![\\*])(\*{1,3})([^*\r\n]+?)\1(?!\*)", line))
-            if any(mask[offset:offset + len(line)]) or line.startswith(("    ", "\t")):
+            if line_number not in allowed:
+                entry["reason"] = "protected_document_context"
+            elif any(mask[offset:offset + len(line)]) or line.startswith(("    ", "\t")):
                 entry["reason"] = "code"
             elif any(c in line for c in "[]<>`\\_~!") or re.search(r"(?:https?://|note-image:)", line):
                 entry["reason"] = "protected_token"
@@ -52,11 +78,12 @@ def candidates(body):
                     before = match[0]
                     after = emphasize(raw, marker)
                     proposed = line[:match.start()] + after + line[match.end():]
+                    proposed_body = body[:offset] + proposed + body[offset + len(line):]
                     tokens = MarkdownIt().parseInline(proposed)[0].children
                     required = {1: {"em_open"}, 2: {"strong_open"}, 3: {"em_open", "strong_open"}}[len(marker)]
                     if not required <= {token.type for token in tokens}:
                         entry["reason"] = "unparseable_boundary"
-                    elif proposed.startswith(("    ", "\t")):
+                    elif line_number not in editable_lines(proposed_body):
                         entry["reason"] = "would_create_code_block"
                     else:
                         entry.update(start=offset + match.start(), end=offset + match.end(),

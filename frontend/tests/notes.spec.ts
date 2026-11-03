@@ -5,6 +5,30 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { fromMarkdown } from 'mdast-util-from-markdown'
 
+test('강조 보정은 문서 전체의 코드·여러 줄 링크·이미지를 승인해도 거부한다', () => {
+  const cases = [
+    { body: '  \t**word **', type: 'code' },
+    { body: '[\n**word **\n](https://example.test)', type: 'link' },
+    { body: '![\n**word **\n](note-image:abc)', type: 'image' },
+    { body: '[\n**word **\n][ref]\n\n[ref]: https://example.test', type: 'linkReference' },
+    { body: '![\n**word **\n][ref]\n\n[ref]: note-image:abc', type: 'imageReference' },
+  ]
+  const backend = fileURLToPath(new URL('../../backend/', import.meta.url))
+  for (const fixture of cases) {
+    const types: string[] = []
+    function visit(node: { type: string; children?: typeof node[] }) { types.push(node.type); node.children?.forEach(visit) }
+    visit(fromMarkdown(fixture.body))
+    expect(types).toContain(fixture.type)
+    const result = JSON.parse(execFileSync('uv', ['run', '--no-sync', '--directory', backend, 'python', '-X', 'utf8', '-c',
+      'import json,sys; from scripts.emphasis_recovery import survey,reviewed_changes; p=survey([{"id":1,"revision":1,"body_markdown":json.load(sys.stdin)}]); cs=p["notes"][0]["candidates"]; rejected=0\nfor c in cs:\n try: reviewed_changes(p,[c["candidate_id"]])\n except ValueError: rejected+=1\nprint(json.dumps({"eligible":sum(c["eligible"] for c in cs),"count":len(cs),"rejected":rejected,"changes":reviewed_changes(p,[])}))'],
+    { input: JSON.stringify(fixture.body), encoding: 'utf8' }))
+    expect(result.count).toBeGreaterThan(0)
+    expect(result.eligible).toBe(0)
+    expect(result.rejected).toBe(result.count)
+    expect(result.changes).toEqual([])
+  }
+})
+
 for (const width of [390, 1280]) {
   test(`강조 마이그레이션 전후 Mermaid·span·선택 위치 (${width}px)`, async ({ page }) => {
     const backend = fileURLToPath(new URL('../../backend/', import.meta.url))

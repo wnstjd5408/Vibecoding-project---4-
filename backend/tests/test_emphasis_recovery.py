@@ -34,6 +34,31 @@ def test_protected_or_ambiguous_is_never_eligible(body):
     assert accept(plan(body)) == []
 
 
+@pytest.mark.parametrize("body", [
+    "  \t**word **", " \t **word **", "   \t**word **",
+    "[\n**word **\n](https://example.test)",
+    "![\n**word **\n](note-image:abc)",
+    "[\n**word **\n][ref]\n\n[ref]: https://example.test",
+    "![\n**word **\n][ref]\n\n[ref]: note-image:abc",
+    "`first\n**word **\nlast`",
+    "> [\n> **word **\n> ](https://example.test)",
+    "- item\n\n      \t**word **",
+])
+def test_document_context_protected_even_when_explicitly_approved(body):
+    p = plan(body)
+    assert accept(p) == []
+    assert reviewed_changes(p, []) == []
+    for candidate in p["notes"][0]["candidates"]:
+        with pytest.raises(ValueError, match="unreviewable_candidate"):
+            reviewed_changes(p, [candidate["candidate_id"]])
+
+
+def test_protected_paragraph_does_not_hide_separate_plain_paragraph():
+    p = plan("![\n**word **\n](note-image:abc)\n\n**용어 **")
+    assert len(accept(p)) == 1
+    assert reviewed_changes(p, accept(p))[0]["after"] == "![\n**word **\n](note-image:abc)\n\n**용어** "
+
+
 @pytest.mark.parametrize("body,expected", [("** 용어 **", " **용어** "), ("*용어\t*", "*용어*\t"), ("***한글😀 ***", "***한글😀*** ")])
 def test_simple_approved_rules(body, expected):
     p = plan(body)
