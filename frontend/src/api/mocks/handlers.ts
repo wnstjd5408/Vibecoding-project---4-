@@ -229,7 +229,7 @@ const routes: Route[] = [
       return { status: 200, body: { term_id: 7, is_favorite: favoriteTerm7 } }
     },
   },
-  // E24 계정 발급(POST /api/admin/users, 운영자만). 요청 본문 모양은 명세를 확인하기 전 추정이다: { email, display_name, password }.
+  // E24 계정 발급(POST /api/admin/users, 운영자만). 요청 본문은 백엔드 CreateAccountRequest와 같다: { email, display_name, initial_password }(모르는 필드는 422).
   // 이미 있는 이메일은 409 conflict(detail email_exists), 값이 잘못되면 422 validation_failed와 fields[]다. 새로 만든 계정은 일반 사용자(member)다.
   {
     method: 'POST',
@@ -237,15 +237,19 @@ const routes: Route[] = [
     handle: ({ body }) => {
       const denied = operatorOnly()
       if (denied) return denied
-      const { email, display_name: displayName, password } = (body ?? {}) as { email?: unknown; display_name?: unknown; password?: unknown }
+      const input = (body ?? {}) as Record<string, unknown>
+      const { email, display_name: displayName, initial_password: password } = input
       const fields: FieldError[] = []
       const bad = (name: string, reason: string) => fields.push({ name, reason, message: FIELD_MESSAGES[reason] })
+      for (const name of Object.keys(input)) {
+        if (!['email', 'display_name', 'initial_password'].includes(name)) bad(name, 'invalid_format')
+      }
       if (typeof email !== 'string' || email.trim() === '') bad('email', 'required')
       else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) bad('email', 'invalid_format')
       if (typeof displayName !== 'string' || displayName.trim() === '') bad('display_name', 'required')
-      else if (displayName.trim().length > 80) bad('display_name', 'too_long')
-      if (typeof password !== 'string' || password === '') bad('password', 'required')
-      else if (password.length < 8) bad('password', 'out_of_range')
+      else if (displayName.trim().length > 100) bad('display_name', 'too_long')
+      if (typeof password !== 'string' || password === '') bad('initial_password', 'required')
+      else if (new TextEncoder().encode(password).length > 72) bad('initial_password', 'too_long')
       if (fields.length > 0) {
         const error: ApiErrorBody = { error: { code: 'validation_failed', message: 'One or more fields are invalid', request_id: 'r-mock-0001', fields } }
         return { status: 422, body: error }

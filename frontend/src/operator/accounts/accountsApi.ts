@@ -1,8 +1,7 @@
 // 계정 발급(E24: POST /api/admin/users, 운영자만) 호출과 실패 분류. 화면은 이 파일의 함수만 부른다.
 //
-// TODO(MEG-68): E24 명세(MEG-27 첨부)를 받으면 요청 본문 이름과 422의 fields[].name을 맞춘다. 경로는 docs/architecture/architecture.json에 있고,
-// 요청 본문은 E01과 같은 이름으로 추정했다({ email, display_name, password }). 결과 화면은 응답 필드에 기대지 않고 입력한 값을 보여 주므로
-// 응답 모양이 달라도 화면은 바뀌지 않는다.
+// 요청 본문은 backend/app/accounts.py의 CreateAccountRequest({ email, display_name, initial_password }, 모르는 필드는 거부)를 따른다.
+// 경로는 docs/architecture/architecture.json에 있다. 결과 화면은 응답 필드에 기대지 않고 입력한 값을 보여 주므로 응답 모양이 달라도 화면은 바뀌지 않는다.
 import type { ApiRequestInit } from '../../api/client.ts'
 import { isApiError } from '../../api/client.ts'
 
@@ -17,7 +16,7 @@ export type OperatorFetch = <T>(path: string, init?: ApiRequestInit) => Promise<
 export async function issueAccount(operatorFetch: OperatorFetch, input: IssueAccountInput): Promise<void> {
   await operatorFetch(ISSUE_ACCOUNT_PATH, {
     method: 'POST',
-    body: { email: input.email, display_name: input.displayName, password: input.password },
+    body: { email: input.email, display_name: input.displayName, initial_password: input.password },
   })
 }
 
@@ -30,7 +29,7 @@ export type FieldReasons = { email?: string; displayName?: string; password?: st
 //  - other: 그 밖(네트워크 실패, 5xx, 형식이 다른 응답 등)
 export type IssueFailure = { kind: 'email_exists' } | { kind: 'invalid'; fields: FieldReasons } | { kind: 'other' }
 
-const FIELD_KEYS: Record<string, keyof FieldReasons> = { email: 'email', display_name: 'displayName', password: 'password' }
+const FIELD_KEYS: Record<string, keyof FieldReasons> = { email: 'email', display_name: 'displayName', initial_password: 'password' }
 
 export function classifyIssueFailure(error: unknown): IssueFailure {
   if (isApiError(error, 'conflict', 'email_exists')) return { kind: 'email_exists' }

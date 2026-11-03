@@ -17,7 +17,7 @@ const MESSAGES = {
     required: '입력해 주세요.',
     too_long: '너무 길어요.',
     invalid_format: '형식이 맞지 않아요.',
-    out_of_range: '길이가 맞지 않아요. 8자 이상 입력해 주세요.',
+    out_of_range: '허용 범위를 벗어났어요.',
     invalid_value: '사용할 수 없는 값이에요.',
   } as Record<string, string>,
   reasonFallback: '값을 확인해 주세요.',
@@ -118,7 +118,7 @@ export default function AccountsPage() {
           />
           <TextField
             label="초기 비밀번호"
-            name="password"
+            name="initial_password"
             type="password"
             autoComplete="new-password"
             required
