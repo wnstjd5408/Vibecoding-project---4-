@@ -18,6 +18,8 @@ type ResponsiveSheetProps = {
   returnFocus?: () => HTMLElement | null
   // false면 PC 폭에서도 바텀시트를 쓴다(PC 패널로 바꾸기로 한 안내만 true로 둔다)
   allowPanel?: boolean
+  // PC 패널의 제목 아래 간격(CSS 값). 바텀시트에는 적용하지 않는다.
+  panelTitleGap?: string
 }
 
 // 폭에 따라 시트를 고른다. 1024px 이상이면 오른쪽 사이드 패널(SidePanel), 미만이면 기존 바텀시트(BottomSheet)다.
@@ -25,7 +27,7 @@ type ResponsiveSheetProps = {
 // 안쪽 내용(children)은 시트 종류가 바뀌어도 새로 만들어지지 않는다. 두 시트는 서로 다른 컴포넌트라 그냥 두면 내용이 다시 마운트되어
 // 용어 설명(E06)·열람 기록(E07)·AI 설명(E09)을 다시 부르기 때문에(AI는 호출 한도와 비용이 걸려 있다), 내용을 따로 만든 요소(host)에
 // 한 번만 그려 두고 지금 보이는 시트 안으로 옮겨 붙인다.
-export function ResponsiveSheet({ panelId, returnFocus, allowPanel = true, children, ...sheet }: ResponsiveSheetProps) {
+export function ResponsiveSheet({ panelId, returnFocus, allowPanel = true, panelTitleGap, children, ...sheet }: ResponsiveSheetProps) {
   const wide = useWideLayout()
   const [host] = useState(() => {
     const element = document.createElement('div')
@@ -80,7 +82,7 @@ export function ResponsiveSheet({ panelId, returnFocus, allowPanel = true, child
   const slot = <div ref={attach} style={{ display: 'contents' }} />
   return (
     <>
-      {wide && allowPanel ? <SidePanel id={panelId} returnFocus={returnFocus} {...sheet}>{slot}</SidePanel> : <BottomSheet {...sheet}>{slot}</BottomSheet>}
+      {wide && allowPanel ? <SidePanel id={panelId} returnFocus={returnFocus} titleGap={panelTitleGap} {...sheet}>{slot}</SidePanel> : <BottomSheet {...sheet}>{slot}</BottomSheet>}
       {createPortal(children, host)}
     </>
   )

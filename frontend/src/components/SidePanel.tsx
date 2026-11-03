@@ -13,6 +13,8 @@ type SidePanelProps = {
   // 제목 위 왼쪽에 놓는 표시(예: Badge "사전", "AI 생성")
   badge?: ReactNode
   closeLabel?: string
+  // 제목 아래 간격(CSS 값). 비우면 8px이다. 목업은 AI 설명 패널만 12px이다.
+  titleGap?: string
   // 닫을 때 포커스를 돌려줄 요소. 없으면 열 때 포커스가 있던 요소로 돌아간다(예: 마지막으로 누른 용어 링크).
   returnFocus?: () => HTMLElement | null
   children: ReactNode
@@ -23,7 +25,7 @@ type SidePanelProps = {
 //  - 처음 열릴 때만 제목으로 포커스가 간다. 열린 채 내용이 바뀌어도(다른 용어) 포커스를 옮기지 않는다
 //  - 닫기 버튼과 Esc로 닫는다. 닫으면 포커스가 돌아간다
 // 브라우저 dialog를 show()로 열어 역할(dialog)과 이름 연결(aria-labelledby)을 그대로 쓴다.
-export function SidePanel({ id, open, onClose, title, badge, closeLabel = '닫기', returnFocus, children }: SidePanelProps) {
+export function SidePanel({ id, open, onClose, title, badge, closeLabel = '닫기', titleGap, returnFocus, children }: SidePanelProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const titleRef = useRef<HTMLHeadingElement>(null)
   const titleId = useId()
@@ -75,7 +77,7 @@ export function SidePanel({ id, open, onClose, title, badge, closeLabel = '닫�
           {closeLabel}
         </button>
       </div>
-      <h2 id={titleId} ref={titleRef} tabIndex={-1} className={styles.title}>
+      <h2 id={titleId} ref={titleRef} tabIndex={-1} className={styles.title} style={titleGap ? { marginBottom: titleGap } : undefined}>
         {title}
       </h2>
       {children}

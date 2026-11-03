@@ -86,7 +86,7 @@ export function AiExplainSheet({ open, onClose, openId, target, text, onLoginReq
     setBadge(null)
   }
   return (
-    <ResponsiveSheet open={open} onClose={onClose} badge={badge} title={shortTitle(text)} returnFocus={returnFocus}>
+    <ResponsiveSheet open={open} onClose={onClose} badge={badge} title={shortTitle(text)} returnFocus={returnFocus} panelTitleGap="var(--space-3)">
       {open && target !== null ? <AiExplainContent key={openId} target={target} onBadge={setBadge} onLoginRequired={onLoginRequired} onReloadNote={onReloadNote} /> : null}
     </ResponsiveSheet>
   )

@@ -55,7 +55,7 @@ export function LoginPromptProvider({ children }: { children: ReactNode }) {
     <LoginPromptContext.Provider value={value}>
       {children}
       <ResponsiveSheet open={open} onClose={() => setOpen(false)} title={LOGIN_PROMPT_MESSAGES.title} allowPanel={panel} returnFocus={returnFocus}>
-        <p className={styles.body}>{body}</p>
+        <p className={panelOpen ? styles.panelBody : styles.body}>{body}</p>
         <div className={panelOpen ? styles.panelActions : styles.actions}>
           <LinkButton variant="primary" to={userPaths.login} onClick={() => setOpen(false)}>{LOGIN_PROMPT_MESSAGES.login}</LinkButton>
         </div>

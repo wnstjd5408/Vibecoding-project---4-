@@ -367,3 +367,36 @@ test.describe('1100px(PC와 태블릿 사이)', () => {
     expect(Math.round(article.width)).toBeGreaterThan(400)
   })
 })
+
+// AC-6 목업 시각 대조에서 찾아 고친 치수(목업 PC 7장의 CSS 기준, 1280px). 패널 첫 줄은 높이 56px이고 배지·닫기는 그 가운데(28px)에 있다.
+test.describe('PC 패널의 목업 치수', () => {
+  test.use({ viewport: PC })
+  const center = (b: { y: number; height: number }, top: number) => b.y + b.height / 2 - top
+
+  test('용어 패널: 배지·"닫기"는 첫 줄(56px)의 가운데에 있고 제목은 패널 위에서 56px 아래다', async ({ page }) => {
+    await page.goto('/notes/11')
+    await term(page).click()
+    const top = (await box(panel(page))).y
+    expect(Math.abs(center(await box(panel(page).getByText('사전', { exact: true })), top) - 28)).toBeLessThanOrEqual(0.6)
+    expect(Math.abs(center(await box(panel(page).getByRole('button', { name: '닫기' })), top) - 28)).toBeLessThanOrEqual(0.6)
+    expect(Math.abs((await box(panel(page).getByRole('heading').first())).y - top - 56)).toBeLessThanOrEqual(0.6)
+  })
+
+  test('AI 설명 패널: 제목과 점선 상자 사이는 12px이다(목업 F2-2a PC)', async ({ page }) => {
+    await loginAsMember(page)
+    await openAiPanel(page)
+    const heading = await box(aiPanel(page).getByRole('heading').first())
+    const group = await box(aiPanel(page).getByRole('group').first())
+    expect(Math.abs(group.y - (heading.y + heading.height) - 12)).toBeLessThanOrEqual(0.6)
+  })
+
+  test('로그인 안내 패널: 설명 글자색은 기본 글자색이다(목업 F3-2d PC). 모바일 시트는 보조색 그대로다', async ({ page }) => {
+    await page.goto('/notes/11')
+    await term(page).click()
+    await panel(page).getByRole('button', { name: '즐겨찾기', exact: true }).click()
+    const color = (locator: Locator) => locator.evaluate((element) => getComputedStyle(element).color)
+    expect(await color(loginDialog(page).locator('p').first())).toBe('rgb(22, 32, 47)')
+    await page.setViewportSize({ width: 800, height: 800 })
+    expect(await color(loginDialog(page).locator('p').first())).toBe('rgb(86, 100, 116)')
+  })
+})
