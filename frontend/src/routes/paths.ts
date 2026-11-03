@@ -16,6 +16,7 @@ export const operatorPaths = {
   glossary: '/admin/glossary', // F5-1c 용어 사전
   reports: '/admin/reports', // F5-2 신고
   accounts: '/admin/accounts', // F4-3a 계정 발급
+  reportCorrect: '/admin/reports/:reportId/correct', // F5-3 사전에 바른 설명 넣기 (신고 목록의 "사전에 바른 설명 넣기"가 여기로 온다)
 } as const
 
 // 개발 중에만 쓰는 경로. 제품 화면이 아니다.
@@ -28,4 +29,9 @@ export const devPaths = {
 // noteRead 경로에 노트 id를 채운다.
 export function noteReadPath(noteId: number | string): string {
   return userPaths.noteRead.replace(':noteId', String(noteId))
+}
+
+// reportCorrect 경로에 신고 id를 채운다.
+export function reportCorrectPath(reportId: number | string): string {
+  return operatorPaths.reportCorrect.replace(':reportId', String(reportId))
 }

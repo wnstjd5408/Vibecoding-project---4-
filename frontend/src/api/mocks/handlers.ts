@@ -3,10 +3,11 @@
 import type { ApiErrorBody, FieldError, NoteListResponse } from '../types.ts'
 import { getMockSession, setMockSession } from './session.ts'
 
+import { adminReportRoutes } from './adminReportMocks.ts'
 export type MockRequest = { method: string; path: string; query: URLSearchParams; body: unknown }
 export type MockResponse = { status: number; body?: unknown }
 
-type Route = {
+export type Route = {
   method: string
   pattern: RegExp
   handle: (request: MockRequest, params: string[]) => MockResponse
@@ -115,6 +116,7 @@ const FIELD_MESSAGES: Record<string, string> = {
 }
 
 const routes: Route[] = [
+  ...adminReportRoutes,
   // 백엔드 상태 확인. 개발 서버 프록시가 실제 백엔드의 /health로 이어 주는 경로와 같은 모양이다.
   { method: 'GET', pattern: /^\/api\/health$/, handle: () => ({ status: 200, body: { status: 'ok' } }) },
   // E01 로그인. 맞지 않으면 사유를 구분하지 않고 401 invalid_credentials다.
