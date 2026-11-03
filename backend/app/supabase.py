@@ -396,6 +396,60 @@ class SupabaseClient:
             return False
         raise SupabaseConfigError(f"term_views insert status {response.status_code}")
 
+    def favorite_term(self, user_id: str, term_id: int, study_date: str) -> bool:
+        """E08 favorited: true. favorite_events(그날 한 건)와 favorites 한 건을 넣는다. 둘 다 기본 키 충돌은 무시한다.
+
+        favorite_events를 먼저 넣는다. 중간에 실패해도 남는 것은 "즐겨찾기가 아닌데 그날 퀴즈 후보에 남는 용어"뿐이라
+        해제해도 후보에 남는 규칙(D-043)과 어긋나지 않는다. 반대 순서면 "즐겨찾기인데 후보에 없는 용어"가 생긴다.
+        둘 다 충돌을 무시하므로 같은 요청을 다시 보내면 이어서 끝난다.
+
+        넣었거나 이미 있었으면 True, 용어가 없어 외래 키에 걸렸으면 False다. 사용자 쪽 외래 키(profiles 행이 그 사이
+        지워짐) 같은 다른 거절은 설정 오류(500)로 낸다. 제약 이름은 v05 마이그레이션의 기본 이름이다. 바꾸면 없는 용어가
+        404가 아니라 500이 되므로 여기와 시험을 함께 고친다.
+        """
+        user_id = str(uuid.UUID(user_id))
+        steps = (
+            ("favorite_events", {"user_id": user_id, "term_id": int(term_id), "study_date": study_date},
+             "favorite_events_term_id_fkey"),
+            ("favorites", {"user_id": user_id, "term_id": int(term_id)}, "favorites_term_id_fkey"),
+        )
+        for table, payload, term_fk in steps:
+            response = self._request(
+                "POST",
+                f"/rest/v1/{table}",
+                json=payload,
+                headers={**self._headers(), "Prefer": "resolution=ignore-duplicates,return=minimal"},
+            )
+            if response.status_code in (200, 201, 204):
+                continue
+            if (
+                response.status_code == 409
+                and _error_field(response, "code") == "23503"
+                and term_fk in (_error_field(response, "message") or "")
+            ):
+                return False
+            raise SupabaseConfigError(f"{table} insert status {response.status_code}")
+        return True
+
+    def unfavorite_term(self, user_id: str, term_id: int) -> bool:
+        """E08 favorited: false. favorites에서 그 사용자의 그 용어 행만 지운다. favorite_events는 지우지 않는다.
+
+        용어가 있으면 True다(즐겨찾기가 아니었어도 같다). 없으면 False다. 지운 행이 없을 때만 terms를 읽어 "즐겨찾기가
+        아니었던 용어"와 "없는 용어"를 가른다.
+        """
+        user_id = str(uuid.UUID(user_id))
+        response = self._request(
+            "DELETE",
+            "/rest/v1/favorites",
+            params={"user_id": f"eq.{user_id}", "term_id": f"eq.{int(term_id)}", "select": "term_id"},
+            headers={**self._headers(), "Prefer": "return=representation"},
+        )
+        if response.status_code != 200:
+            raise SupabaseConfigError(f"favorites delete status {response.status_code}")
+        if response.json():
+            return True
+        return bool(self._select("terms", {"id": f"eq.{int(term_id)}", "select": "id", "limit": "1"}))
+
     def report_target_exists(self, target_type: str, target_id: int, user_id: str) -> bool:
         """E10: 신고할 수 있는 대상인지. 그 사용자가 신고할 수 있는 것만 True다(없는 것과 볼 수 없는 것을 구분하지 않는다).
 
