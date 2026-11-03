@@ -111,7 +111,7 @@ export default function AccountsPage() {
             autoComplete="off"
             placeholder="합성 사용자"
             required
-            maxLength={80}
+            maxLength={100}
             value={displayName}
             error={reasonText(fieldReasons.displayName)}
             onChange={(event) => setDisplayName(event.target.value)}
@@ -122,7 +122,6 @@ export default function AccountsPage() {
             type="password"
             autoComplete="new-password"
             required
-            minLength={8}
             hint="발급한 뒤에는 이 비밀번호를 다시 볼 수 없어요."
             value={password}
             error={reasonText(fieldReasons.password)}
