@@ -72,7 +72,7 @@ gh api repos/wnstjd5408/Vibecoding-project---4-/rules/branches/staging
 gh api repos/wnstjd5408/Vibecoding-project---4-/branches/staging --jq '{name,protected,sha:.commit.sha}'
 ```
 
-`--actual`은 bypass 목록의 명시적 빈 배열과 `current_user_can_bypass: never`도 요구한다. 권한 때문에 필드가 보이지 않으면 실패하며 관리자가 조회한 증거가 필요하다. AI 계정에서도 `current_user_can_bypass`를 별도로 조회한다. 응답에 추가된 ID/시각 등은 허용하되 보호 항목 누락·다른 대상·중복 규칙·다른 검사/앱·strict 해제는 거부한다.
+`--actual`은 bypass 목록의 명시적 빈 배열과 `current_user_can_bypass: never`, 양의 정수 `id`, `source_type: Repository`, `source: wnstjd5408/Vibecoding-project---4-`도 요구한다. 임시 시험 저장소의 응답이나 출처를 알 수 없는 파일은 실제 대상의 적용 증거로 통과시키지 않는다. 권한 때문에 필드가 보이지 않으면 실패하며 관리자가 조회한 증거가 필요하다. AI 계정에서도 `current_user_can_bypass`를 별도로 조회한다. 응답의 추가 시각 등은 허용하되 보호 항목 누락·다른 대상·중복 규칙·다른 검사/앱·strict 해제는 거부한다. 오프라인 파일 검사는 응답의 진위나 최신성을 보장하지 않으므로 관리자가 방금 조회한 원본을 사용한다.
 
 이 검증기는 **단일 ruleset의 구성**을 대조한다. 다른 ruleset/기존 branch protection의 중첩, CODEOWNERS의 실제 승인자 자격, 서버의 push 거부, 실제 CI 내용, 배포 차단은 보장하지 않는다. 전체 실효 규칙도 사람이 확인한다.
 
@@ -86,7 +86,7 @@ gh api repos/wnstjd5408/Vibecoding-project---4-/branches/staging --jq '{name,pro
 4. PR 경로에서도 미완료·실패 검사, Code Owner 승인 없음, 새 push 후 승인 취소, 최신 base 반영 전/후 상태를 기록한다. 시험 브랜치의 대상 이름에 맞춘 CI 트리거와 동일한 검사 앱이 필요하다. 검사 실패가 없는데 다른 규칙 때문에 막힌 상태를 검사 차단의 증거로 쓰지 않는다.
 5. 시험 PR은 병합 없이 닫는다. 사람이 임시 규칙만 해제한 뒤 임시 브랜치/저장소를 정리한다. staging 규칙은 유지한다. 정리 확인과 시험 이슈의 실제 상태를 남긴다.
 
-임시 환경 거부 시험은 staging 자체의 파괴 시험이 아니다. staging의 실제 구성 증거와 별개로 기록한다. 승인된 안전한 시험 환경/관리자 적용이 없으면 AC-3은 미검증이다.
+임시 환경 거부 시험은 staging 자체의 파괴 시험이 아니다. staging의 실제 구성 증거와 별개로 기록한다. 승인된 안전한 시험 환경/관리자 적용이 없으면 부모 MEG-169의 AC-3은 미검증이다. MEG-176의 AC-3은 이 절차의 문서화와 검증 결과 기록을 다룬다.
 
 ## 2026-11-03 읽기 전용 확인
 

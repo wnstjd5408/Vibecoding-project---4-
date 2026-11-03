@@ -31,6 +31,11 @@ def validate(data: dict, *, actual: bool = False) -> list[str]:
         expect(data.get(key), value, key)
     if actual:
         expect(data.get("current_user_can_bypass"), "never", "current_user_can_bypass")
+        expect(data.get("source_type"), "Repository", "source_type")
+        expect(data.get("source"), "wnstjd5408/Vibecoding-project---4-", "source")
+        ruleset_id = data.get("id")
+        if type(ruleset_id) is not int or ruleset_id <= 0:
+            errors.append("id: expected a positive integer from the ruleset GET response")
     rules = data.get("rules")
     if not isinstance(rules, list) or any(not isinstance(r, dict) for r in rules):
         return errors + ["rules must be an array of objects"]

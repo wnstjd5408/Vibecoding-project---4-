@@ -13,12 +13,39 @@ class RulesetTest(unittest.TestCase):
     def setUp(self):
         self.policy = json.loads(POLICY.read_text(encoding="utf-8"))
 
+    def actual_snapshot(self):
+        snapshot = copy.deepcopy(self.policy)
+        snapshot.update(id=42, source_type="Repository",
+                        source="wnstjd5408/Vibecoding-project---4-",
+                        current_user_can_bypass="never")
+        return snapshot
+
+    def test_actual_rejects_wrong_or_unknown_repository(self):
+        for key, value in [("source", "someone/temporary-test-repo"),
+                           ("source", None), ("source_type", "Organization"),
+                           ("source_type", None)]:
+            with self.subTest(key=key, value=value):
+                snapshot = self.actual_snapshot()
+                snapshot[key] = value
+                self.assertTrue(validate(snapshot, actual=True))
+
+    def test_actual_requires_positive_integer_ruleset_id(self):
+        for value in [None, True, 0, -1, "42", 42.0]:
+            with self.subTest(value=value):
+                snapshot = self.actual_snapshot()
+                snapshot["id"] = value
+                self.assertTrue(validate(snapshot, actual=True))
+
+    def test_actual_rejects_proposal_with_only_bypass_evidence(self):
+        self.policy["current_user_can_bypass"] = "never"
+        self.assertTrue(validate(self.policy, actual=True))
+
     def test_proposal_is_not_actual_evidence(self):
         self.assertEqual(validate(self.policy), [])
         self.assertTrue(validate(self.policy, actual=True))
 
     def test_actual_requires_visible_bypass_list_and_never(self):
-        self.policy["current_user_can_bypass"] = "never"
+        self.policy = self.actual_snapshot()
         self.assertEqual(validate(self.policy, actual=True), [])
         del self.policy["bypass_actors"]
         self.assertTrue(validate(self.policy, actual=True))
@@ -71,7 +98,8 @@ class RulesetTest(unittest.TestCase):
             self.assertTrue(validate(policy))
 
     def test_api_metadata_and_reordering_are_allowed(self):
-        self.policy.update(id=123, source_type="Repository", current_user_can_bypass="never")
+        self.policy = self.actual_snapshot()
+        self.policy.update(created_at="2026-11-03T00:00:00Z")
         self.policy["rules"].reverse()
         self.policy["rules"][0]["parameters"]["required_status_checks"].reverse()
         self.assertEqual(validate(self.policy, actual=True), [])
