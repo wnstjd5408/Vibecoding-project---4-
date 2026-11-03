@@ -88,6 +88,7 @@ uv run --no-sync python scripts/check_test_report.py sql-results.xml
 프론트 (`frontend/`, Bash 예시):
 
 ```bash
+uv sync --locked --directory ../backend
 npm ci
 npm run lint
 npm run build
@@ -97,6 +98,8 @@ python ../backend/scripts/check_test_report.py test-results/mock.xml
 CI=true PLAYWRIGHT_JUNIT_OUTPUT_FILE=test-results/notes.xml npm run test:e2e:notes -- --reporter=list,junit
 python ../backend/scripts/check_test_report.py test-results/notes.xml
 ```
+
+notes 시험 일부는 Python의 Notion 변환기로 합성 입력을 만들므로 E2E job에도 uv·Python·백엔드 잠금 의존성을 설치한다. 원격 Notion이나 DB를 호출하지 않는다.
 
 각 테스트 명령이 성공한 뒤 JUnit 검사를 실행한다. 보고서 누락·파싱 오류·0개 testcase·skip·실패·error는 모두 거부한다. 필수 실행에만 적용하며 기본 로컬 pytest의 opt-in 동작은 바꾸지 않는다. 테스트 수는 현재 커밋의 결과로 기록하며 과거 숫자를 하드코딩하지 않는다. `test.only`는 CI에서 거부한다.
 
