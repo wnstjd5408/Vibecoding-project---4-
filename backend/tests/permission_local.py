@@ -115,7 +115,7 @@ class LocalMatrix:
           delete from quiz_sets where user_id in ({ids});
           delete from ai_explanations where id = {EXPLANATION};
           delete from terms where id in ({TERM},{AI_TERM}) or key like 'meg69 {self.tag}%';
-          delete from notes where id in ({NOTE},{PRIVATE});
+          delete from notes where id in ({NOTE},{PRIVATE}) or title = 'meg69 {self.tag} new note';
           delete from storage_delete_jobs where bucket in ('{BUCKET}','{NOTE_BUCKET}');
           delete from rate_limit_counters;
         """)
@@ -195,7 +195,7 @@ class LocalMatrix:
     def prepare_request(self, endpoint, role, *, foreign=False, private=False):
         user = self.users.get(role, self.users["member"])
         item = self.users["member" if role == "operator" else "operator"]["item"] if foreign else user["item"]
-        note = PRIVATE if private else NOTE
+        note = PRIVATE if private or endpoint.id in ("E15", "E17", "E18") else NOTE
         path = endpoint.path.format(note_id=note, term_id=TERM, item_id=item, seq=1, image_id=IMAGE, report_id=REPORT)
         headers = {**ORIGIN, "Idempotency-Key": str(uuid4())}
         body = {
@@ -204,7 +204,8 @@ class LocalMatrix:
             "E09": {"note_id": note, "note_revision": 1, "selection": {"start": 0, "end": 10}},
             "E10": {"target": {"type": "quiz_item", "id": item}, "body": "Synthetic report"},
             "E12": {"answer": "Synthetic answer"}, "E14": {"answer": "Synthetic followup answer"},
-            "E16": {"title": "Synthetic new note"}, "E17": {"is_published": True},
+            "E16": {"title": f"meg69 {self.tag} new note"},
+            "E17": {"is_published": True, "expected_revision": 1},
             "E20": {"label": f"meg69 {self.tag} new", "body_markdown": "Synthetic dictionary"},
             "E24": {"email": f"meg69-issued-{uuid4().hex}@example.com", "display_name": "Synthetic issued",
                     "initial_password": secrets.token_urlsafe(24)},

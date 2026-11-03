@@ -10,7 +10,7 @@ import pytest
 
 from app.main import app
 from permission_local import (
-    EXPLANATION, IMAGE, NOTE, PRIVATE, REPORT, TERM,
+    EXPLANATION, IMAGE, NOTE, NOTE_BUCKET, PRIVATE, REPORT, TERM,
     LocalMatrix, install,
 )
 from permission_matrix import BY_ID, ENDPOINTS, ROLES, expected
@@ -101,6 +101,21 @@ def test_role_matrix(endpoint, role, case):
             assert body["question"] == "Synthetic followup"
         elif endpoint.id == "E14":
             assert body["answered"] is True
+        elif endpoint.id == "E15":
+            assert body["id"] == PRIVATE and body["is_published"] is False
+            assert body["images"], "operator must get private note image URLs"
+        elif endpoint.id == "E16":
+            assert body["revision"] == 1
+            assert case.sql(f"select count(*) from notes where id={int(body['id'])} and title='meg69 {case.tag} new note' and not is_published;") == "1"
+        elif endpoint.id == "E17":
+            assert body["id"] == PRIVATE and body["is_published"] is True
+            assert case.sql(f"select is_published from notes where id={PRIVATE};") == "t"
+            with case.client("visitor") as visitor:
+                assert visitor.get(f"/api/notes/{PRIVATE}").status_code == 200
+        elif endpoint.id == "E18":
+            assert case.sql(f"select count(*) from notes where id={PRIVATE};") == "0"
+            assert case.sql(f"select count(*) from note_images where note_id={PRIVATE};") == "0"
+            assert case.sql(f"select count(*) from storage.objects where bucket_id='{NOTE_BUCKET}' and name='fixture.png';") == "0"
         elif endpoint.id == "E19":
             assert TERM in {term["id"] for term in body["terms"]}
         elif endpoint.id == "E20":
