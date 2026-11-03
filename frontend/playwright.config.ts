@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './tests',
-  testIgnore: 'notes.spec.ts',
+  testIgnore: ['notes.spec.ts', 'quizFlow.spec.ts'],
   fullyParallel: true,
   workers: 2,
   retries: 0,

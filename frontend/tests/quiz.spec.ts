@@ -27,11 +27,11 @@ test('AC-1 로그인하면 오늘의 퀴즈 문항 목록이 보인다', async (
   await expect(page.getByText('난이도 중')).toBeVisible()
   await expect(page.getByText('난이도 하')).toBeVisible()
   await expect(page.getByText('AI 생성')).toHaveCount(2)
-  // 이미 답한 둘째 문항은 "답함"만 보이고 정답·해설·내 답은 이 화면에 나오지 않는다. 답 입력칸과 답하기 버튼도 없다.
+  // E12~E14 연결 후 답한 문항은 정답·해설과 꼬리 질문 진행을 복원한다.
   await expect(page.getByText('답함', { exact: true })).toHaveCount(1)
-  for (const hidden of ['합성 정답', '합성 해설', '합성 답변', '합성 꼬리 질문']) await expect(page.getByText(hidden)).toHaveCount(0)
-  await expect(page.getByRole('textbox')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '답하기' })).toHaveCount(0)
+  for (const restored of ['합성 정답', '합성 해설', '합성 답변', '합성 꼬리 질문']) await expect(page.getByText(restored, { exact: true })).toBeVisible()
+  await expect(page.getByRole('textbox')).toHaveCount(2)
+  await expect(page.getByRole('button', { name: '답 제출', exact: true })).toHaveCount(1)
   await expect(page.getByRole('link', { name: '노트 보러 가기' })).toHaveAttribute('href', '/')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await testInfo.attach('F3-3a 문항 목록', { body: await page.screenshot(), contentType: 'image/png' })
@@ -41,6 +41,18 @@ test('로그인한 사용자에게는 계정 메뉴가 보이고 로그인 안�
   await loginAsMember(page)
   await expect(page.getByRole('button', { name: /^내 계정/ })).toBeVisible()
   await expect(loginSheet(page)).toHaveCount(0)
+})
+
+test('개발용 합성 API도 답 제출·꼬리 질문·답 저장을 연결한다', async ({ page }) => {
+  await loginAsMember(page)
+  const card = page.getByRole('listitem').filter({ has: page.getByRole('heading', { name: '합성 질문 1입니다.' }) })
+  await card.getByLabel('문항에 대한 답').fill('합성 입력')
+  await card.getByRole('button', { name: '답 제출', exact: true }).click()
+  await expect(card.getByText('합성 정답', { exact: true })).toBeVisible()
+  await card.getByRole('button', { name: '꼬리 질문 받기' }).click()
+  await card.getByLabel('꼬리 질문 1에 대한 답').fill('합성 후속 답')
+  await card.getByRole('button', { name: '답 저장', exact: true }).click()
+  await expect(card.getByText('답 저장됨')).toBeVisible()
 })
 
 test('방문자가 /quiz로 직접 들어오면 퀴즈 문구의 로그인 안내가 열리고 본문에는 노트 목록 이동만 있다', async ({ page }, testInfo) => {

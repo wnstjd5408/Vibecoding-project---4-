@@ -1185,7 +1185,7 @@ const quizItems = [
 ]
 const ok = (body: unknown): QuizReply => ({ status: 200, json: body })
 const quizRetry = (page: Page) => page.getByRole('button', { name: '다시 시도' })
-const quizRecheck = (page: Page) => page.getByRole('button', { name: '다시 확인' })
+const quizRecheck = (page: Page) => page.getByRole('button', { name: '다시 확인', exact: true })
 
 // AC-1~3: 여섯 상태는 모두 HTTP 200이고 각각 다른 화면으로 보인다.
 const QUIZ_STATES = [
