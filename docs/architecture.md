@@ -161,6 +161,8 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 
 **E11 구현(MEG-91):** `POST /api/quiz/today`는 `backend/app/quiz.py`가 API spec 6절 순서대로 처리한다. 08:30 KST 전에는 DB·AI 없이 `not_open`이다(시계는 `session.now`로 고정할 수 있다). 그 뒤에는 이미 만든 세트(`ready`)를 AI 없이 주고, 없으면 전날 열어 본·즐겨찾기한 용어에서 후보를 고른다(전날 세트에 나온 용어·자료 없는 용어 제외, 한 용어에 문항 하나, 10개 초과 때 즐겨찾기 먼저·용어 id 순). 후보가 없으면 행 없이 `none`이다. 선점과 첫 예약은 SQL 함수 `ai_claim_quiz_set`이 한 트랜잭션으로 하고, 선점에 실패한 요청은 AI 없이 `generating`(`retry_after_seconds` 5)·`failed`를 받는다. 선점한 요청만 `run_ai_call`로 Bedrock을 부르고, 응답 구조를 검증한 뒤 SQL 함수 `quiz_store_items`가 문항·후보 스냅샷 저장과 `ready` 전환을 한 트랜잭션으로 한다(선점 때의 `attempt`와 같을 때만 저장). AI·저장이 실패하면 선점을 풀어 다음 호출이 시도가 남은 만큼 바로 다시 선점한다. 한도 소진은 429가 아니라 200 `ai_limit_reached`다. 사용자별 분당 요청 제한은 `WRITE`(30회/60초)이고 `not_open`은 세지 않는다. 숫자는 제안값이다.
 
+**E12·E14 구현(MEG-92):** `POST /api/quiz/items/{item_id}/answer`(E12)와 `PUT /api/quiz/items/{item_id}/followups/{seq}/answer`(E14)는 `backend/app/quiz_answers.py`가 처리한다. 둘 다 AI와 원장을 쓰지 않고 새 SQL 함수도 없다. 로그인한 사용자가 자기 세트의 문항에만 답하고, 남의 문항·없는 문항·1·2가 아닌 seq·아직 질문이 없는 꼬리 질문 슬롯은 모두 같은 404다. 검사 순서는 본문 형식(422), 경로 형식(404), 사용자별 쓰기 제한(`WRITE`, 대상 확인보다 먼저 센다), 대상 확인(404), 이미 답했는지(409), 저장이다. 답변은 1~1,000자이고 공백뿐이면 빈 값으로 본다. 같은 답을 다시 보내면 같은 응답(200), 다른 답이면 409 `already_answered`다. E12는 기본 키 충돌을 무시하는 삽입, E14는 질문이 있고 아직 답이 없는 슬롯에만 하는 조건부 갱신이라 먼저 저장된 답을 덮어쓰지 않고, 저장된 답을 내 답과 비교해 동시 요청도 같은 규칙으로 판정한다. E12는 정오 필드 없이 정답·해설·난이도와 꼬리 질문 상태(`can_request_followup`, `followups_remaining`)를 준다. 이 상태 규칙(`followup_progress`)은 E11 응답과 같다. E12·E14는 날짜를 검사하지 않아 자정을 넘겨도 이미 낸 문항의 답을 받는다. 재접속하면 E11이 같은 세트의 답·정답·해설·꼬리 질문 진행을 그대로 돌려준다.
+
 **공유 캐시**
 
 - 같은 용어의 AI 설명은 저장해 모든 사용자가 다시 쓴다. 캐시 응답은 AI를 부르지 않고 한도에도 세지 않는다.
