@@ -1,6 +1,7 @@
 import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
+  forbidOnly: Boolean(process.env.CI),
   testDir: './tests',
   testIgnore: ['notes.spec.ts', 'quizFlow.spec.ts'],
   fullyParallel: true,

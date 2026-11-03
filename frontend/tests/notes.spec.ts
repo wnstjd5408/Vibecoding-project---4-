@@ -1215,12 +1215,12 @@ test('여섯 상태의 안내 문구는 서로 모두 다르다', () => {
   expect(new Set(titles).size).toBe(titles.length)
 })
 
-test('ready 응답의 정답·해설·내 답은 화면에 나오지 않는다', async ({ page }) => {
+test('ready 응답에서 답한 문항의 정답·해설·내 답을 복원한다', async ({ page }) => {
   await setupQuiz(page, { respond: () => ok({ status: 'ready', quiz_date: '2026-10-23', items: quizItems }) })
   await page.goto('/quiz')
   await expect(page.getByRole('heading', { name: '합성 질문 2입니다.' })).toBeVisible()
   await expect(page.getByText('답함', { exact: true })).toHaveCount(1)
-  for (const hidden of ['합성 정답', '합성 해설', '합성 답변']) await expect(page.getByText(hidden)).toHaveCount(0)
+  for (const restored of ['합성 정답', '합성 해설', '합성 답변']) await expect(page.getByText(restored, { exact: true })).toBeVisible()
 })
 
 test('not_open·none에서 다시 확인을 누르면 다시 조회하고 08:30이 되어도 저절로 갱신하지 않는다', async ({ page }) => {
