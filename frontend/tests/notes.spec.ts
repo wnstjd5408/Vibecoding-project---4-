@@ -2070,3 +2070,315 @@ test('서버 대기 시각은 요청을 시작한 세션 번호로 조회한다(
   expect(result.same).toBe(true)
   expect(result.other).toBeNull()
 })
+
+// ---- MEG-140 노트 본문의 mermaid 코드 블록을 다이어그램 그림으로 보여준다. 실제 노트 화면과 합성 HTTP 응답으로 시험한다. ----
+// 언어 표시가 있는 울타리(```mermaid)만 그린다. 실제 Notion 노트에 표시가 남는 것은 MEG-149(가져오기)가 끝나야 한다. 이 시험은 합성 노트다.
+
+const FLOW = '```mermaid\ngraph TD\n  A[시작] --> B[끝]\n```'
+const diagram = (page: Page) => page.getByRole('img', { name: 'mermaid 다이어그램' })
+
+async function openMermaidNote(page: Page, body: string) {
+  await setupAi(page, { member: false, body })
+  await page.goto('/notes/31')
+  await page.locator('[data-note-body]').waitFor()
+}
+
+test('AC-1 mermaid 블록이 든 노트를 열면 그 자리에 다이어그램 그림이 보이고 원문 코드는 보이지 않는다', async ({ page }) => {
+  await openMermaidNote(page, `앞 문단\n\n${FLOW}\n\n뒤 문단`)
+  await expect(diagram(page)).toBeVisible()
+  expect(await diagram(page).evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true)
+  const body = page.locator('[data-note-body]')
+  await expect(body.getByText('graph TD')).toBeHidden() // 원문은 눈에 보이지 않는 접근성 설명에만 있다
+  await expect(body.locator('pre')).toHaveCount(0)
+  await expect(body.getByText('앞 문단')).toBeVisible()
+  await expect(body.getByText('뒤 문단')).toBeVisible()
+})
+
+test('AC-1 한 노트의 mermaid 블록 여러 개가 모두 그려진다', async ({ page }) => {
+  await openMermaidNote(page, `${FLOW}\n\n사이 문단\n\n\`\`\`mermaid\nsequenceDiagram\n  가->>나: 안녕\n\`\`\``)
+  await expect(diagram(page)).toHaveCount(2)
+  await expect(diagram(page).first()).toBeVisible()
+  await expect(diagram(page).nth(1)).toBeVisible()
+})
+
+test('AC-2 문법이 틀린 mermaid 블록은 노트를 깨지 않고 원래 코드 블록으로 보인다', async ({ page }) => {
+  await openMermaidNote(page, '앞 문단\n\n```mermaid\ngraph TD\n  A[ --> \n```\n\n뒤 문단')
+  const body = page.locator('[data-note-body]')
+  await expect(body.locator('pre')).toContainText('graph TD')
+  await expect(diagram(page)).toHaveCount(0)
+  await expect(body.getByText('뒤 문단')).toBeVisible()
+  // mermaid가 오류를 그리며 문서에 남기는 요소가 없다
+  await expect(page.getByText('Syntax error in text')).toHaveCount(0)
+})
+
+test('AC-3 mermaid 라벨에 넣은 HTML·스크립트는 실행되지 않는다', async ({ page }) => {
+  const injected = '```mermaid\ngraph TD\n  A["<img src=x onerror=window.__pwned=1>"] --> B["<script>window.__pwned=2</script>"]\n  click A call window.__pwned()\n```'
+  await openMermaidNote(page, injected)
+  const body = page.locator('[data-note-body]')
+  // 그림으로 그려지거나 코드 블록으로 돌아가거나 어느 쪽이든, 이 둘 중 하나는 보여야 한다
+  await expect(diagram(page).or(body.locator('pre'))).toBeVisible()
+  await page.waitForTimeout(500)
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: unknown }).__pwned)).toBeUndefined()
+  expect(await page.evaluate(() => document.querySelectorAll('img[src="x"]').length)).toBe(0)
+})
+
+test('AC-4 mermaid가 아닌 코드 블록과 사전 용어 형광펜, 본문은 그대로 보인다', async ({ page }) => {
+  await openMermaidNote(page, `\`\`\`js\nconst a = 1\n\`\`\`\n\n${FLOW}\n\n\`\`\`\n언어 없는 코드\n\`\`\``)
+  const body = page.locator('[data-note-body]')
+  await expect(diagram(page)).toBeVisible()
+  await expect(body.locator('pre')).toHaveCount(2) // js와 언어 없는 코드 블록은 그대로다
+  await expect(body.locator('pre').first()).toContainText('const a = 1')
+  await expect(body.locator('pre').nth(1)).toContainText('언어 없는 코드')
+})
+
+test('mermaid가 없는 노트를 열 때는 mermaid 코드를 내려받지 않는다(지연 로드)', async ({ page }) => {
+  const requested: string[] = []
+  // 우리 소스 파일(MermaidBlock.tsx 등)이 아니라 라이브러리 요청만 본다
+  page.on('request', (request) => { if (/\/node_modules\/\.vite\/deps\/(mermaid|chunk-)/i.test(request.url()) && /mermaid/i.test(request.url())) requested.push(request.url()) })
+  await openMermaidNote(page, '그냥 문단\n\n```js\nconst a = 1\n```')
+  await expect(page.locator('[data-note-body] pre')).toContainText('const a = 1')
+  await page.waitForTimeout(500)
+  expect(requested).toEqual([])
+})
+
+const diagramSource = async (page: Page) => decodeURIComponent((await diagram(page).getAttribute('src')) ?? '').toLowerCase()
+
+test('다이어그램 색은 디자인 토큰을 따르고 그림자를 쓰지 않는다', async ({ page }) => {
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  const svg = await diagramSource(page)
+  expect(svg).toContain('#16202f') // --ink
+  expect(svg).toContain('#76818f') // --line-strong
+  expect(svg).not.toContain('lineargradient')
+  expect(svg).not.toContain('<foreignobject') // 글자는 SVG 글자로 그린다(그림 안에서 HTML 글꼴에 기대지 않는다)
+})
+
+test('좁은 화면에서 넓은 다이어그램은 글자를 읽을 수 있는 크기를 지키고 가로로 스크롤한다', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const steps = Array.from({ length: 7 }, (_, index) => `S${index}[${index + 1}번째 단계]`).join(' --> ')
+  await openMermaidNote(page, `\`\`\`mermaid\ngraph LR\n  ${steps}\n\`\`\``)
+  await expect(diagram(page)).toBeVisible()
+  const size = await diagram(page).evaluate((img: HTMLImageElement) => {
+    const box = img.parentElement!
+    return { shown: img.getBoundingClientRect().width, natural: img.naturalWidth, scrolls: box.scrollWidth > box.clientWidth }
+  })
+  expect(size.natural).toBeGreaterThan(390) // 이 그림은 화면보다 넓다
+  expect(Math.round(size.shown)).toBe(size.natural) // 줄이지 않고 원래 크기로 보인다
+  expect(size.scrolls).toBe(true) // 대신 가로로 스크롤한다
+})
+
+test('좁은 화면에서도 작은 다이어그램은 늘어나지 않고 원래 크기다', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  const size = await diagram(page).evaluate((img: HTMLImageElement) => ({ shown: img.getBoundingClientRect().width, natural: img.naturalWidth }))
+  expect(Math.round(size.shown)).toBe(size.natural)
+})
+
+test('디자인 규칙: 어떤 종류의 다이어그램에도 그림자·neo 모양이 적용되지 않는다', async ({ page }) => {
+  await openMermaidNote(page, `${FLOW}\n\n\`\`\`mermaid\nsequenceDiagram\n  가->>나: 안녕\n\`\`\`\n\n\`\`\`mermaid\nclassDiagram\n  A <|-- B\n\`\`\``)
+  await expect(diagram(page)).toHaveCount(3)
+  await expect(diagram(page).nth(2)).toBeVisible()
+  // 문서 속 <style>에는 쓰이지 않는 neo 전용 규칙이 글자로 남아 있으므로, 글자 검색이 아니라 실제 요소의 속성을 본다
+  const found = await page.evaluate(() => [...document.querySelectorAll('[data-note-body] img')].map((img) => {
+    const text = decodeURIComponent((img as HTMLImageElement).src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+    const doc = new DOMParser().parseFromString(text, 'image/svg+xml')
+    return { neo: doc.querySelectorAll('[data-look="neo"]').length, filtered: doc.querySelectorAll('[filter]').length }
+  }))
+  expect(found).toEqual([{ neo: 0, filtered: 0 }, { neo: 0, filtered: 0 }, { neo: 0, filtered: 0 }])
+})
+
+test('data-theme="dark" 안에서는 어두운 토큰 색으로 그린다', async ({ page }) => {
+  // 이 앱에서 어두운 토큰은 data-theme 속성이 있을 때만 적용된다(자동 다크 모드 없음).
+  await page.addInitScript(() => {
+    const timer = setInterval(() => {
+      if (document.documentElement) {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        clearInterval(timer)
+      }
+    }, 0)
+  })
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  const svg = await diagramSource(page)
+  expect(svg).toContain('#eef1f5') // 어두운 --ink
+  expect(svg).not.toContain('#16202f')
+})
+
+// 독립 검토 반영: 약한 시험 보강(지연 로드의 양성 대조, 그려진 그림의 내용 검사), 작성자의 설정 지시문 차단, 더 많은 다이어그램 종류.
+const decodedSvgs = (page: Page) => page.evaluate(() => [...document.querySelectorAll('[data-note-body] img')].map((img) => {
+  const text = decodeURIComponent((img as HTMLImageElement).src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml')
+  const handlers = [...doc.querySelectorAll('*')].flatMap((element) => [...element.attributes].filter((attribute) => /^on/i.test(attribute.name)).map((attribute) => attribute.name))
+  const scriptLinks = [...doc.querySelectorAll('*')].flatMap((element) => [...element.attributes].filter((attribute) => /href$/i.test(attribute.name) && /^\s*javascript:/i.test(attribute.value)).map((attribute) => attribute.value))
+  return { scripts: doc.querySelectorAll('script').length, images: doc.querySelectorAll('img').length, handlers, scriptLinks, neo: doc.querySelectorAll('[data-look="neo"]').length, filtered: doc.querySelectorAll('[filter]').length }
+}))
+
+test('AC-3 그려진 그림 안에 스크립트·이미지 태그·이벤트 처리기·javascript: 링크가 없다(라벨은 글자로만 남는다)', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n  A["<img src=x onerror=window.__pwned=1>"] --> B["<b>굵게</b> <script>window.__pwned=2</script>"]\n```')
+  await expect(diagram(page)).toBeVisible() // 이 입력은 그림으로 그려져야 한다(코드로 돌아가면 이 시험이 알려 준다)
+  expect(await decodedSvgs(page)).toEqual([{ scripts: 0, images: 0, handlers: [], scriptLinks: [], neo: 0, filtered: 0 }])
+})
+
+test('지연 로드 시험이 실제로 요청을 잡는다(mermaid가 있는 노트에서는 라이브러리 요청이 생긴다)', async ({ page }) => {
+  const requested: string[] = []
+  page.on('request', (request) => { if (/\/node_modules\/\.vite\/deps\/(mermaid|chunk-)/i.test(request.url()) && /mermaid/i.test(request.url())) requested.push(request.url()) })
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  expect(requested.length).toBeGreaterThan(0)
+})
+
+test('노트 작성자는 설정 지시문과 머리말로 모양·테마를 바꿀 수 없다(디자인 토큰 고정)', async ({ page }) => {
+  const directive = '```mermaid\n%%{init: {"look": "neo", "theme": "dark", "themeVariables": {"primaryColor": "#ff0000"}}}%%\ngraph TD\n  A[시작] --> B[끝]\n```'
+  const frontmatter = '```mermaid\n---\nconfig:\n  look: neo\n  theme: forest\n---\ngraph TD\n  A[시작] --> B[끝]\n```'
+  await openMermaidNote(page, `${directive}\n\n${frontmatter}`)
+  await expect(diagram(page)).toHaveCount(2)
+  await expect(diagram(page).nth(1)).toBeVisible()
+  expect(await decodedSvgs(page)).toEqual([
+    { scripts: 0, images: 0, handlers: [], scriptLinks: [], neo: 0, filtered: 0 },
+    { scripts: 0, images: 0, handlers: [], scriptLinks: [], neo: 0, filtered: 0 },
+  ])
+  for (const index of [0, 1]) {
+    const svg = decodeURIComponent((await diagram(page).nth(index).getAttribute('src')) ?? '').toLowerCase()
+    expect(svg).toContain('#16202f') // 디자인 토큰의 --ink
+    expect(svg).not.toContain('#ff0000')
+  }
+})
+
+test('디자인 규칙: 상태·관계·여정·파이 같은 다른 종류에서도 그림자·neo 모양이 없다', async ({ page }) => {
+  await openMermaidNote(page, [
+    '```mermaid\nstateDiagram-v2\n  [*] --> 대기\n  대기 --> 완료\n```',
+    '```mermaid\nerDiagram\n  USER ||--o{ NOTE : writes\n```',
+    '```mermaid\njourney\n  title 하루\n  section 아침\n    일어나기: 3: 나\n```',
+    '```mermaid\npie title 비율\n  "가" : 60\n  "나" : 40\n```',
+  ].join('\n\n'))
+  await expect(diagram(page)).toHaveCount(4)
+  await expect(diagram(page).nth(3)).toBeVisible()
+  const found = await decodedSvgs(page)
+  expect(found.map((item) => ({ neo: item.neo, filtered: item.filtered }))).toEqual(Array.from({ length: 4 }, () => ({ neo: 0, filtered: 0 })))
+})
+
+// PR #98 Codex 리뷰 P2 반영: 일반 스타일 문법(classDef·class·style·linkStyle·:::)으로 디자인 토큰 색을 우회하지 못하게 하고,
+// 그려진 그림의 접근 가능한 이름에 원문 내용을 남긴다.
+test('디자인 토큰: classDef·class·style·linkStyle·:::로 지정한 색은 그림에 적용되지 않고 그림은 그대로 그려진다', async ({ page }) => {
+  const styled = [
+    '```mermaid\ngraph TD\n  A[시작] --> B[끝]\n  classDef custom fill:#ff0000,color:#00ff00,stroke:#0000ff;\n  class A custom;\n```',
+    '```mermaid\ngraph TD\n  A[시작]:::custom --> B[끝]\n  classDef custom fill:#ff0001,color:#00ff01,stroke:#0000fe;\n```',
+    '```mermaid\ngraph TD\n  A[시작] --> B[끝]\n  style A fill:#ff0002,stroke:#00ff02,color:#0000fd\n  linkStyle 0 stroke:#ff0003,stroke-width:4px\n```',
+    '```mermaid\nstateDiagram-v2\n  [*] --> 대기\n  대기 --> 완료\n  classDef warn fill:#ff0004,color:#00ff04\n  class 대기 warn\n```',
+  ].join('\n\n')
+  await openMermaidNote(page, styled)
+  await expect(diagram(page)).toHaveCount(4) // 스타일 줄만 지우고 그림은 그린다(코드로 돌아가지 않는다)
+  await expect(diagram(page).nth(3)).toBeVisible()
+  for (let index = 0; index < 4; index += 1) {
+    const svg = decodeURIComponent((await diagram(page).nth(index).getAttribute('src')) ?? '').toLowerCase()
+    for (const color of ['#ff0000', '#00ff00', '#0000ff', '#ff0001', '#00ff01', '#0000fe', '#ff0002', '#00ff02', '#0000fd', '#ff0003', '#ff0004', '#00ff04']) expect(svg, `${index}번째 그림에 ${color}`).not.toContain(color)
+  }
+})
+
+test('스타일 줄을 지워도 클래스 다이어그램의 class 선언은 그대로 그려진다(과하게 지우지 않는다)', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nclassDiagram\n  class Animal {\n    +String name\n  }\n  class Dog\n  Animal <|-- Dog\n```')
+  await expect(diagram(page)).toBeVisible()
+  const svg = decodeURIComponent((await diagram(page).getAttribute('src')) ?? '')
+  expect(svg).toContain('Animal')
+  expect(svg).toContain('Dog')
+})
+
+test('디자인 토큰: 시퀀스 다이어그램의 rect·box 색 지정도 적용되지 않고 그림은 그대로 그려진다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nsequenceDiagram\n  box rgb(255, 0, 7) 서버쪽\n    participant 서버\n  end\n  participant 사용자\n  rect rgb(0, 255, 8)\n    사용자->>서버: 요청\n  end\n  rect rgba(1, 2, 255, 0.5)\n    서버-->>사용자: 응답\n  end\n```')
+  await expect(diagram(page)).toBeVisible()
+  const svg = decodeURIComponent((await diagram(page).getAttribute('src')) ?? '').toLowerCase()
+  for (const color of ['rgb(255, 0, 7)', 'rgb(0, 255, 8)', 'rgba(1, 2, 255', 'rgb(255,0,7)', 'rgb(0,255,8)']) expect(svg).not.toContain(color)
+  expect(svg).toContain('서버쪽') // 이름은 남고 색만 사라진다
+})
+
+// PR #98 Codex 재리뷰 반영: 세미콜론으로 이어 쓴 스타일, 긴 원문의 접근 가능한 설명(잘리지 않음), Mermaid 접근성 문법(accTitle·accDescr).
+test('디자인 토큰: 세미콜론으로 이어 쓴 style·classDef·class도 지워지고 그림은 그대로 그려진다', async ({ page }) => {
+  await openMermaidNote(page, [
+    '```mermaid\ngraph TD; A[Start] --> B[End]; style A fill:#ff0000;\n```',
+    '```mermaid\ngraph TD; A[시작] --> B[끝]; classDef warn fill:#ff0010,color:#00ff10; class A warn; linkStyle 0 stroke:#0000ee;\n```',
+    '```mermaid\ngraph TD\n  A[시작]:::warn --> B[끝]; classDef warn fill:#ff0011\n```',
+  ].join('\n\n'))
+  await expect(diagram(page)).toHaveCount(3)
+  await expect(diagram(page).nth(2)).toBeVisible()
+  for (let index = 0; index < 3; index += 1) {
+    const svg = decodeURIComponent((await diagram(page).nth(index).getAttribute('src')) ?? '').toLowerCase()
+    for (const color of ['#ff0000', '#ff0010', '#00ff10', '#0000ee', '#ff0011']) expect(svg, `${index}번째 그림에 ${color}`).not.toContain(color)
+  }
+})
+
+test('세미콜론 처리는 따옴표·괄호 안의 라벨을 훼손하지 않는다', async ({ page }) => {
+  // 따옴표 없는 라벨의 ;는 Mermaid에서도 문장 끝이라 따옴표로 감싼 라벨만 시험한다
+  await openMermaidNote(page, '```mermaid\ngraph TD\n  A["앞; 뒤"] --> B["문장; style X fill 같은 글"]; C["괄호; 안"] --> A\n```')
+  await expect(diagram(page)).toBeVisible()
+  // mermaid가 라벨을 단어별 tspan으로 나눠 그리므로 SVG 원문이 아니라 그림에 보이는 글자(textContent)로 확인한다
+  const shown = await diagram(page).evaluate((img: HTMLImageElement) => {
+    const text = decodeURIComponent(img.src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+    // <style>의 글자는 빼고 <text>의 글자만 모으며, 줄바꿈에 따른 공백 차이를 없애려고 공백을 모두 지운다
+    return [...new DOMParser().parseFromString(text, 'image/svg+xml').querySelectorAll('text')].map((element) => element.textContent ?? '').join('').replace(/\s+/g, '')
+  })
+  expect(shown).toContain('앞;뒤')
+  expect(shown).toContain('문장;styleXfill같은글')
+  expect(shown).toContain('괄호;안')
+})
+
+test('접근성: 그림의 접근 가능한 이름은 짧고, 전체 원문은 접근 가능한 설명으로 전달된다', async ({ page }) => {
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  await expect(diagram(page)).toHaveAccessibleName('mermaid 다이어그램')
+  await expect(diagram(page)).toHaveAccessibleDescription(/원문: graph TD; A\[시작\] --> B\[끝\]/)
+  // 원문은 눈에 보이지 않는다(코드로 보이지 않는다)
+  await expect(page.locator('[data-note-body]').getByText('graph TD')).toBeHidden()
+})
+
+test('접근성: 긴 원문도 잘리지 않아 마지막 노드와 관계까지 접근 가능한 설명에 남는다', async ({ page }) => {
+  const lines = Array.from({ length: 81 }, (_, index) => `N${index}[노드${index}] --> N${index + 1}[노드${index + 1}]`).join('\n  ')
+  await openMermaidNote(page, `\`\`\`mermaid\ngraph TD\n  ${lines}\n\`\`\``)
+  await expect(diagram(page)).toBeVisible()
+  const description = await diagram(page).evaluate((img: HTMLImageElement) => document.getElementById(img.getAttribute('aria-describedby') ?? '')?.textContent ?? '')
+  expect(description.length).toBeGreaterThan(1000) // 예전의 1,000자 제한을 넘는다
+  expect(description).toContain('N0[노드0] --> N1[노드1]')
+  expect(description).toContain('N80[노드80] --> N81[노드81]') // 마지막 관계
+  expect(description.endsWith('…')).toBe(false)
+  await expect(diagram(page)).toHaveAccessibleDescription(/N80\[노드80\] --> N81\[노드81\]/)
+})
+
+test('접근성: Mermaid의 accTitle·accDescr를 접근 가능한 이름·설명에 반영한다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n  accTitle: 요청 흐름\n  accDescr: 브라우저가 서버에 요청하고 응답을 받는다\n  A[브라우저] --> B[서버]\n```')
+  await expect(diagram(page)).toBeVisible()
+  await expect(diagram(page)).toHaveAccessibleName('mermaid 다이어그램: 요청 흐름')
+  await expect(diagram(page)).toHaveAccessibleDescription(/브라우저가 서버에 요청하고 응답을 받는다.*원문: /)
+})
+
+// PR #98 Codex 3차 리뷰 반영: 따옴표 안의 글(여러 줄 포함)은 스타일 처리에서 건드리지 않고, 이름으로 지정한 색도 지운다.
+const shownText = (page: Page, index = 0) => diagram(page).nth(index).evaluate((img: HTMLImageElement) => {
+  const text = decodeURIComponent(img.src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+  return [...new DOMParser().parseFromString(text, 'image/svg+xml').querySelectorAll('text')].map((element) => element.textContent ?? '').join('').replace(/\s+/g, '')
+})
+
+test('따옴표 안의 :::는 라벨 글자로 남고 그림이 그대로 그려진다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n A["Address :::example"] --> B[End]\n```')
+  await expect(diagram(page)).toBeVisible() // 닫는 따옴표가 지워져 문법 오류로 코드가 되면 이 시험이 알려 준다
+  expect(await shownText(page)).toContain('Address:::example')
+})
+
+test('여러 줄 따옴표 라벨 속 style·classDef·class로 시작하는 줄도 라벨 내용으로 남는다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n A["first line\nstyle guide\nclassDef notes\nclass these items\nlast line"] --> B[End]\n```')
+  await expect(diagram(page)).toBeVisible()
+  const shown = await shownText(page)
+  for (const piece of ['firstline', 'styleguide', 'classDefnotes', 'classtheseitems', 'lastline']) expect(shown).toContain(piece)
+})
+
+test('디자인 토큰: 시퀀스 box에 이름으로 지정한 색은 지우고 그룹 이름은 남긴다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nsequenceDiagram\nbox Aqua Server\n participant A\nend\nA->>A: hello\n```')
+  await expect(diagram(page)).toBeVisible()
+  const svg = decodeURIComponent((await diagram(page).getAttribute('src')) ?? '').toLowerCase()
+  expect(svg).not.toContain('aqua')
+  expect(await shownText(page)).toContain('Server')
+})
+
+test('box의 첫 글자가 색 이름이 아니면 그룹 이름을 그대로 둔다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nsequenceDiagram\nbox Backend Team\n participant A\nend\nA->>A: hello\n```')
+  await expect(diagram(page)).toBeVisible()
+  expect(await shownText(page)).toContain('BackendTeam')
+})
