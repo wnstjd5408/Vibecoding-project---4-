@@ -350,3 +350,81 @@ def test_visible_text_drops_image_tokens_and_urls_and_respects_the_slice():
     text = '그림 ![x](note-image:abc123) 과 https://example.test/a?b=1 끝'
     assert 'abc123' not in _visible(text) and 'example.test' not in _visible(text)
     assert _visible(text, text.index('과'), len(text)) == '과  끝'
+
+
+# ---- MEG-143: 마크다운 강조 `*`와 화면에 보이는 글자 `*`를 구분한다 ----
+STAR_TERMS = [(1, "A*"), (2, "A")]
+BS = "\\"
+
+
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        # 강조 구분 문자는 보이지 않는 글자라 `A*`와 일치하면 안 되고, 강조된 A는 짧은 용어 A로 연결된다(AC-1).
+        ("**A**", [(2, "A")]),
+        ("*A* 설명", [(2, "A")]),
+        ("앞 **A** 뒤", [(2, "A")]),
+        ("***A***", [(2, "A")]),
+        ("*A**", [(2, "A")]),
+        ("_A_ *A*", [(2, "A"), (2, "A")]),
+        ("**가A** 😀 **A**", [(2, "A"), (2, "A")]),
+        # 글자로 보이는 별표는 그대로 찾는다(AC-2): 짝 없는 `*`, 공백에 둘러싸인 `*`, 이스케이프, 코드 안.
+        ("A* 설명", [(1, "A*")]),
+        ("2 * 3 그리고 A*", [(1, "A*")]),
+        (f"A{BS}* 설명", [(1, f"A{BS}*")]),
+        ("`A*` 와 **A**", [(1, "A*"), (2, "A")]),
+        ("```\nA*\n```\n\n**A**", [(1, "A*"), (2, "A")]),
+        # 굵게 안에 글자 별표: 이스케이프된 별표는 글자라 `A*`가 일치한다.
+        (f"**A{BS}***", [(1, f"A{BS}*")]),
+        # 한글·이모지 사이의 강조
+        ("😀 *A* 한글 A* 끝", [(2, "A"), (1, "A*")]),
+    ],
+)
+def test_emphasis_stars_are_not_text_but_literal_stars_are(body, expected):
+    assert cut(body, find_spans(body, STAR_TERMS)) == expected
+
+
+def test_positions_stay_original_code_points_around_emphasis_korean_and_emoji():
+    body = "**가A** 😀 **A** 끝"
+    spans = find_spans(body, STAR_TERMS)
+
+    assert [(span.start, span.end) for span in spans] == [(3, 4), (body.rindex("A"), body.rindex("A") + 1)]
+    assert all(body[span.start : span.end] == "A" for span in spans)
+
+
+def test_a_star_term_inside_a_term_with_other_text_is_unaffected_by_emphasis_elsewhere():
+    body = "**굵게** 그리고 A* 와 *기울임*"
+
+    assert cut(body, find_spans(body, STAR_TERMS)) == [(1, "A*")]
+
+
+def test_unmatched_runs_between_a_pair_stay_literal():
+    # `**A* B**`: 가운데 `*`는 짝이 맞는 구분 문자로 쓰이든 글자로 남든 용어 A는 찾아진다.
+    body = "**A* B**"
+
+    assert [term for term, _ in cut(body, find_spans(body, STAR_TERMS))] == [2]
+
+
+def test_notion_import_of_bold_a_and_literal_a_star_gives_the_right_spans():
+    # 실제 가져오기 변환: Notion 굵게 서식은 `**A**`, 글자 별표는 `A\*`로 저장된다.
+    page = "00000000-0000-4000-8000-000000000001"
+    tree = {page: [
+        {"id": "00000000-0000-4000-8000-000000000002", "type": "paragraph", "paragraph": {"rich_text": [
+            {"plain_text": "A", "annotations": {"bold": True}}, {"plain_text": " 그리고 A*"}]}},
+    ]}
+    notion = Mock()
+    notion.children.side_effect = lambda block_id: tree[block_id]
+    body = convert(notion, page).markdown
+
+    assert body == f"**A** 그리고 A{BS}*"
+    assert cut(body, find_spans(body, STAR_TERMS)) == [(2, "A"), (1, f"A{BS}*")]
+
+
+def test_emphasis_pairing_with_the_rule_of_three_and_far_openers_stays_fast():
+    # 길이 1 묶음(열고 닫을 수 있음)과 길이 2 묶음의 합이 3이라 짝이 안 되는 줄이 길게 이어져도 느려지지 않는다.
+    body = "x*x**" * 20000 + " A* 끝"
+    started = time.perf_counter()
+    spans = find_spans(body, STAR_TERMS)
+
+    assert time.perf_counter() - started < 3
+    assert any(term == 1 for term, _ in cut(body, spans))
