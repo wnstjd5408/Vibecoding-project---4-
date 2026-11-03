@@ -6,6 +6,7 @@
 
 import hashlib
 import hmac
+import logging
 import os
 import re
 import uuid
@@ -19,6 +20,15 @@ from urllib.parse import quote
 import httpx
 
 _TIMEOUT = httpx.Timeout(5.0, connect=3.0)
+logger = logging.getLogger("app.supabase")
+
+# E05가 사전 용어를 읽는 한 번의 크기. PostgREST 최대 행(supabase/config.toml max_rows = 1000)과 같아야 한다.
+# 서버 최대 행이 이보다 작으면 한 쪽이 덜 차서 읽기가 일찍 끝나 용어가 빠진다(MEG-141).
+GLOSSARY_PAGE_SIZE = 1000
+# 끝나지 않는 반복을 막는 안전장치. 50쪽 = 5만 용어는 이 학습 도구의 사전 규모(수백~수천)보다 10배 이상 큰 값이며,
+# 노트를 열 때마다 이만큼 읽으면 응답이 이미 느려지는 규모라 "그 전에 설계를 다시 보라"는 경보 겸 한도다(근거: MEG-141 측정, 5,000개에서 쪽당 약 35ms).
+# 넘으면 일부만 돌려주지 않고 오류로 낸다(링크가 조용히 빠지지 않게).
+GLOSSARY_MAX_PAGES = 50
 
 # Supabase 액세스 토큰(JWT) 모양: base64url 세 구간을 점으로 이은 것. 이 밖의 쿠키 값은 Auth를 부르기 전에
 # 무효로 본다. 비ASCII 값은 HTTP 헤더로 만들 수 없어 예외가 되고, 쓰레기 값마다 Auth 왕복이 생기는 것도 막는다.
@@ -352,8 +362,30 @@ class SupabaseClient:
         return rows[0] if rows else None
 
     def list_glossary_terms(self) -> list[dict[str, Any]]:
-        """사전 용어(glossary_entries 행이 있는 terms, S8)의 id·key·label. API 최대 행(1000)을 넘으면 잘린다."""
-        return self._select("terms", {"select": "id,key,label,glossary_entries!inner(term_id)", "order": "id.asc"})
+        """사전 용어(glossary_entries 행이 있는 terms, S8)의 id·key·label을 id 오름차순으로 전부 준다.
+
+        id 기준 키셋 페이지네이션이다: 쪽마다 `id=gt.<앞 쪽의 마지막 id>`와 `limit`을 주고, 한 쪽이 덜 차면 끝이다.
+        (offset 방식은 쪽 사이에 행이 바뀌면 건너뛰거나 겹친다. 정렬 키가 고유한 id라 키셋은 누락·중복이 없다.)
+        쪽은 GLOSSARY_MAX_PAGES까지 읽는다. 상한만큼 꽉 찬 쪽을 읽은 뒤에는 한 건만 더 읽어 남은 용어가 있는지 확인한다.
+        남은 용어가 없으면(정확히 상한에서 끝남) 정상이고, 남아 있으면 **일부만 돌려주지 않고** 오류 로그를 남기며
+        SupabaseConfigError로 낸다(500). 일부 용어가 조용히 빠진 채 노트가 열리는 것보다 눈에 띄는 오류가 낫다.
+        """
+        select = "id,key,label,glossary_entries!inner(term_id)"
+        rows: list[dict[str, Any]] = []
+        for _ in range(GLOSSARY_MAX_PAGES):
+            params = {"select": select, "order": "id.asc", "limit": str(GLOSSARY_PAGE_SIZE)}
+            if rows:
+                params["id"] = f"gt.{rows[-1]['id']}"
+            page = self._select("terms", params)
+            rows.extend(page)
+            if len(page) < GLOSSARY_PAGE_SIZE:
+                return rows
+        # 상한만큼 꽉 찬 쪽을 읽었다. 뒤에 용어가 더 있는지 한 건만 확인한다.
+        probe = self._select("terms", {"select": select, "order": "id.asc", "limit": "1", "id": f"gt.{rows[-1]['id']}"})
+        if not probe:
+            return rows
+        logger.error("stage=db glossary_terms=%d read %d pages and more terms remain; refusing a partial list", len(rows), GLOSSARY_MAX_PAGES)
+        raise SupabaseConfigError(f"glossary terms exceed {GLOSSARY_MAX_PAGES * GLOSSARY_PAGE_SIZE}")
 
     def get_glossary_entry(self, term_id: int, user_id: str | None = None) -> dict[str, Any] | None:
         """E06 사전 용어 하나: terms 열, 사전 설명, 이미지 행(id 오름차순). 사전 용어가 아니면 None이다.
