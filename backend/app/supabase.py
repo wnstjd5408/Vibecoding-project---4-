@@ -403,9 +403,11 @@ class SupabaseClient:
         return result
 
     def retry_note_image_deletions(self) -> None:
-        """커밋 뒤 오래된 pending부터 최대 100개. 실패하면 남겨 다음 삭제 요청에서 재시도한다.
+        """커밋 뒤 오래된 pending부터 최대 100개. 5회 실패하면 failed로 남겨 SQL 점검 대상으로 둔다.
 
         노트 버킷만 처리한다. 사전 업로드 보상 작업을 건드리면 진행 중인 업로드를 지울 수 있다.
+        한 배치의 Storage 요청이 실패하면 그 배치의 각 작업에 실패 1회를 기록한다.
+        한도 5회는 기술 검토 4절의 초기 제안값이며 SQL 함수가 집행한다.
         """
         bucket = self._note_bucket()
         jobs = self._select("storage_delete_jobs", {
@@ -414,18 +416,20 @@ class SupabaseClient:
         })
         if not jobs:
             return
-        response = self._request("DELETE", f"/storage/v1/object/{bucket}",
-                                 json={"prefixes": sorted({job["object_path"] for job in jobs})},
-                                 headers=self._headers())
-        if response.status_code != 200:
-            raise SupabaseConfigError(f"storage delete status {response.status_code}")
-        ids = ",".join(str(int(job["id"])) for job in jobs)
-        done = self._request("PATCH", "/rest/v1/storage_delete_jobs",
-                             params={"id": f"in.({ids})", "bucket": f"eq.{bucket}", "status": "eq.pending"},
-                             json={"status": "done", "done_at": datetime.now(timezone.utc).isoformat()},
-                             headers={**self._headers(), "Prefer": "return=minimal"})
-        if done.status_code not in (200, 204):
-            raise SupabaseConfigError(f"storage_delete_jobs update status {done.status_code}")
+        payload = {"p_job_ids": [int(job["id"]) for job in jobs], "p_bucket": bucket}
+        try:
+            response = self._request("DELETE", f"/storage/v1/object/{bucket}",
+                                     json={"prefixes": sorted({job["object_path"] for job in jobs})},
+                                     headers=self._headers())
+            if response.status_code != 200:
+                raise SupabaseConfigError(f"storage delete status {response.status_code}")
+        except (SupabaseUnavailable, SupabaseConfigError) as exc:
+            # 외부 응답·예외 원문에는 경로·비밀값이 있을 수 있어 고정 분류만 저장한다.
+            kind = "storage_unavailable" if isinstance(exc, SupabaseUnavailable) else "storage_rejected"
+            self.rpc("note_image_delete_result", {**payload, "p_error_kind": kind})
+            raise
+        # 성공 기록의 DB 오류를 Storage 실패로 세지 않는다. 다음 요청에서 멱등 삭제를 재시도한다.
+        self.rpc("note_image_delete_result", {**payload, "p_error_kind": None})
 
     def list_glossary_terms(self) -> list[dict[str, Any]]:
         """사전 용어(glossary_entries 행이 있는 terms, S8)의 id·key·label을 id 오름차순으로 전부 준다.

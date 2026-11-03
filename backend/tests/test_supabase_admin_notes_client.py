@@ -73,18 +73,85 @@ def test_retry_reads_old_pending_note_jobs_only_and_marks_done_after_storage():
     assert seen[1].method == "DELETE"
     assert seen[1].url.path == "/storage/v1/object/note-images"
     assert sorted(json.loads(seen[1].content)["prefixes"]) == ["new/b.png", "old/a.png"]
-    assert seen[2].url.params["id"] == "in.(4,8)"
-    assert seen[2].url.params["bucket"] == "eq.note-images"
-    assert json.loads(seen[2].content)["status"] == "done"
+    assert seen[2].url.path == "/rest/v1/rpc/note_image_delete_result"
+    assert json.loads(seen[2].content) == {
+        "p_job_ids": [4, 8], "p_bucket": "note-images", "p_error_kind": None,
+    }
 
 
 @pytest.mark.parametrize("status", [400, 403, 500, 503])
 def test_failed_storage_delete_does_not_mark_done(status):
     client, seen = client_for([httpx.Response(200, json=[{"id": 4, "object_path": "a.png"}]),
-                             httpx.Response(status, json={"message": "upstream private text"})])
+                             httpx.Response(status, json={"message": "upstream private text"}), httpx.Response(204)])
     with pytest.raises((SupabaseConfigError, SupabaseUnavailable)):
         client.retry_note_image_deletions()
-    assert len(seen) == 2
+    assert len(seen) == 3
+    assert seen[2].url.path == "/rest/v1/rpc/note_image_delete_result"
+    assert json.loads(seen[2].content) == {
+        "p_job_ids": [4], "p_bucket": "note-images",
+        "p_error_kind": "storage_unavailable" if status >= 500 else "storage_rejected",
+    }
+    assert "upstream private text" not in seen[2].content.decode()
+
+
+def test_transport_failure_is_recorded_without_private_error_text():
+    seen = []
+    def handler(request):
+        seen.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json=[{"id": 4, "object_path": "a.png"}])
+        if request.method == "DELETE":
+            raise httpx.ReadTimeout("private storage URL")
+        return httpx.Response(204)
+    client = SupabaseClient("https://project.supabase.co", "sb_secret_test",
+                            httpx.Client(transport=httpx.MockTransport(handler)), note_image_bucket="note-images")
+    with pytest.raises(SupabaseUnavailable):
+        client.retry_note_image_deletions()
+    assert json.loads(seen[-1].content)["p_error_kind"] == "storage_unavailable"
+    assert "private storage URL" not in seen[-1].content.decode()
+
+
+def test_repeated_batch_failure_stops_and_next_pending_job_runs():
+    # 실제 클라이언트의 조회/Storage/RPC 연결을 상태 있는 HTTP 가짜로 검증한다.
+    # RPC의 원자적 횟수/상태 전환은 실제 PostgreSQL 시험에서 별도로 검증한다.
+    jobs = [{"id": i, "object_path": f"{i}.png", "attempts": 0, "status": "pending"} for i in range(1, 102)]
+    batches = []
+    def handler(request):
+        if request.method == "GET":
+            assert request.url.params["status"] == "eq.pending"
+            return httpx.Response(200, json=[{"id": j["id"], "object_path": j["object_path"]}
+                                            for j in jobs if j["status"] == "pending"][:100])
+        payload = json.loads(request.content)
+        if request.method == "DELETE":
+            batches.append(payload["prefixes"])
+            return httpx.Response(503 if "1.png" in payload["prefixes"] else 200, json=[])
+        assert request.url.path == "/rest/v1/rpc/note_image_delete_result"
+        for job in jobs:
+            if job["id"] in payload["p_job_ids"]:
+                if payload["p_error_kind"]:
+                    job["attempts"] += 1
+                    job["status"] = "failed" if job["attempts"] >= 5 else "pending"
+                else:
+                    job["status"] = "done"
+        return httpx.Response(204)
+    client = SupabaseClient("https://project.supabase.co", "sb_secret_test",
+                            httpx.Client(transport=httpx.MockTransport(handler)), note_image_bucket="note-images")
+    for _ in range(5):
+        with pytest.raises(SupabaseUnavailable):
+            client.retry_note_image_deletions()
+    client.retry_note_image_deletions()
+    assert all(j["status"] == "failed" and j["attempts"] == 5 for j in jobs[:100])
+    assert jobs[100]["status"] == "done"
+    assert batches[-1] == ["101.png"]
+
+
+def test_success_record_failure_is_not_counted_as_storage_failure():
+    client, seen = client_for([httpx.Response(200, json=[{"id": 4, "object_path": "a.png"}]),
+                             httpx.Response(200, json=[]), httpx.Response(503)])
+    with pytest.raises(SupabaseUnavailable):
+        client.retry_note_image_deletions()
+    assert len(seen) == 3
+    assert json.loads(seen[-1].content)["p_error_kind"] is None
 
 
 def test_empty_retry_does_not_call_storage():

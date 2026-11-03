@@ -272,3 +272,82 @@ def test_same_transaction_preexisting_job_is_not_returned(clean):
                   f"select public.note_delete({note}, 'note-images'); commit;")
     assert len(result["jobs"]) == 1
     assert sql(clean, "select count(*) from public.storage_delete_jobs;") == "2"
+
+
+def new_delete_job(db, bucket="note-images"):
+    return int(sql(db, f"insert into public.storage_delete_jobs (bucket, object_path) values ('{bucket}', 'synthetic.png') returning id;"))
+
+
+def record_delete_result(db, ids, error="storage_unavailable", bucket="note-images"):
+    error_sql = "null" if error is None else f"'{error}'"
+    sql(db, f"set role service_role; select public.note_image_delete_result(array[{','.join(map(str, ids))}]::bigint[], '{bucket}', {error_sql});")
+
+
+def delete_job(db, job_id):
+    return json.loads(sql(db, f"select row_to_json(j) from public.storage_delete_jobs j where id = {job_id};"))
+
+
+def test_fifth_failed_batch_leaves_later_jobs_available(clean):
+    sql(clean, "insert into public.storage_delete_jobs (bucket, object_path) "
+               "select 'note-images', 'synthetic-' || n || '.png' from generate_series(1,101) n;")
+    def pending():
+        return [int(n) for n in sql(clean, "select id from public.storage_delete_jobs where bucket = 'note-images' "
+                                         "and status = 'pending' order by id limit 100;").splitlines()]
+    first = pending()
+    assert len(first) == 100
+    for attempts in range(1, 6):
+        record_delete_result(clean, pending())
+        row = delete_job(clean, first[0])
+        assert row["attempts"] == attempts
+        assert row["last_error_kind"] == "storage_unavailable"
+        assert row["status"] == ("failed" if attempts == 5 else "pending")
+        assert row["done_at"] is None
+    later = pending()
+    assert len(later) == 1 and later[0] not in first
+    record_delete_result(clean, later, None)
+    assert delete_job(clean, later[0])["status"] == "done"
+    assert not pending()
+
+
+def test_success_clears_error_and_late_failure_cannot_overwrite_done(clean):
+    job = new_delete_job(clean)
+    record_delete_result(clean, [job], "storage_rejected")
+    record_delete_result(clean, [job], None)
+    record_delete_result(clean, [job])
+    row = delete_job(clean, job)
+    assert (row["status"], row["attempts"], row["last_error_kind"]) == ("done", 1, None)
+    assert row["done_at"] is not None
+
+
+def test_concurrent_failures_do_not_lose_increments_and_success_wins(clean):
+    job = new_delete_job(clean)
+    with ThreadPoolExecutor(2) as pool:
+        list(pool.map(lambda _: record_delete_result(clean, [job]), range(2)))
+    assert delete_job(clean, job)["attempts"] == 2
+    with ThreadPoolExecutor(2) as pool:
+        list(pool.map(lambda error: record_delete_result(clean, [job], error), [None, "storage_unavailable"]))
+    assert delete_job(clean, job)["status"] == "done"
+    assert delete_job(clean, job)["last_error_kind"] is None
+
+
+def test_late_success_can_finish_a_job_marked_failed_by_another_request(clean):
+    job = new_delete_job(clean)
+    for _ in range(5):
+        record_delete_result(clean, [job])
+    assert delete_job(clean, job)["status"] == "failed"
+    record_delete_result(clean, [job])
+    assert delete_job(clean, job)["attempts"] == 5
+    record_delete_result(clean, [job], None)
+    assert delete_job(clean, job)["status"] == "done"
+
+
+def test_result_update_is_bucket_scoped_and_service_role_only(clean):
+    note_job = new_delete_job(clean)
+    glossary_job = new_delete_job(clean, "glossary-images")
+    record_delete_result(clean, [note_job, glossary_job])
+    assert delete_job(clean, note_job)["attempts"] == 1
+    assert delete_job(clean, glossary_job)["attempts"] == 0
+    for role in ("anon", "authenticated"):
+        assert "permission denied" in sql_error(clean, f"set role {role}; select public.note_image_delete_result(array[{note_job}], 'note-images', null);")
+    assert "unsupported storage error kind" in sql_error(clean, f"set role service_role; select public.note_image_delete_result(array[{note_job}], 'note-images', 'private detail');")
+    assert delete_job(clean, note_job)["attempts"] == 1
