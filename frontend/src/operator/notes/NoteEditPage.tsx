@@ -6,7 +6,7 @@ import { Link, useNavigate, useParams } from 'react-router'
 import { isApiError } from '../../api/client.ts'
 import { Button, StateMessage, TextField } from '../../components/index.ts'
 import { operatorPaths } from '../../routes/paths.ts'
-import { useOperatorGuard } from '../useOperatorGuard.ts'
+import { useOperatorApi } from '../useOperatorApi.ts'
 import { NoteDeleteDialog } from './NoteDeleteDialog.tsx'
 import { deleteNote, getNote, saveNote } from './notesApi.ts'
 import type { OperatorNote } from './notesApi.ts'
@@ -31,7 +31,7 @@ type Load = { key: string; note: OperatorNote | null } | { key: string; state: '
 export default function NoteEditPage() {
   const { noteId } = useParams()
   const creating = noteId === undefined
-  const { onApiError } = useOperatorGuard()
+  const operatorFetch = useOperatorApi()
   const [attempt, setAttempt] = useState(0)
   const [load, setLoad] = useState<Load | null>(null)
 
@@ -41,17 +41,14 @@ export default function NoteEditPage() {
   useEffect(() => {
     if (noteId === undefined) return
     let live = true
-    getNote(Number(noteId)).then(
+    getNote(operatorFetch, Number(noteId)).then(
       (note) => live && setLoad({ key: `${noteId}:${attempt}`, note }),
-      (failure) => {
-        if (!live || onApiError(failure)) return
-        setLoad({ key: `${noteId}:${attempt}`, state: isApiError(failure, 'not_found') ? 'notFound' : 'failed' })
-      },
+      (failure) => live && setLoad({ key: `${noteId}:${attempt}`, state: isApiError(failure, 'not_found') ? 'notFound' : 'failed' }),
     )
     return () => {
       live = false
     }
-  }, [noteId, attempt, onApiError])
+  }, [noteId, attempt, operatorFetch])
 
   const heading = creating ? '새 노트' : '노트 수정'
   return (
@@ -85,7 +82,7 @@ type NoteFormProps = { note: OperatorNote | null; onReload: () => void }
 
 function NoteForm({ note, onReload }: NoteFormProps) {
   const navigate = useNavigate()
-  const { onApiError } = useOperatorGuard()
+  const operatorFetch = useOperatorApi()
   const creating = note === null
   const [title, setTitle] = useState(note?.title ?? '')
   const [studiedOn, setStudiedOn] = useState(note?.studiedOn ?? '')
@@ -107,13 +104,14 @@ function NoteForm({ note, onReload }: NoteFormProps) {
     setError('')
     setConflict(false)
     try {
-      await saveNote(note?.id ?? null, { title: title.trim(), studiedOn, body }, note?.revision ?? null)
+      await saveNote(operatorFetch, note?.id ?? null, { title: title.trim(), studiedOn, body }, note?.revision ?? null)
       navigate(operatorPaths.home, { state: { notice: MESSAGES.saved } })
     } catch (failure) {
       if (isApiError(failure, 'conflict', 'stale_revision')) {
         // 다른 곳에서 바뀌었다. 입력은 지우지 않고 안내만 한다.
         setConflict(true)
-      } else if (!onApiError(failure)) {
+      } else {
+        // 권한 상실이면 operatorFetch가 로그인 상태를 다시 읽어 경로 보호가 화면을 내보낸다. 서버에 쓰기 API가 없을 때(404)도 여기로 온다.
         setError(MESSAGES.saveFailed)
       }
       setBusy(false)
@@ -125,10 +123,10 @@ function NoteForm({ note, onReload }: NoteFormProps) {
     setBusy(true)
     setDeleteError('')
     try {
-      await deleteNote(note.id)
+      await deleteNote(operatorFetch, note.id)
       navigate(operatorPaths.home, { state: { notice: MESSAGES.deleted } })
-    } catch (failure) {
-      if (!onApiError(failure)) setDeleteError(MESSAGES.deleteFailed)
+    } catch {
+      setDeleteError(MESSAGES.deleteFailed)
       setBusy(false)
     }
   }

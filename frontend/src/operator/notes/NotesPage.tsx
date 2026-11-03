@@ -6,7 +6,7 @@ import { Button, StateMessage } from '../../components/index.ts'
 import { Badge } from '../../components/Badge.tsx'
 import { IconLinkButton } from '../../components/IconButton.tsx'
 import { operatorPaths } from '../../routes/paths.ts'
-import { useOperatorGuard } from '../useOperatorGuard.ts'
+import { useOperatorApi } from '../useOperatorApi.ts'
 import { NoteDeleteDialog } from './NoteDeleteDialog.tsx'
 import { noteEditPath } from './noteEditPath.ts'
 import { deleteNote, listNotes, setPublished } from './notesApi.ts'
@@ -30,7 +30,7 @@ function readNotice(state: unknown): string {
 
 export default function NotesPage() {
   const location = useLocation()
-  const { onApiError } = useOperatorGuard()
+  const operatorFetch = useOperatorApi()
   const [subjectId, setSubjectId] = useState<number | null>(null)
   const [attempt, setAttempt] = useState(0)
   const [result, setResult] = useState<Result | null>(null)
@@ -49,21 +49,19 @@ export default function NotesPage() {
   useEffect(() => {
     let live = true
     const key = `${subjectId}:${attempt}`
-    listNotes(subjectId).then(
+    // 권한 상실(401·403)이면 operatorFetch가 이미 로그인 상태를 다시 읽는다. 여기서는 일반 실패와 같이 다룬다.
+    listNotes(operatorFetch, subjectId).then(
       (data) => {
         if (!live) return
         setSubjects(data.subjects)
         setResult({ query: key, data })
       },
-      (failure) => {
-        if (!live || onApiError(failure)) return
-        setResult({ query: key, failed: true })
-      },
+      () => live && setResult({ query: key, failed: true }),
     )
     return () => {
       live = false
     }
-  }, [subjectId, attempt, onApiError])
+  }, [subjectId, attempt, operatorFetch])
 
   function updateNotes(change: (notes: NoteListItem[]) => NoteListItem[]) {
     setResult((old) => (old && 'data' in old ? { ...old, data: { ...old.data, notes: change(old.data.notes) } } : old))
@@ -74,13 +72,13 @@ export default function NotesPage() {
     setDeleting(true)
     setDialogError('')
     try {
-      await deleteNote(target.id)
+      await deleteNote(operatorFetch, target.id)
       updateNotes((notes) => notes.filter((note) => note.id !== target.id))
       setNotice(MESSAGES.deleted)
       setTarget(null)
-    } catch (failure) {
-      // 권한 오류면 로그인 상태를 다시 읽어 경로 보호가 화면을 내보낸다. 그 밖에는 창 안에서 알린다.
-      if (!onApiError(failure)) setDialogError(MESSAGES.deleteFailed)
+    } catch {
+      // 권한 상실이면 operatorFetch가 로그인 상태를 다시 읽어 경로 보호가 화면을 내보낸다. 그 밖에는 창 안에서 알린다.
+      setDialogError(MESSAGES.deleteFailed)
     }
     setDeleting(false)
   }
@@ -91,10 +89,16 @@ export default function NotesPage() {
     setActionError('')
     setNotice('')
     try {
-      const updated = await setPublished(note.id, !note.isPublished)
-      updateNotes((notes) => notes.map((item) => (item.id === updated.id ? updated : item)))
-    } catch (failure) {
-      if (!onApiError(failure)) setActionError(MESSAGES.publishFailed)
+      await setPublished(operatorFetch, note, !note.isPublished)
+      updateNotes((notes) => notes.map((item) => (item.id === note.id ? { ...item, isPublished: !note.isPublished } : item)))
+      // 서버는 UPDATE마다 revision을 올린다. 다음 저장이 충돌로 막히지 않게 목록을 조용히 다시 읽는다.
+      const key = `${subjectId}:${attempt}`
+      listNotes(operatorFetch, subjectId).then(
+        (data) => setResult((old) => (old?.query === key ? { query: key, data } : old)),
+        () => undefined,
+      )
+    } catch {
+      setActionError(MESSAGES.publishFailed)
     }
     setPublishingId(null)
   }

@@ -1,12 +1,13 @@
 // 가짜 응답을 한곳에 모았다. API spec v0.2 3절 예시와 2.2절 응답 모양을 따르고, 값은 모두 합성이다.
 // 실제 API가 생기면 해당 엔드포인트의 항목만 지우거나 apiSource를 real로 두면 된다.
-import type { ApiErrorBody, NoteListResponse } from '../types.ts'
+import type { ApiErrorBody } from '../types.ts'
+import { adminNoteRoutes, readNoteForMock, readNoteList } from './adminNoteMocks.ts'
 import { getMockSession, setMockSession } from './session.ts'
 
 export type MockRequest = { method: string; path: string; query: URLSearchParams; body: unknown }
 export type MockResponse = { status: number; body?: unknown }
 
-type Route = {
+export type Route = {
   method: string
   pattern: RegExp
   handle: (request: MockRequest, params: string[]) => MockResponse
@@ -40,13 +41,13 @@ const ACCOUNTS = {
 // E06 예시 2의 용어 7을 즐겨찾기했는지. 가짜 응답이 흉내 낸다.
 let favoriteTerm7 = false
 
-const SUBJECTS = [
+export const SUBJECTS = [
   { id: 1, name: '네트워크', note_count: 2 },
   { id: 2, name: '운영체제', note_count: 1 },
   { id: 3, name: '데이터베이스', note_count: 1 },
 ]
 
-const NOTES = [
+export const NOTES = [
   { id: 11, title: '예시 노트 · 요청이 서버까지 가는 길', studied_on: '2026-10-14', subjects: [SUBJECTS[0]], parent_note_id: null },
   { id: 12, title: '예시 노트 · 프로세스가 번갈아 실행되는 이유', studied_on: '2026-10-09', subjects: [SUBJECTS[1]], parent_note_id: null },
   { id: 13, title: '예시 노트 · 인덱스가 조회를 빠르게 하는 방식', studied_on: '2026-10-02', subjects: [SUBJECTS[2]], parent_note_id: null },
@@ -101,6 +102,7 @@ const RICH_NOTE = {
 }
 
 const routes: Route[] = [
+  ...adminNoteRoutes,
   // 백엔드 상태 확인. 개발 서버 프록시가 실제 백엔드의 /health로 이어 주는 경로와 같은 모양이다.
   { method: 'GET', pattern: /^\/api\/health$/, handle: () => ({ status: 200, body: { status: 'ok' } }) },
   // E01 로그인. 맞지 않으면 사유를 구분하지 않고 401 invalid_credentials다.
@@ -141,22 +143,17 @@ const routes: Route[] = [
   {
     method: 'GET',
     pattern: /^\/api\/notes$/,
-    handle: ({ query }) => {
-      const subjectId = query.get('subject_id')
-      const notes = subjectId ? NOTES.filter((note) => note.subjects.some((s) => String(s.id) === subjectId)) : NOTES
-      const operator = getMockSession() === 'operator'
-      const body: NoteListResponse = {
-        subjects: SUBJECTS,
-        notes: operator ? notes.map((note) => ({ ...note, is_published: true, revision: 1, needs_review: false })) : notes,
-      }
-      return { status: 200, body }
-    },
+    // 운영자 노트 화면(E16~E18 가짜 응답)에서 만들거나 고친 노트가 목록에도 보이도록 그 저장소의 내용을 준다.
+    handle: ({ query }) => ({ status: 200, body: readNoteList(query.get('subject_id')) }),
   },
   // E05 노트 읽기. 예시 1의 노트 11과, 마크다운 문법·이모지가 섞인 시험용 노트 12만 있다.
   {
     method: 'GET',
     pattern: /^\/api\/notes\/(\d+)$/,
     handle: (_request, [noteId]) => {
+      // 운영자가 노트 화면에서 만들거나 고친 노트는 그 저장소의 내용을 준다.
+      const stored = readNoteForMock(Number(noteId))
+      if (stored) return { status: 200, body: stored }
       if (noteId === '12') return { status: 200, body: RICH_NOTE }
       if (noteId !== '11') return notFound()
       return {
