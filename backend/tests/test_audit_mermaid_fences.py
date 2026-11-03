@@ -284,3 +284,23 @@ def test_note_whose_fences_are_all_marked_needs_no_notion_call():
     tree = {PAGE: [code(2, MERMAID, "mermaid")]}
     (counts, report, changed), notion = run_audit("```mermaid\n" + MERMAID + "\n```", tree)
     assert not notion.children.called and report == [] and changed == []
+    assert counts['blocks_already_marked'] == 1
+    assert counts['notes_with_mermaid'] == 1
+
+
+def test_post_apply_counts_include_all_marked_and_mixed_language_notes():
+    tree = {PAGE: [code(2, MERMAID, 'mermaid'), code(3, 'x = 1', 'python')]}
+    body, blocks = stored_and_blocks(tree)
+    updated = audit.audit_note(body, blocks)['new_body']
+    rows = [
+        {'id': 1, 'notion_page_id': PAGE, 'revision': 2, 'updated_at': 'x',
+         'body_markdown': '```mermaid\n' + MERMAID + '\n```'},
+        {'id': 2, 'notion_page_id': PAGE, 'revision': 2, 'updated_at': 'x',
+         'body_markdown': updated},
+    ]
+    counts, report, changed = audit.audit(make_source(rows), tree_notion(tree))
+    assert counts['notes_to_change'] == 0
+    assert counts['blocks_already_marked'] == 2
+    assert counts['notes_with_mermaid'] == 2
+    assert counts['notes_checked_against_notion'] == 1
+    assert changed == []
