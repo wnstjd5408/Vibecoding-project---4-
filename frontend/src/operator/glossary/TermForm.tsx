@@ -1,22 +1,23 @@
 // F5-1c 용어 수정 / F5-1e 새 용어 폼(MEG-82). term이 null이면 새 용어다.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
-import { isApiError } from '../../api/client.ts'
 import { Button, StateMessage, TextField } from '../../components/index.ts'
 import { useOperatorApi } from '../useOperatorApi.ts'
 import { ConfirmDialog } from './ConfirmDialog.tsx'
-import { ImageNotSavedError, deleteDescription, readTerm, saveTerm, termKey } from './glossaryApi.ts'
-import type { GlossaryDetail, GlossaryImage, GlossaryTerm, ImageChange } from './glossaryApi.ts'
+import { ImageNotSavedError, classifyImageFailure, classifySaveFailure, deleteDescription, readTerm, saveTerm, termKey } from './glossaryApi.ts'
+import type { FieldReasons, GlossaryDetail, GlossaryImage, GlossaryTerm, ImageChange } from './glossaryApi.ts'
 import { IMAGE_REJECTED_MESSAGE, IMAGE_TYPES, isAllowedImage } from './imageRules.ts'
 import styles from './Glossary.module.css'
+
+// 서버 규칙(backend/app/admin_glossary.py): 용어 이름 1~200자, 설명 200,000자 이하
+const LABEL_MAX = 200
+const DESCRIPTION_MAX = 200_000
 
 // 화면 문구. 실패 안내는 목업에 화면이 없어 임시 문구다(문구 미정, 확정되면 이 한 곳만 고친다).
 const MESSAGES = {
   required: '용어 이름과 설명을 입력해 주세요.',
   duplicate: '이미 등록된 용어예요. 목록에서 선택해 수정해 주세요.',
   saveFailed: '저장하지 못했어요. 잠시 뒤에 다시 시도해 주세요.',
-  // 설명은 저장됐고 이미지만 실패했다. 폼은 서버에 저장된 상태로 다시 그려지므로 이미지를 다시 골라야 한다.
-  imageNotSaved: '설명은 저장했지만 이미지를 바꾸지 못했어요. 이미지를 다시 골라 저장해 주세요.',
   deleteFailed: '사전 설명을 삭제하지 못했어요. 잠시 뒤에 다시 시도해 주세요.',
   loadFailed: '용어를 불러오지 못했어요',
   loadFailedHint: '잠시 뒤에 다시 시도해 주세요.',
@@ -29,13 +30,55 @@ const MESSAGES = {
   noticeEdit: '안내: 저장하면 이 용어의 AI 설명이 모두 무효가 돼요. 사전 설명을 삭제해도 AI 설명과 신고는 남아요.',
 } as const
 
+// 서버가 422로 알려 준 입력 칸별 이유(fields[].reason)에 따른 안내. 입력은 그대로 남아 있다.
+const FIELD_REASONS = {
+  label: {
+    required: '용어 이름을 입력해 주세요.',
+    too_long: `용어 이름이 너무 길어요. ${LABEL_MAX}자 이하로 줄여 주세요.`,
+    invalid_format: '용어 이름에 사용할 수 없는 문자가 들어 있어요.',
+    fallback: '용어 이름을 확인해 주세요.',
+  },
+  description: {
+    required: '설명을 입력해 주세요.',
+    too_long: `설명이 너무 길어요. ${DESCRIPTION_MAX.toLocaleString('ko-KR')}자 이하로 줄여서 다시 저장해 주세요.`,
+    invalid_format: '설명에 사용할 수 없는 문자가 들어 있어요.',
+    fallback: '설명을 확인해 주세요.',
+  },
+} as const
+
+function fieldMessage(field: keyof FieldReasons, reason: string): string {
+  const messages: Record<string, string> = FIELD_REASONS[field]
+  return messages[reason] ?? FIELD_REASONS[field].fallback
+}
+
+// 설명은 저장됐고 이미지 단계만 실패했을 때의 안내. 서버가 파일을 거절한 이유(413·415·422)도 알린다.
+const IMAGE_FAILURE = {
+  too_large: '이미지가 너무 커요. 4MB 이하로 줄여 주세요.',
+  unsupported: '지원하지 않는 형식이에요. PNG, JPG, WebP만 올릴 수 있어요.',
+  invalid: '이미지를 읽을 수 없어요. 파일이 손상됐을 수 있으니 다른 파일을 골라 주세요.',
+  other: '잠시 뒤에 이미지를 다시 골라 저장해 주세요.',
+} as const
+
+function imageFailureMessage(failure: ImageNotSavedError, hadRemovals: boolean): string {
+  if (failure.stage === 'remove') {
+    return failure.uploaded
+      ? '새 이미지는 올렸지만 기존 이미지를 지우지 못했어요. 이미지가 두 장 남아 있어요. 필요 없는 이미지는 다시 삭제해 주세요.'
+      : '설명은 저장했지만 이미지를 지우지 못했어요. 이미지를 다시 삭제해 주세요.'
+  }
+  const base = hadRemovals
+    ? '설명은 저장했지만 새 이미지를 올리지 못했어요. 기존 이미지는 지우지 않았어요.'
+    : '설명은 저장했지만 이미지를 올리지 못했어요.'
+  return `${base} ${IMAGE_FAILURE[classifyImageFailure(failure.cause)]}`
+}
+
 type TermFormProps = {
   term: GlossaryTerm | null
   // 이미 등록된 용어. 새 용어의 이름이 겹치는지 보는 데 쓴다.
   terms: GlossaryTerm[]
   // 저장 결과. imageError가 있으면 설명만 저장되고 이미지 단계가 실패한 것이다.
-  onSaved: (term: GlossaryTerm, imageError: string | null) => void
-  onDeleted: (term: GlossaryTerm) => void
+  // current가 false면 응답이 왔을 때 이 폼은 이미 화면에서 사라졌다(다른 용어로 이동). 저장 자체는 서버에서 끝났으니 목록·안내만 갱신하고 화면은 바꾸지 않는다.
+  onSaved: (term: GlossaryTerm, imageError: string | null, current: boolean) => void
+  onDeleted: (term: GlossaryTerm, current: boolean) => void
   onCancel: () => void
 }
 
@@ -85,14 +128,25 @@ function TermFormBody({ term, terms, detail, onSaved, onDeleted, onCancel }: Ter
   const [description, setDescription] = useState(detail.description)
   // 새로 고른 이미지(저장 전). 고른 즉시 미리 보고, 저장할 때 올린다.
   const [upload, setUpload] = useState<Upload | null>(null)
-  // 저장할 때 지울 기존 이미지. 누르면 화면에서 바로 사라지고 저장할 때 서버에서 지운다.
+  // 저장할 때 지울 기존 이미지. 누르면 화면에서 바로 사라지고, 새 이미지를 올린 뒤(없으면 바로) 서버에서 지운다.
   const [removedIds, setRemovedIds] = useState<number[]>([])
   // 거절된 파일이 입력 칸에 남지 않도록 칸을 새로 그린다.
   const [inputKey, setInputKey] = useState(0)
   const [imageError, setImageError] = useState('')
   const [error, setError] = useState('')
+  // 서버가 422로 알려 준 입력 칸별 안내
+  const [fieldErrors, setFieldErrors] = useState<{ label?: string; description?: string }>({})
   const [busy, setBusy] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  // 저장·삭제 응답이 늦게 와도 이미 떠난 폼을 건드리지 않도록, 이 폼이 아직 화면에 있는지 본다.
+  const mounted = useRef(true)
+
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
 
   // 미리보기 주소는 쓰고 나면 해제한다.
   useEffect(
@@ -118,6 +172,7 @@ function TermFormBody({ term, terms, detail, onSaved, onDeleted, onCancel }: Ter
   }
 
   function handleDiscardUpload() {
+    if (busy) return
     setUpload(null)
     setImageError('')
     setInputKey((key) => key + 1)
@@ -139,17 +194,26 @@ function TermFormBody({ term, terms, detail, onSaved, onDeleted, onCancel }: Ter
     const image: ImageChange = { removeIds: removedIds, upload: upload?.file ?? null }
     setBusy(true)
     setError('')
+    setFieldErrors({})
     try {
-      onSaved(await saveTerm(operatorFetch, { label: name, description: description.trim() }, image), null)
+      const saved = await saveTerm(operatorFetch, { label: name, description: description.trim() }, image)
+      onSaved(saved, null, mounted.current)
     } catch (failure) {
-      // 권한 상실이면 operatorFetch가 로그인 상태를 다시 읽어 경로 보호가 화면을 내보낸다. 그 밖에는 저장하지 못했다고 알린다.
+      // 권한 상실이면 operatorFetch가 로그인 상태를 다시 읽어 경로 보호가 화면을 내보낸다. 그 밖의 실패는 아래처럼 알린다.
       if (failure instanceof ImageNotSavedError) {
-        // 설명은 저장됐다. 화면은 서버 상태로 다시 읽어 그린다. 서버가 파일을 거절했으면 그 이유(형식·크기)도 알린다.
-        const cause = failure.cause
-        const rejected = isApiError(cause, 'payload_too_large') || isApiError(cause, 'unsupported_media_type') || isApiError(cause, 'validation_failed')
-        onSaved(failure.saved, rejected ? `${MESSAGES.imageNotSaved} ${IMAGE_REJECTED_MESSAGE}` : MESSAGES.imageNotSaved)
+        // 설명은 저장됐다. 화면은 서버 상태로 다시 읽어 그린다.
+        onSaved(failure.saved, imageFailureMessage(failure, removedIds.length > 0), mounted.current)
       } else {
-        setError(MESSAGES.saveFailed)
+        const classified = classifySaveFailure(failure)
+        if (classified.kind === 'invalid') {
+          // 서버가 어느 칸이 왜 틀렸는지 알려 줬다. 입력은 그대로 두고 그 칸 아래에 고칠 점을 보인다.
+          setFieldErrors({
+            ...(classified.fields.label ? { label: fieldMessage('label', classified.fields.label) } : {}),
+            ...(classified.fields.description ? { description: fieldMessage('description', classified.fields.description) } : {}),
+          })
+        } else {
+          setError(MESSAGES.saveFailed)
+        }
       }
     } finally {
       // 같은 용어를 계속 고칠 수 있도록 성공해도 처리 중 상태를 푼다.
@@ -162,7 +226,7 @@ function TermFormBody({ term, terms, detail, onSaved, onDeleted, onCancel }: Ter
     setBusy(true)
     try {
       await deleteDescription(operatorFetch, term.id)
-      onDeleted(term)
+      onDeleted(term, mounted.current)
     } catch {
       // 권한 상실이면 operatorFetch가 이미 처리했다. 그 밖에는 창을 닫고 폼에서 알린다.
       setConfirmingDelete(false)
@@ -175,21 +239,26 @@ function TermFormBody({ term, terms, detail, onSaved, onDeleted, onCancel }: Ter
   return (
     <form className={styles.card} onSubmit={handleSubmit}>
       <h2 className={styles.formTitle}>{creating ? '새 용어' : '용어 수정'}</h2>
+      {/* 저장하는 동안은 입력을 잠가, 응답을 기다리며 쓴 내용이 응답 뒤에 폼이 다시 그려지면서 사라지지 않게 한다. */}
       <TextField
         label="용어 이름"
         required
-        maxLength={200}
+        maxLength={LABEL_MAX}
         value={label}
-        readOnly={!creating}
+        readOnly={!creating || busy}
         hint={creating ? undefined : MESSAGES.labelFixed}
+        error={fieldErrors.label}
         onChange={(event) => setLabel(event.target.value)}
       />
       <TextField
         label="설명"
         multiline
         required
+        maxLength={DESCRIPTION_MAX}
+        readOnly={busy}
         className={styles.description}
         value={description}
+        error={fieldErrors.description}
         onChange={(event) => setDescription(event.target.value)}
       />
 
@@ -198,13 +267,22 @@ function TermFormBody({ term, terms, detail, onSaved, onDeleted, onCancel }: Ter
         {shownImages.map((image) => (
           <div key={image.id} className={styles.imageRow}>
             <img className={styles.image} src={image.url} alt={image.alt || '설명 이미지'} />
-            <Button onClick={() => setRemovedIds((ids) => [...ids, image.id])}>이미지 삭제</Button>
+            <Button
+              aria-disabled={busy ? 'true' : undefined}
+              onClick={() => {
+                if (!busy) setRemovedIds((ids) => [...ids, image.id])
+              }}
+            >
+              이미지 삭제
+            </Button>
           </div>
         ))}
         {upload ? (
           <div className={styles.imageRow}>
             <img className={styles.image} src={upload.url} alt="새 이미지 미리보기" />
-            <Button onClick={handleDiscardUpload}>이미지 삭제</Button>
+            <Button aria-disabled={busy ? 'true' : undefined} onClick={handleDiscardUpload}>
+              이미지 삭제
+            </Button>
           </div>
         ) : null}
         <div>
@@ -216,6 +294,7 @@ function TermFormBody({ term, terms, detail, onSaved, onDeleted, onCancel }: Ter
             id="glossary-image"
             type="file"
             accept={IMAGE_TYPES.join(',')}
+            disabled={busy}
             aria-describedby={imageError ? 'glossary-image-error' : undefined}
             onChange={handlePick}
           />

@@ -70,18 +70,27 @@ export default function GlossaryPage() {
   const selected = creating ? null : termId ? (terms.find((term) => String(term.id) === termId) ?? null) : (terms[0] ?? null)
   const missing = !creating && termId !== undefined && selected === null
 
+  // 저장·삭제 응답은 늦게 올 수 있어, 응답을 부른 시점의 목록(terms)이 아니라 지금의 목록에 반영한다.
+  function updateTerms(change: (terms: GlossaryTerm[]) => GlossaryTerm[]) {
+    setLoad((old) => (old.status === 'ready' ? { status: 'ready', terms: change(old.terms) } : old))
+  }
+
   // 설명은 저장됐다. imageError가 있으면 이미지 단계만 실패한 것이라 그 안내를 보인다.
-  function afterSave(saved: GlossaryTerm, imageError: string | null) {
-    setLoad({ status: 'ready', terms: terms.some((term) => term.id === saved.id) ? terms.map((term) => (term.id === saved.id ? saved : term)) : [saved, ...terms] })
-    setNotice(imageError ? { text: imageError, failed: true } : { text: '사전 설명을 저장했어요.', failed: false })
+  // current가 false면 응답이 왔을 때 그 폼은 이미 화면에 없다(다른 용어를 열었다). 서버에서 끝난 저장이므로 목록과 안내는 갱신하되,
+  // 지금 보는 폼을 다시 그리거나 그 용어로 이동하지 않는다(다른 용어에 쓰던 입력이 사라지지 않게).
+  function afterSave(saved: GlossaryTerm, imageError: string | null, current: boolean) {
+    updateTerms((list) => (list.some((term) => term.id === saved.id) ? list.map((term) => (term.id === saved.id ? saved : term)) : [saved, ...list]))
+    const prefix = current ? '' : `‘${saved.label}’ `
+    setNotice(imageError ? { text: `${prefix}${imageError}`, failed: true } : { text: `${prefix}사전 설명을 저장했어요.`, failed: false })
+    if (!current) return
     setFormVersion((version) => version + 1)
     navigate(glossaryTermPath(saved.id))
   }
 
-  function afterDelete(deleted: GlossaryTerm) {
-    setLoad({ status: 'ready', terms: terms.filter((term) => term.id !== deleted.id) })
-    setNotice({ text: '사전 설명을 삭제했어요.', failed: false })
-    navigate(operatorPaths.glossaryNew)
+  function afterDelete(deleted: GlossaryTerm, current: boolean) {
+    updateTerms((list) => list.filter((term) => term.id !== deleted.id))
+    setNotice({ text: `${current ? '' : `‘${deleted.label}’ `}사전 설명을 삭제했어요.`, failed: false })
+    if (current) navigate(operatorPaths.glossaryNew)
   }
 
   return (
