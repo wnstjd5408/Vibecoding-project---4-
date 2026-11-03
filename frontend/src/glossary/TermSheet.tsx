@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiFetch, isApiError } from '../api/client.ts'
 import type { FavoriteResponse, GlossaryResponse, TermViewResponse } from '../api/types.ts'
+import { currentSession } from '../auth/sessionGeneration.ts'
 import { useAuth } from '../auth/useAuth.ts'
 import { Badge } from '../components/Badge.tsx'
 import { Button } from '../components/Button.tsx'
@@ -63,15 +64,19 @@ function mergeSeen(previous: SeenImage[], images: { id: number; alt: string }[])
   return added.length === 0 ? previous : [...previous, ...added]
 }
 
-// 진행 중인 즐겨찾기 요청(용어별). 시트를 닫았다 다시 열어도 같은 요청을 이어서 보게 한다.
+// 진행 중인 즐겨찾기 요청(로그인 세션·용어별). 시트를 닫았다 다시 열어도 같은 세션이면 같은 요청을 이어서 보게 한다.
 // 서버는 요청을 이미 받았을 수 있어(닫는다고 저장이 취소되지 않는다), 다시 연 시트는 그 결과로 버튼을 맞춰야 한다.
-const favoriteRequests = new Map<number, Promise<FavoriteResponse>>()
+// 세션 번호(auth/sessionGeneration)가 키에 들어가므로 로그아웃·다른 계정 로그인 뒤에 연 시트는 이전 세션의 요청을 이어받지 않는다(MEG-166).
+const favoriteRequests = new Map<string, Promise<FavoriteResponse>>()
 
-function requestFavorite(termId: number, favorited: boolean): Promise<FavoriteResponse> {
+const requestKey = (session: number, termId: number) => `${session}:${termId}`
+
+function requestFavorite(session: number, termId: number, favorited: boolean): Promise<FavoriteResponse> {
+  const key = requestKey(session, termId)
   const request = apiFetch<FavoriteResponse>(`/api/favorites/${termId}`, { method: 'PUT', body: { favorited } })
-  favoriteRequests.set(termId, request)
+  favoriteRequests.set(key, request)
   const clear = () => {
-    if (favoriteRequests.get(termId) === request) favoriteRequests.delete(termId)
+    if (favoriteRequests.get(key) === request) favoriteRequests.delete(key)
   }
   request.then(clear, clear)
   return request
@@ -103,26 +108,31 @@ function TermSheetContent({ termId, onLoginRequired }: { termId: number; onLogin
       alive.current = false
     }
   }, [])
+  // 이 시트를 연 때의 로그인 세션. 즐겨찾기 요청의 공유와 응답 반영은 이 세션에서만 한다. 시트가 아직 살아 있어도 세션이 바뀌었으면(로그아웃·다른 계정 로그인)
+  // 이전 세션의 응답은 버튼·안내·요청 상태 어느 것도 바꾸지 못한다.
+  const [session] = useState(currentSession)
+  const stillHere = () => alive.current && currentSession() === session
   // 즐겨찾기: 응답을 받은 뒤에만 상태를 바꾼다(null이면 E06의 is_favorite를 쓴다). 요청 중에는 중복 요청을 막는다.
   const [favoriteSaved, setFavoriteSaved] = useState<boolean | null>(null)
   // 같은 용어의 요청이 이미 진행 중이면(시트를 닫았다 다시 연 경우) 처음부터 막힌 상태로 시작한다.
-  const [favoritePending, setFavoritePending] = useState(() => favoriteRequests.has(termId))
+  const [favoritePending, setFavoritePending] = useState(() => favoriteRequests.has(requestKey(session, termId)))
   const [favoriteFailed, setFavoriteFailed] = useState(false)
   // 스크린 리더에 알릴 저장 결과. 이 시트에서 누른 요청의 결과만 알린다(다른 시트의 요청 결과는 상태만 맞춘다).
   const [favoriteMessage, setFavoriteMessage] = useState('')
   // 시트를 다시 열었을 때 같은 용어의 요청이 진행 중이면 그 요청을 이어서 보고, 끝나면 서버가 저장한 값으로 버튼을 맞춘다.
   // 실패하면(로그인 필요 포함) 이 시트에서 누른 것이 아니므로 안내를 열거나 오류를 띄우지 않고 막힌 것만 푼다.
   useEffect(() => {
-    const inFlight = favoriteRequests.get(termId)
+    const inFlight = favoriteRequests.get(requestKey(session, termId))
     if (!inFlight) return
     inFlight
       .then((response) => {
-        if (alive.current) setFavoriteSaved(response.is_favorite)
+        if (stillHere()) setFavoriteSaved(response.is_favorite)
       }, () => {})
       .finally(() => {
-        if (alive.current) setFavoritePending(false)
+        if (stillHere()) setFavoritePending(false)
       })
-  }, [termId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stillHere는 매 렌더 새로 만들어지지만 ref와 모듈 값만 읽는다
+  }, [termId, session])
   // 이미지마다 E06을 다시 부르는 것은 한 번뿐이다. 새 URL도 실패하거나 URL이 그대로면 대체 글로 둔다.
   const refreshedImages = useRef(new Set<number>())
   const refreshing = useRef<Promise<GlossaryResponse> | null>(null)
@@ -179,18 +189,18 @@ function TermSheetContent({ termId, onLoginRequired }: { termId: number; onLogin
     setFavoriteFailed(false)
     setFavoriteMessage('')
     try {
-      const response = await requestFavorite(termId, next)
-      // 그 사이 시트가 닫혔거나 화면이 바뀌었으면 결과를 쓰지 않는다. 다시 연 시트는 진행 중 요청을 따로 이어서 본다.
-      if (alive.current) {
+      const response = await requestFavorite(session, termId, next)
+      // 그 사이 시트가 닫혔거나 화면이 바뀌었거나 로그인 세션이 바뀌었으면 결과를 쓰지 않는다. 같은 세션에서 다시 연 시트는 진행 중 요청을 따로 이어서 본다.
+      if (stillHere()) {
         setFavoriteSaved(response.is_favorite)
         setFavoriteMessage(response.is_favorite ? MESSAGES.favoriteOn : MESSAGES.favoriteOff)
       }
     } catch (error) {
-      if (!alive.current) return
+      if (!stillHere()) return
       // 401 login_required는 로그인 안내가 맡는다. 눌림 상태는 바뀐 적이 없어 되돌릴 것도 없다. 그 밖의 오류는 여기서 안내한다.
       if (!onLoginRequired(error)) setFavoriteFailed(true)
     } finally {
-      if (alive.current) setFavoritePending(false)
+      if (stillHere()) setFavoritePending(false)
     }
   }
 

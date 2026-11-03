@@ -2243,3 +2243,132 @@ test.describe('PC 폭 패널: 창 폭 전환 중 요청', () => {
     expect(calls).toHaveLength(before) // E09 요청이 늘지 않았다
   })
 })
+
+// ---- MEG-166 계정 전환 뒤 이전 즐겨찾기(E08) 응답이 현재 화면에 반영되지 않게 한다. 실제 로그아웃·로그인 흐름과 합성 HTTP 응답으로 시험한다. ----
+// MEG-76 로컬 검증 S7: 회원 A의 E08 응답을 보류한 채 로그아웃하거나 B로 전환하면, 늦게 도착한 A의 응답이 현재 시트의 버튼을 덮어썼다.
+// 합성 응답 시험이며 실제 백엔드 결과는 로컬 검증에서 따로 확인한다.
+
+type FavoriteUser = 'a' | 'b'
+
+async function setupFavoriteSwitch(page: Page, respondFirst: (held: Promise<void>) => Promise<{ status: number; json: object }>) {
+  const held = gate()
+  const state = {
+    loggedIn: true,
+    user: 'a' as FavoriteUser,
+    saved: { a: false, b: false } as Record<FavoriteUser, boolean>,
+    bodies: [] as { favorited: boolean }[],
+    release: held.release,
+  }
+  await page.route('**/api/me', (route) => route.fulfill({ json: state.loggedIn ? { authenticated: true, role: 'member', display_name: '같은이름' } : { authenticated: false } }))
+  await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
+  await page.route('**/api/notes/11', (route) => route.fulfill({ json: termNote }))
+  await page.route('**/api/term-views', (route) => route.fulfill({ json: { recorded: state.loggedIn } }))
+  await page.route('**/api/glossary/7', (route) => route.fulfill({ json: state.loggedIn ? { ...glossary(), is_favorite: state.saved[state.user] } : glossary() }))
+  await page.route('**/api/auth/logout', (route) => {
+    state.loggedIn = false
+    return route.fulfill({ status: 204 })
+  })
+  await page.route('**/api/auth/login', (route) => {
+    const email = (route.request().postDataJSON() as { email: string }).email
+    state.user = email.startsWith('a') ? 'a' : 'b'
+    state.loggedIn = true
+    return route.fulfill({ json: { user: { role: 'member', display_name: '같은이름' } } })
+  })
+  await page.route('**/api/favorites/7', async (route) => {
+    const body = route.request().postDataJSON() as { favorited: boolean }
+    state.bodies.push(body)
+    if (state.bodies.length === 1) return route.fulfill(await respondFirst(held.promise)) // 첫 요청(A)만 보류한다
+    state.saved[state.user] = body.favorited
+    return route.fulfill({ json: { term_id: 7, is_favorite: body.favorited } })
+  })
+  return state
+}
+
+// A가 즐겨찾기를 눌러 E08이 진행 중일 때 시트를 닫고 로그아웃한다. email이 있으면 그 계정으로 다시 로그인해 같은 노트로 돌아온다.
+async function leaveAccountA(page: Page, email?: string) {
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: /^내 계정/ }).click()
+  await page.getByRole('menuitem', { name: '로그아웃' }).click()
+  await expect(page).toHaveURL(/\/$/)
+  if (email) {
+    await goInAppQuiz(page, '/login')
+    await page.getByLabel('이메일').fill(email)
+    await page.getByLabel('비밀번호').fill('example-password')
+    await page.getByRole('button', { name: '로그인' }).click()
+    await expect(page).toHaveURL(/\/quiz$/)
+  }
+  await goInAppQuiz(page, '/notes/11')
+  await page.locator('[data-note-body]').waitFor()
+}
+
+async function startPendingFavoriteAsA(page: Page, state: Awaited<ReturnType<typeof setupFavoriteSwitch>>) {
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await favoriteOff(page).click()
+  await expect.poll(() => state.bodies.length).toBe(1) // A의 E08이 서버에 도착했고 응답만 보류 중이다
+}
+
+const aSucceeds = (held: Promise<void>) => held.then(() => ({ status: 200, json: { term_id: 7, is_favorite: true } }))
+const aFailsLoginRequired = (held: Promise<void>) => held.then(() => ({ status: 401, json: loginRequiredFailure().body }))
+
+test('MEG-166 AC-1 A의 E08 성공 응답을 보류하고 로그아웃해 방문자로 같은 용어를 열어도, 늦은 응답이 버튼을 켜거나 안내를 띄우지 않는다', async ({ page }) => {
+  const state = await setupFavoriteSwitch(page, aSucceeds)
+  await startPendingFavoriteAsA(page, state)
+  await leaveAccountA(page)
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+  state.release() // 늦게 도착한 A의 성공
+  await page.waitForTimeout(400)
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+  await expect(favoriteOn(page)).toHaveCount(0)
+  await expect(page.getByText('즐겨찾기에 저장했어요')).toHaveCount(0)
+  await expect(loginPromptSheet(page)).toHaveCount(0)
+})
+
+test('MEG-166 AC-2 A의 응답을 보류하고 B로 전환하면 B의 상태가 유지되고, B의 다음 클릭은 B의 현재 상태에 맞는 요청을 보낸다', async ({ page }) => {
+  const state = await setupFavoriteSwitch(page, aSucceeds)
+  await startPendingFavoriteAsA(page, state)
+  await leaveAccountA(page, 'b@example.test')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+  expect(await favoriteOff(page).getAttribute('aria-disabled')).not.toBe('true') // A의 진행 중 요청 때문에 막히지 않는다
+  state.release()
+  await page.waitForTimeout(400)
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false') // B의 E06 상태 그대로
+  await expect(favoriteOn(page)).toHaveCount(0)
+  await favoriteOff(page).click() // B의 현재 상태(꺼짐)에 맞는 요청: 켜기
+  await expect(favoriteOn(page)).toBeVisible()
+  expect(state.bodies).toEqual([{ favorited: true }, { favorited: true }])
+  expect(state.saved.b).toBe(true)
+})
+
+test('MEG-166 AC-3 세션 전환 전 시작한 실패 응답(401 login_required)은 현재 화면에 로그인 안내·오류를 띄우거나 요청 상태를 막지 않는다', async ({ page }) => {
+  const state = await setupFavoriteSwitch(page, aFailsLoginRequired)
+  await startPendingFavoriteAsA(page, state)
+  await leaveAccountA(page)
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  expect(await favoriteOff(page).getAttribute('aria-disabled')).not.toBe('true') // 응답이 도착하기 전에도 A의 진행 중 요청으로 막히지 않는다
+  state.release() // 늦게 도착한 A의 401
+  await page.waitForTimeout(400)
+  await expect(loginPromptSheet(page)).toHaveCount(0)
+  await expect(termSheet(page)).toBeVisible() // 용어 시트가 닫히지 않는다
+  await expect(termSheet(page).getByRole('alert')).toHaveCount(0)
+  expect(await favoriteOff(page).getAttribute('aria-disabled')).not.toBe('true')
+})
+
+test('MEG-166 같은 계정이라도 로그아웃 후 다시 로그인하면 이전 요청을 이어받지 않고 E06의 값으로 맞춘다', async ({ page }) => {
+  const state = await setupFavoriteSwitch(page, aSucceeds)
+  await startPendingFavoriteAsA(page, state)
+  await leaveAccountA(page, 'a@example.test')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false') // E06은 저장 전 상태(꺼짐)다
+  expect(await favoriteOff(page).getAttribute('aria-disabled')).not.toBe('true')
+  state.release()
+  await page.waitForTimeout(400)
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false') // 이전 세션의 응답으로 바뀌지 않는다
+})
