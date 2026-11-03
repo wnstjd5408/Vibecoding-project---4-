@@ -28,8 +28,6 @@ _MAX_BIGINT = 2**63 - 1
 _NOTE_ID_SHAPE = re.compile(r"[1-9][0-9]{0,18}")
 # 서명 URL 유효 시간(제안값, 2026-10-30 수락). 읽을 때마다 새로 발급한다.
 SIGNED_URL_SECONDS = 5 * 60
-# PostgREST 최대 행(supabase/config.toml max_rows). 사전 용어가 이만큼이면 잘렸을 수 있다.
-GLOSSARY_ROW_CAP = 1000
 
 
 @router.get("/notes", summary="E04 subjects and notes")
@@ -120,10 +118,8 @@ def read_note(
         limiter.check(SIGNED_URL, f"user:{user.user_id}" if user else ip_key)
 
     body = note["body_markdown"]
+    # 사전 용어 전체(id 기준 키셋 페이지네이션, MEG-141). 안전장치 상한에 닿으면 supabase.py가 오류 로그를 남긴다.
     term_rows = supabase.list_glossary_terms()
-    if len(term_rows) >= GLOSSARY_ROW_CAP:
-        # PostgREST 최대 행에서 잘렸을 수 있다. 뒤쪽 용어가 어느 노트에서도 안 보이므로 남긴다.
-        logger.warning("stage=db glossary_terms=%d reached row cap", len(term_rows))
     terms = {row["id"]: row for row in term_rows}
     spans = find_spans(body, [(term_id, row["key"]) for term_id, row in terms.items()])
     used = sorted({span.term_id for span in spans})

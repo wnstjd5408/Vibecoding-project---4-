@@ -394,9 +394,9 @@ test.describe('PC 패널의 목업 치수', () => {
     await page.goto('/notes/11')
     await term(page).click()
     await panel(page).getByRole('button', { name: '즐겨찾기', exact: true }).click()
-    const color = (locator: Locator) => locator.evaluate((element) => getComputedStyle(element).color)
-    expect(await color(loginDialog(page).locator('p').first())).toBe('rgb(22, 32, 47)')
+    await expect(loginDialog(page).locator('p').first()).toHaveCSS('color', 'rgb(22, 32, 47)')
     await page.setViewportSize({ width: 800, height: 800 })
-    expect(await color(loginDialog(page).locator('p').first())).toBe('rgb(86, 100, 116)')
+    // matchMedia 변경을 React가 모바일 시트에 반영한 뒤 같은 색상 계약을 검사한다.
+    await expect(loginDialog(page).locator('p').first()).toHaveCSS('color', 'rgb(86, 100, 116)')
   })
 })
