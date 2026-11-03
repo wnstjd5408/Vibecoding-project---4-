@@ -254,6 +254,10 @@ def audit(source, notion):
         body = row["body_markdown"]
         fences, _ = stored_fences(body)
         if fences and all(f["info"].lower() == "mermaid" for f in fences):
+            # Count stored marks even when no Notion lookup is needed. This is a
+            # stored-state count, not evidence that Notion was revalidated.
+            counts["notes_with_mermaid"] += 1
+            counts["blocks_already_marked"] += len(fences)
             continue  # every stored fence is already marked mermaid; nothing to recover
         # Anything else is checked against Notion, even without a bare fence: a stored fence with another
         # language or a note that lost its code blocks must show up in the report, not vanish.
