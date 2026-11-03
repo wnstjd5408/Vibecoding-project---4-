@@ -88,6 +88,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 - 모든 `/api` 응답에 `Cache-Control: private, no-store`를 붙인다. 같은 주소가 역할에 따라 다른 내용을 주기 때문이다. (결정, 2026-10-23)
 - 신고는 그 용어의 현재 유효한 공유 AI 설명과 자기 퀴즈 문항에만 할 수 있다. 저장하지 않는 1회용 설명은 신고 대상이 아니다.
 - 신고 보내기(E10, `POST /api/reports`, `backend/app/reports.py`)는 대상이 없거나 남의 문항이거나 무효화된 설명이면 모두 같은 404다. 같은 사용자·같은 대상의 열린 신고는 하나라서(부분 유일 인덱스 `reports_open_*_idx`) 다시 보내면 새 행 없이 기존 신고를 200으로 돌려주고, 처리(`resolved`)된 뒤에는 새 신고를 받는다. 본문은 비어 있어도 되고 1,000자(코드포인트) 이하다. 사용자당 분당 쓰기 제한(30회)을 대상 확인보다 먼저 센다(E07과 같은 방식). (MEG-88)
+- 운영자 신고 목록·처리(E25 `GET /api/admin/reports`, E26 `PATCH /api/admin/reports/{id}`, `backend/app/admin_reports.py`)는 운영자만 부른다(방문자 401, 일반 사용자 403). 목록은 `status`(`open` 기본, `resolved`)로 거르고 id 내림차순이며 `limit`(1~100, 기본 100)과 `cursor`(앞 쪽의 마지막 id)로 쪽을 나눈다. 각 신고는 `id`·`status`·`body`와 대상 요약 `target`(`type`·`id`와 AI 설명이면 `term_key_snapshot`·`body`, 퀴즈 문항이면 `question`·`answer`)이고 신고자는 내지 않는다. 처리는 `status: resolved`만 받고 `invalidate_explanation`(기본 false)이 true이고 대상이 AI 설명일 때만 그 설명 하나를 기존 SQL 함수 `ai_invalidate_explanations`로 무효화한다(대상이 퀴즈 문항이면 무시). 무효화를 먼저 하고 신고를 처리하므로 중간에 실패해도 같은 요청을 다시 보내면 끝나며, 이미 처리된 신고에 다시 보내도 200이고 처리 시각은 그대로다. 없는 신고나 모양이 틀린 id는 404, 쓰기 제한(분당 30회)은 E26만 맨 앞에서 센다. (MEG-83, D-062)
 - 최초 운영자는 Supabase 대시보드나 SQL로 직접 만든다. 자체 가입은 없다. 마지막 남은 운영자는 회수하거나 일반 사용자로 바꿀 수 없게 한다(회수·역할 변경 엔드포인트를 만들 때 적용). (제안)
 - 계정 회수가 필요하면 운영자가 SQL로 `profiles.is_active`를 끄고 세션을 끊는다. 다음 요청부터 로그인 기능이 거부된다.
 

@@ -460,6 +460,78 @@ class SupabaseClient:
         # 두 번 연달아 같은 경합이면 사용자 입력이나 설정 문제가 아니다. 다시 보내 볼 수 있게 503으로 낸다.
         raise SupabaseUnavailable("reports insert kept conflicting without an open report")
 
+    def list_admin_reports(self, status: str, limit: int, before_id: int | None) -> list[dict[str, Any]]:
+        """E25: status가 같은 신고를 id 내림차순으로 limit개까지 준다. 신고자(user_id)는 읽지도 내지도 않는다(1.9).
+
+        before_id를 주면 그보다 작은 id만 준다(cursor = 앞 쪽의 마지막 id, API spec 1.5). 대상(AI 설명·퀴즈 문항)은
+        한 번의 요청으로 함께 읽어 target 요약(종류별 열)으로 바꾼다. 대상 행이 없으면(외래 키가 막는 일이라 생기지 않아야
+        한다) 목록을 조용히 줄이지 않고 설정·무결성 오류로 낸다.
+        """
+        if status not in ("open", "resolved"):
+            raise ValueError(f"unknown report status: {status}")
+        params = {
+            "status": f"eq.{status}",
+            "select": "id,status,body,ai_explanation_id,quiz_item_id,"
+            "ai_explanations(term_key_snapshot,body),quiz_items(question,answer)",
+            "order": "id.desc",
+            "limit": str(int(limit)),
+        }
+        if before_id is not None:
+            params["id"] = f"lt.{int(before_id)}"
+        reports = []
+        for row in self._select("reports", params):
+            if row["ai_explanation_id"] is not None:
+                explanation = row.get("ai_explanations")
+                if not explanation:
+                    raise SupabaseConfigError("report without its ai explanation")
+                target = {
+                    "type": "ai_explanation",
+                    "id": row["ai_explanation_id"],
+                    "term_key_snapshot": explanation["term_key_snapshot"],
+                    "body": explanation["body"],
+                }
+            else:
+                item = row.get("quiz_items")
+                if not item:
+                    raise SupabaseConfigError("report without its quiz item")
+                target = {"type": "quiz_item", "id": row["quiz_item_id"], "question": item["question"], "answer": item["answer"]}
+            reports.append({"id": row["id"], "status": row["status"], "body": row["body"], "target": target})
+        return reports
+
+    def get_admin_report(self, report_id: int) -> dict[str, Any] | None:
+        """E26: 신고의 status와 AI 설명 대상 id만 읽는다. 없으면 None이다(AI 설명이 대상이 아니면 ai_explanation_id는 None)."""
+        rows = self._select(
+            "reports", {"id": f"eq.{int(report_id)}", "select": "id,status,ai_explanation_id", "limit": "1"}
+        )
+        return rows[0] if rows else None
+
+    def invalidate_ai_explanation(self, explanation_id: int) -> int:
+        """E26: AI 설명 하나를 무효화한다(invalidated_at 채움). 이미 무효화됐으면 0을 돌려준다. 행은 지우지 않는다.
+
+        기존 SQL 함수(ai_invalidate_explanations, 마이그레이션 20261102120000)를 설명 id 하나로 부른다.
+        """
+        result = self.rpc(
+            "ai_invalidate_explanations",
+            {"p_note_id": None, "p_term_id": None, "p_explanation_id": int(explanation_id)},
+        )
+        return int(result or 0)
+
+    def mark_report_resolved(self, report_id: int, resolved_at: str) -> bool:
+        """E26: 열린 신고를 처리됨으로 바꾸고 처리 시각을 채운다. 바꾼 행이 있으면 True다.
+
+        status가 open인 행만 조건에 건다. 이미 처리된 신고의 처리 시각을 덮어쓰지 않고, 그때는 False를 돌려준다.
+        """
+        response = self._request(
+            "PATCH",
+            "/rest/v1/reports",
+            params={"id": f"eq.{int(report_id)}", "status": "eq.open", "select": "id"},
+            json={"status": "resolved", "resolved_at": resolved_at},
+            headers={**self._headers(), "Prefer": "return=representation"},
+        )
+        if response.status_code != 200:
+            raise SupabaseConfigError(f"reports update status {response.status_code}")
+        return bool(response.json())
+
     def get_note_for_explain(self, note_id: int, include_unpublished: bool) -> dict[str, Any] | None:
         """E09가 읽는 노트의 열(id, revision, is_published, body_markdown). 없거나 볼 수 없으면 None이다.
 
