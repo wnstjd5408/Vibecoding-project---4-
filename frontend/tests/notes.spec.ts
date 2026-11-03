@@ -3,6 +3,54 @@ import type { Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { fromMarkdown } from 'mdast-util-from-markdown'
+
+for (const width of [390, 1280]) {
+  test(`Notion 강조 공백 가져오기와 실제 span·선택 위치 (${width}px)`, async ({ page }) => {
+    const backend = fileURLToPath(new URL('../../backend/', import.meta.url))
+    const items = [
+      { plain_text: '😀 시작 ' },
+      { plain_text: '한글용어 ', annotations: { bold: true } },
+      { plain_text: ' 기울임 ', annotations: { italic: true } },
+      { plain_text: '복합 ', annotations: { bold: true, italic: true } },
+      { plain_text: 'A* ', annotations: { bold: true } },
+      { plain_text: '코드*', annotations: { code: true } },
+    ]
+    const result = JSON.parse(execFileSync('uv', ['run', '--no-sync', '--directory', backend, 'python', '-X', 'utf8', '-c',
+      'import json,sys; from dataclasses import asdict; from scripts.notion_content import rich_text; from app.glossary_spans import find_spans; body=rich_text(json.load(sys.stdin)); print(json.dumps({"body":body,"spans":[asdict(s) for s in find_spans(body,[(1,"한글용어")])]}))'],
+    { input: JSON.stringify(items), encoding: 'utf8' }))
+    const tree = fromMarkdown(result.body)
+    const types: string[] = []
+    function visit(node: { type: string; children?: typeof node[] }) { types.push(node.type); node.children?.forEach(visit) }
+    visit(tree)
+    expect(types.filter(t => t === 'strong')).toHaveLength(3)
+    expect(types.filter(t => t === 'emphasis')).toHaveLength(2)
+    await setup(page)
+    await page.setViewportSize({ width, height: 844 })
+    await page.route('**/api/notes/11', route => route.fulfill({ json: {
+      id: 11, revision: 2, title: '합성 강조 회귀', studied_on: null, subjects: [], sources: [],
+      body_markdown: result.body, images: {}, glossary_terms: [], glossary_spans: result.spans,
+    } }))
+    await page.goto('/notes/11')
+    const root = page.locator('[data-note-body]')
+    expect(await root.textContent()).toBe(items.map(i => i.plain_text).join(''))
+    await expect(root.locator('strong').first()).toHaveText('한글용어')
+    await expect(root.locator('em strong')).toHaveText('복합')
+    await expect(root.locator('[data-term-id="1"]')).toHaveText('한글용어')
+    const range = await root.evaluate(async element => {
+      const { sourceRangeOfSelection } = await import('/src/notes/selection.ts')
+      const selection = document.createRange()
+      selection.selectNodeContents(element.querySelector('[data-term-id="1"]')!)
+      return sourceRangeOfSelection(element, selection)
+    })
+    // DOM source ranges are UTF-16; the API contract uses codepoints.
+    expect(range).not.toBeNull()
+    expect({ start: [...result.body.slice(0, range!.start)].length,
+      end: [...result.body.slice(0, range!.end)].length })
+      .toEqual({ start: result.spans[0].start, end: result.spans[0].end })
+    expect(result.body.slice(range!.start, range!.end)).toBe('한글용어')
+  })
+}
 
 // Exercise the real importer output, not a hand-written approximation of Markdown.
 function importedBody() {
