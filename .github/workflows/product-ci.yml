@@ -1,0 +1,162 @@
+name: Product tests
+
+on:
+  pull_request:
+    branches: [main, staging]
+  push:
+    branches: [main, staging]
+
+# No environment, secrets, deployment or write access in PR code execution.
+permissions:
+  contents: read
+
+concurrency:
+  group: product-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  AWS_EC2_METADATA_DISABLED: "true"
+  UV_VERSION: "0.12.23"
+  NODE_VERSION: "24.19.0"
+
+jobs:
+  backend-unit:
+    name: Product backend unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: false
+      - run: uv sync --locked
+      - name: Unit tests (no remote credentials)
+        run: uv run --no-sync pytest tests --ignore=tests/integration --ignore=tests/test_account_issuance_local.py --junitxml=unit-results.xml -q
+      - name: Require executed tests without skips
+        run: uv run --no-sync python scripts/check_test_report.py unit-results.xml
+
+  backend-sql:
+    name: Product backend SQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      AI_LEDGER_TEST_CONTAINER: product-ci-postgres
+      GLOSSARY_SQL_TEST_CONTAINER: product-ci-postgres
+      NOTION_IMPORT_TEST_CONTAINER: product-ci-postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: false
+      - run: uv sync --locked
+      - name: Start network-isolated disposable PostgreSQL
+        run: |
+          docker run -d --name product-ci-postgres --network none \
+            -e POSTGRES_HOST_AUTH_METHOD=trust \
+            postgres:17@sha256:31ba9c94a03ada9988f2bb493a22a75eef3a185884533e5cdbcd498ea835b08f
+          for attempt in {1..30}; do
+            if docker exec product-ci-postgres pg_isready -U postgres; then exit 0; fi
+            sleep 1
+          done
+          echo 'PostgreSQL did not become ready' >&2
+          exit 1
+      - name: All SQL integration tests
+        run: uv run --no-sync pytest tests/integration --junitxml=sql-results.xml -q
+      - name: Require executed SQL tests without skips
+        run: uv run --no-sync python scripts/check_test_report.py sql-results.xml
+      - name: Remove disposable PostgreSQL
+        if: always()
+        run: |
+          if docker container inspect product-ci-postgres >/dev/null 2>&1; then
+            docker rm -f product-ci-postgres
+          fi
+
+  frontend:
+    name: Product frontend build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  frontend-e2e:
+    name: Product frontend E2E
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - run: npm ci
+      - run: npx --no-install playwright install --with-deps chromium
+      - name: Mock UI tests
+        run: npm run test:e2e -- --reporter=list,junit
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/mock.xml
+      - name: Require executed mock tests without skips
+        run: python3 ../backend/scripts/check_test_report.py test-results/mock.xml
+      - name: Notes synthetic HTTP tests
+        run: npm run test:e2e:notes -- --reporter=list,junit
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/notes.xml
+      - name: Require executed notes tests without skips
+        run: python3 ../backend/scripts/check_test_report.py test-results/notes.xml
+
+  product-ci:
+    name: Product CI
+    if: always()
+    needs: [backend-unit, backend-sql, frontend, frontend-e2e]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require all four jobs to succeed
+        env:
+          UNIT: ${{ needs.backend-unit.result }}
+          SQL: ${{ needs.backend-sql.result }}
+          BUILD: ${{ needs.frontend.result }}
+          E2E: ${{ needs.frontend-e2e.result }}
+        run: |
+          for result in "$UNIT" "$SQL" "$BUILD" "$E2E"; do
+            if [ "$result" != success ]; then
+              echo 'A required product job failed, was skipped or was cancelled.' >&2
+              exit 1
+            fi
+          done

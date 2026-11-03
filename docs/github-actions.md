@@ -1,11 +1,12 @@
 # GitHub Actions와 배포 검사
 
-이 문서는 저장소의 현재 워크플로를 설명한다. 제품 테스트 CI 추가나 브랜치 정책 변경은 포함하지 않는다. 기준은 [PR metadata](../.github/workflows/pr-metadata.yml), [Infra CD](../.github/workflows/infra-cd.yml), [DB Backup](../.github/workflows/db-backup.yml), [운영 절차](harness/ops.md)다.
+이 문서는 저장소의 워크플로와 제품 CI 연결 절차를 설명한다. 기준은 [Product tests](../.github/workflows/product-ci.yml), [PR metadata](../.github/workflows/pr-metadata.yml), [Infra CD](../.github/workflows/infra-cd.yml), [DB Backup](../.github/workflows/db-backup.yml), [운영 절차](harness/ops.md)다. 워크플로 파일과 원격 required checks 설정은 별개이며, 필수 검사 연결은 사람이 확인한다.
 
 ## 현재 자동화 범위
 
 | 실행 주체 | 실행 조건 | 확인하거나 수행하는 것 | 보장하지 않는 것 |
 |---|---|---|---|
+| GitHub Actions: Product tests | main·staging 대상 PR 및 두 브랜치 push. 문서도 실행 | 단위·격리 SQL·lint/build·합성 화면 시험, 미실행/skip 차단 | 실환경 DB·로그인·AI, 배포 차단, 사람의 출시 승인 |
 | GitHub Actions: PR metadata | PR 생성·수정·재오픈·새 커밋·리뷰 준비 전환 | 제목·소스 브랜치·본문 형식 | 제품 테스트, AC 충족, 배포 정상 동작 |
 | GitHub Actions: Infra CD | `main`의 지정된 Terraform 파일 변경 push 또는 수동 실행 | Terraform plan, 변경이 있으면 승인 절차 후 저장된 plan 적용 | 프론트·백엔드 배포 및 API 정상 동작 |
 | GitHub Actions: DB Backup | 매주 월요일 03:00 KST 예약 실행 또는 수동 실행 | 운영 DB 덤프와 이미지 파일을 비공개 S3 버킷에 업로드, 이미지 파일·표 행 대조 | 백업 내용의 복원 가능성(복원 시험은 사람이 따로 한다) |
@@ -53,20 +54,66 @@ Environment에서 사용하는 비밀값 이름은 `AWS_ROLE_ARN`, `TF_STATE_BUC
 
 Environment 비밀값 이름은 `AWS_ROLE_ARN`, `BACKUP_BUCKET`, `SUPABASE_DB_URL`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`이고, 변수 이름은 `GLOSSARY_IMAGE_BUCKET`, `NOTE_IMAGE_BUCKET`이다. 공개 로그에는 파일 이름·크기·시각과 이미지 대조 개수만 남기고 덤프 내용·행 수·CLI 출력은 남기지 않는다. 설정·복원 절차는 [인프라 가이드](../infra/README.md)의 "DB·이미지 백업" 절을 따른다.
 
-## 제품 테스트의 현재 상태
+## 제품 테스트 CI (MEG-168)
 
-현재 워크플로 세 개에는 `pytest`, 프론트 lint·build, 배포 후 헬스체크를 수행하는 제품 테스트 CI가 없다. Vercel 빌드 성공이나 metadata 검사 통과를 제품 테스트 통과로 기록하지 않는다.
+`Product tests`는 `pull_request`의 병합 결과와 main·staging push 커밋을 검사한다. checkout의 기본 ref를 사용하고 자격증명을 저장하지 않는다. 경로 필터가 없어 문서 PR도 결과가 보고된다. 동일 PR/브랜치의 이전 실행은 취소하며, 네 job 중 실패·취소·skip이 하나라도 있으면 최종 **Product CI**는 성공하지 않는다. CI 자체에는 배포 명령이 없고 Vercel Git 연동은 별도로 동작한다.
 
-변경 범위에 맞는 검증을 로컬에서 실행하고 PR에 결과를 남긴다.
-
-| 작업 디렉터리 | 검증 명령 |
+| check 이름 | 실행 범위 |
 |---|---|
-| `backend/` | `uv sync`, `uv run pytest` |
-| `frontend/` | `npm install`, `npm run lint`, `npm run build` |
+| Product backend unit | `tests/`에서 `integration/`과 `test_account_issuance_local.py`를 제외한 pytest 전체 |
+| Product backend SQL | `tests/integration/` 전체. 격리된 PostgreSQL에서 실제 SQL 함수 검사 |
+| Product frontend build | lint와 TypeScript·Vite build |
+| Product frontend E2E | 기본 Playwright + notes 전용 설정. 로컬 서버와 합성 데이터만 사용 |
+| Product CI | 위 네 결과가 모두 success인지 확인하는 최종 필수 검사 후보 |
 
-배포 후에는 대상 환경·배포 커밋을 확인하고 `GET /api/health`가 `200 {"status":"ok"}`인지 별도로 확인한다. 이 응답은 API 서버의 응답 가능 여부만 뜻하며 DB·Auth·AI 연결 정상 여부를 보장하지 않는다.
+### 재현 명령과 미실행 방지
 
-제품 테스트 CI 도입은 별도 범위다. [운영 절차](harness/ops.md)의 CI 규칙에 따라 관련 테스트를 실행하고 실제 보고된 검사 이름을 required checks에 연결해야 한다. 이 문서는 CI가 추가되었거나 그 요구를 충족했다고 선언하지 않는다.
+버전은 workflow의 Node·uv 설정과 `backend/.python-version`, 두 잠금 파일을 따른다. Playwright와 Chromium은 `npm ci`로 설치된 Playwright 버전이 선택한다.
+
+백엔드 (`backend/`):
+
+```bash
+uv sync --locked
+uv run --no-sync pytest tests --ignore=tests/integration --ignore=tests/test_account_issuance_local.py --junitxml=unit-results.xml -q
+uv run --no-sync python scripts/check_test_report.py unit-results.xml
+```
+
+SQL은 workflow에 고정된 PostgreSQL 이미지로 `--network none` 컨테이너를 만들고 `pg_isready`로 준비 완료를 기다린다. 공개 포트를 열지 않으며 컨테이너 내부 연결만 허용한다. `AI_LEDGER_TEST_CONTAINER`, `GLOSSARY_SQL_TEST_CONTAINER`, `NOTION_IMPORT_TEST_CONTAINER`를 그 컨테이너 이름으로 설정한 뒤 아래 명령을 실행한다. 실행 종료 시 성공·실패와 관계없이 **직접 만든 해당 컨테이너만** 제거한다. 로컬의 기존 DB나 원격 Supabase를 사용하지 않는다.
+
+```bash
+uv run --no-sync pytest tests/integration --junitxml=sql-results.xml -q
+uv run --no-sync python scripts/check_test_report.py sql-results.xml
+```
+
+프론트 (`frontend/`, Bash 예시):
+
+```bash
+npm ci
+npm run lint
+npm run build
+npx --no-install playwright install --with-deps chromium
+CI=true PLAYWRIGHT_JUNIT_OUTPUT_FILE=test-results/mock.xml npm run test:e2e -- --reporter=list,junit
+python ../backend/scripts/check_test_report.py test-results/mock.xml
+CI=true PLAYWRIGHT_JUNIT_OUTPUT_FILE=test-results/notes.xml npm run test:e2e:notes -- --reporter=list,junit
+python ../backend/scripts/check_test_report.py test-results/notes.xml
+```
+
+각 테스트 명령이 성공한 뒤 JUnit 검사를 실행한다. 보고서 누락·파싱 오류·0개 testcase·skip·실패·error는 모두 거부한다. 필수 실행에만 적용하며 기본 로컬 pytest의 opt-in 동작은 바꾸지 않는다. 테스트 수는 현재 커밋의 결과로 기록하며 과거 숫자를 하드코딩하지 않는다. `test.only`는 CI에서 거부한다.
+
+`test_account_issuance_local.py`는 별도 일회용 Supabase를 요구하므로 이 CI에서 명시적으로 제외한다. `e2e-deployed/`는 배포 주소·시험 계정을 요구하는 별도 실환경 검증이다. 두 항목은 Product CI 성공으로 검증됐다고 보고하지 않는다. Windows에서 심볼릭 링크 권한이 없어 로컬 백업 시험이 skip되면 보고서 검사도 실패한다. Ubuntu CI 결과와 구분하여 기록한다.
+
+### 권한과 필수 검사 연결
+
+PR job은 `contents: read`만 사용한다. 운영 비밀값·GitHub Environment·OIDC·배포 권한을 제공하지 않는다. Actions는 전체 commit SHA에 고정하고 의존성은 잠금 파일로 설치한다. 결과 파일·브라우저 trace를 공개 아티팩트로 업로드하지 않는다. 기존 metadata의 `pull_request_target`에는 제품 코드를 추가하지 않는다.
+
+사람이 실제 실행을 확인한 뒤 main ruleset에서 다음을 적용한다. 파일 병합만으로 자동 설정되지 않는다.
+
+1. **Product CI**, 출처 **GitHub Actions**(실제 check의 app ID 대조)를 추가한다. 기존 **Check PR metadata**는 유지한다.
+2. 최신 main과 합친 검사 결과를 요구하도록 strict 설정을 검토·적용한다. 승인 1명·Code Owner·새 push 승인 취소·AI 우회 불가를 유지한다.
+3. 별도 실패 시험 PR에서 실패/미완료 시 병합 차단, 수정 후 검사 성공, 문서 변경 결과를 확인하고 시험 PR은 병합 없이 닫는다.
+4. staging의 같은 검사 연결은 MEG-169에서 수행한다. 이슈 ID 소스 브랜치로 staging 대상 PR을 열어 결과를 확인한다.
+
+이름과 출처 앱을 지정해도 동일 앱이 실행하는 다른 workflow까지 고정하지는 못한다. 사람은 workflow 변경 자체를 검토해야 한다. Product CI는 실환경 DB·Auth·AI 검증이나 운영 배포 게이트가 아니다. `/api/health` 또한 API 기동만 확인하며 DB 연결을 보장하지 않는다.
 
 ## 결과 확인과 실패 대응
 
