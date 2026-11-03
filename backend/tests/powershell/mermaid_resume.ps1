@@ -7,9 +7,9 @@ function global:docker {
     $global:meg170Test_calls.Add($file)
     $global:LASTEXITCODE = 0
     switch ($file) {
-        'state-pilot.sql' { return "39,$global:meg170Test_pilot" }
+        'state-pilot.sql' { return "1,$global:meg170Test_pilot" }
         'state-rest.sql' {
-            return (@(1,2,4,5,6,14,18,20,21,22,24,25,27,31,34,37,38,40) | ForEach-Object { "$_,$global:meg170Test_rest" }) -join "`n"
+            return (@(2,3) | ForEach-Object { "$_,$global:meg170Test_rest" }) -join "`n"
         }
         '1-pilot-apply.sql' {
             if ($global:meg170Test_pilot -ne 'original') { $global:LASTEXITCODE=1; return 'changed since audit' }
@@ -20,8 +20,6 @@ function global:docker {
             $global:meg170Test_pilot='original'; return ''
         }
         '2-rest-apply.sql' { $global:meg170Test_rest='applied'; return '' }
-        'verify-pilot.sql' { return '39,4,1' }
-        'verify-all.sql' { return '19,2,4,68' }
         default { throw "Unexpected command blocked: $file" }
     }
 }
@@ -55,7 +53,7 @@ try {
         $global:meg170Test_answers=[System.Collections.Generic.Queue[string]]::new()
         foreach ($answer in $case.answers) { $global:meg170Test_answers.Enqueue($answer) }
         $failed=$false
-        try { & $Runner -SkipAudit -SplitDir $fixtureDir -PilotNoteId 39 -RestNoteIds @(1,2,4,5,6,14,18,20,21,22,24,25,27,31,34,37,38,40) -ExpectedMarkedBlocks 68 -NoteUrl 'https://example.invalid/notes/39' 6>$null } catch { $failed=$true; $caught = $_.Exception.Message }
+        try { & $Runner -SkipAudit -SplitDir $fixtureDir -PilotNoteId 1 -RestNoteIds @(2,3) -ExpectedMarkedBlocks 4 -NoteUrl 'https://example.invalid/notes/1' 6>$null } catch { $failed=$true; $caught = $_.Exception.Message }
         $writes=@($global:meg170Test_calls | Where-Object { $_ -match '(apply|restore)\.sql$' })
         if ($failed -ne $case.error -or ($writes -join ',') -ne ($case.writes -join ',')) {
             throw "FAIL $($case.name): error=$failed writes=$($writes -join ',') cause=$caught"
@@ -68,4 +66,3 @@ try {
     $env:DATABASE_URL=$oldDb
     Remove-Item Function:\global:docker,Function:\global:uv,Function:\global:Read-Host
 }
-
