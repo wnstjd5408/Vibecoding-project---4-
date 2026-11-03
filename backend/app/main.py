@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app import accounts, admin_glossary, admin_reports, ai_explain, eval_staging, glossary, notes, quiz, reports
+from app import accounts, admin_glossary, admin_reports, ai_explain, eval_staging, glossary, notes, quiz, quiz_answers, reports
 from app.common import install_common_layer
 from app import favorites
 
@@ -15,6 +15,7 @@ app.include_router(ai_explain.router)
 app.include_router(admin_glossary.router)
 app.include_router(admin_reports.router)
 app.include_router(quiz.router)
+app.include_router(quiz_answers.router)
 app.include_router(reports.router)
 app.include_router(favorites.router)
 

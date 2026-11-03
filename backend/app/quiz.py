@@ -155,6 +155,25 @@ def _one(value):
     return value
 
 
+# 문항당 꼬리 질문은 최대 2개다(스키마 check seq in (1, 2), 6.5).
+MAX_FOLLOWUPS = 2
+
+
+def followup_progress(answered: bool, slots: list[dict]) -> tuple[bool, int]:
+    """(새 꼬리 질문을 받을 수 있는가, 남은 꼬리 질문 수). slots는 그 문항의 quiz_followups 행 전부다(6.5).
+
+    질문이 아직 없는 슬롯(만드는 중)도 이미 쓴 번호로 센다. 받을 수 있는 것은 답한 문항이고, 슬롯이 둘 미만이며, 이미 받은
+    질문에 모두 답했을 때다. E11·E12·E14가 같은 규칙을 쓴다.
+    """
+    remaining = max(0, MAX_FOLLOWUPS - len(slots))
+    can_request = (
+        answered
+        and len(slots) < MAX_FOLLOWUPS
+        and all(f.get("question") and f.get("user_answer") is not None for f in slots)
+    )
+    return can_request, remaining
+
+
 def ready_response(quiz_date: str, rows: list[dict]) -> dict:
     """3절 예시 5. 답하기 전 문항에는 정답·해설을 넣지 않는다. 답한 문항에만 your_answer·correct_answer·explanation을 준다.
 
@@ -180,11 +199,7 @@ def ready_response(quiz_date: str, rows: list[dict]) -> dict:
             {"seq": f["seq"], "question": f["question"], "answered": f.get("user_answer") is not None} for f in followups
         ]
         # 질문이 아직 없는 슬롯(만드는 중)도 직전 질문에 답하지 않은 것과 같게 본다.
-        item["can_request_followup"] = (
-            answer is not None
-            and len(slots) < 2
-            and all(f.get("question") and f.get("user_answer") is not None for f in slots)
-        )
+        item["can_request_followup"] = followup_progress(answer is not None, slots)[0]
         items.append(item)
     return {"status": "ready", "quiz_date": quiz_date, "items": items}
 

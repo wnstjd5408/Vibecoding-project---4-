@@ -723,6 +723,79 @@ class SupabaseClient:
             raise SupabaseConfigError("rpc quiz_store_items returned an unexpected value")
         return result
 
+    def get_quiz_item_for_answer(self, user_id: str, item_id: int) -> dict[str, Any] | None:
+        """E12·E14: 그 사용자 자신의 퀴즈 세트의 문항. 남의 문항은 없는 문항과 같게 None이다.
+
+        정답·해설·난이도와 이 사용자의 답(quiz_answers, 없으면 null), 꼬리 질문 슬롯 전부(seq 순)를 함께 읽는다.
+        """
+        rows = self._select(
+            "quiz_items",
+            {
+                "id": f"eq.{int(item_id)}",
+                "quiz_sets.user_id": f"eq.{uuid.UUID(user_id)}",
+                "select": "id,difficulty,answer,explanation,quiz_sets!inner(user_id),"
+                "quiz_answers(user_answer),quiz_followups(seq,question,user_answer)",
+                "quiz_followups.order": "seq.asc",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    def save_quiz_answer(self, item_id: int, answer: str) -> str | None:
+        """E12: 답을 한 건 넣는다. 저장돼 있는 답을 돌려준다(내가 넣었으면 내 답, 먼저 있었으면 그 답).
+
+        기본 키(item_id) 충돌은 무시하고 저장된 행을 읽는다. 호출한 쪽이 내 답과 같은지 비교해 같으면 200, 다르면 409로
+        낸다(API spec 1.4.4). 문항이 그 사이 지워졌으면 None이다. 외래 키 이름은 v05 마이그레이션의 기본 이름이다.
+        """
+        response = self._request(
+            "POST",
+            "/rest/v1/quiz_answers",
+            params={"select": "user_answer"},
+            json={"item_id": int(item_id), "user_answer": answer},
+            headers={**self._headers(), "Prefer": "resolution=ignore-duplicates,return=representation"},
+        )
+        if response.status_code == 409:
+            if _error_field(response, "code") == "23503" and "quiz_answers_item_id_fkey" in (
+                _error_field(response, "message") or ""
+            ):
+                return None
+            raise SupabaseConfigError("quiz_answers insert status 409")
+        if response.status_code not in (200, 201):
+            raise SupabaseConfigError(f"quiz_answers insert status {response.status_code}")
+        inserted = response.json()
+        if inserted:
+            return inserted[0]["user_answer"]
+        # 충돌로 무시됐다. 먼저 저장된 답을 읽는다.
+        rows = self._select("quiz_answers", {"item_id": f"eq.{int(item_id)}", "select": "user_answer", "limit": "1"})
+        return rows[0]["user_answer"] if rows else None
+
+    def save_followup_answer(self, item_id: int, seq: int, answer: str) -> str | None:
+        """E14: 질문이 만들어져 있고 아직 답이 없는 슬롯에만 답을 넣는다. 저장돼 있는 답을 돌려준다.
+
+        조건부 갱신이라 먼저 저장된 답을 덮어쓰지 않는다. 갱신된 행이 없으면 슬롯을 읽어, 이미 답이 있으면 그 답을 돌려주고
+        (호출한 쪽이 비교한다), 슬롯이 없거나 질문이 아직 없으면 None이다.
+        """
+        key = {"item_id": f"eq.{int(item_id)}", "seq": f"eq.{int(seq)}"}
+        response = self._request(
+            "PATCH",
+            "/rest/v1/quiz_followups",
+            params={**key, "question": "not.is.null", "user_answer": "is.null", "select": "user_answer"},
+            json={"user_answer": answer},
+            headers={**self._headers(), "Prefer": "return=representation"},
+        )
+        if response.status_code != 200:
+            raise SupabaseConfigError(f"quiz_followups update status {response.status_code}")
+        updated = response.json()
+        if updated:
+            return updated[0]["user_answer"]
+        rows = self._select("quiz_followups", {**key, "select": "question,user_answer", "limit": "1"})
+        if not rows or not rows[0]["question"]:
+            return None
+        if rows[0]["user_answer"] is None:
+            # 갱신 조건을 만족하는데 갱신되지 않았다. 다시 보내 볼 수 있게 503으로 낸다.
+            raise SupabaseUnavailable("quiz_followups update matched no row for an unanswered slot")
+        return rows[0]["user_answer"]
+
     def release_quiz_claim(self, set_id: int, attempt: int) -> None:
         """생성에 실패한 선점을 풀어 다음 호출이 바로 다시 선점하게 한다(failed, 선점 만료 시각 없음).
 
