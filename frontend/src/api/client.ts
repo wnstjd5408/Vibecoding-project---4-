@@ -41,7 +41,7 @@ export function isApiError(error: unknown, code?: string, detail?: string): erro
 
 export type ApiRequestInit = {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
-  // 있으면 JSON으로 보낸다.
+  // 있으면 JSON으로 보낸다. FormData면 그대로 보낸다(멀티파트 경계가 붙은 Content-Type은 브라우저가 정한다).
   body?: unknown
   query?: Record<string, string | number | undefined>
   // Idempotency-Key 같은 추가 헤더
@@ -69,10 +69,10 @@ async function realTransport(url: string, init: ApiRequestInit): Promise<Transpo
       credentials: 'include',
       headers: {
         Accept: 'application/json',
-        ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...(init.body !== undefined && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
         ...init.headers,
       },
-      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+      body: init.body === undefined ? undefined : init.body instanceof FormData ? init.body : JSON.stringify(init.body),
       signal: init.signal,
     })
   } catch (cause) {

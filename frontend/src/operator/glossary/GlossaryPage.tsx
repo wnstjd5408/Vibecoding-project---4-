@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { Link, useMatch, useNavigate, useParams } from 'react-router'
 import { Button, StateMessage } from '../../components/index.ts'
 import { glossaryTermPath, operatorPaths } from '../../routes/paths.ts'
-import { useOperatorGuard } from '../useOperatorGuard.ts'
+import { useOperatorApi } from '../useOperatorApi.ts'
 import { listTerms } from './glossaryApi.ts'
 import type { GlossaryTerm } from './glossaryApi.ts'
 import TermForm from './TermForm.tsx'
@@ -13,26 +13,26 @@ type Load = { status: 'loading' } | { status: 'error' } | { status: 'ready'; ter
 
 export default function GlossaryPage() {
   const navigate = useNavigate()
-  const { onApiError } = useOperatorGuard()
+  const operatorFetch = useOperatorApi()
   const { termId } = useParams()
   const creating = useMatch(operatorPaths.glossaryNew) !== null
   const [load, setLoad] = useState<Load>({ status: 'loading' })
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<{ text: string; failed: boolean } | null>(null)
   const [attempt, setAttempt] = useState(0)
+  // 저장하면 폼을 새로 그려 서버에 저장된 설명·이미지를 다시 읽는다.
+  const [formVersion, setFormVersion] = useState(0)
 
   useEffect(() => {
     let current = true
-    listTerms().then(
+    // 권한 상실(401·403)이면 operatorFetch가 이미 로그인 상태를 다시 읽는다. 여기서는 일반 실패와 같이 다룬다.
+    listTerms(operatorFetch).then(
       (terms) => current && setLoad({ status: 'ready', terms }),
-      (failure) => {
-        if (!current || onApiError(failure)) return
-        setLoad({ status: 'error' })
-      },
+      () => current && setLoad({ status: 'error' }),
     )
     return () => {
       current = false
     }
-  }, [attempt, onApiError])
+  }, [attempt, operatorFetch])
 
   if (load.status === 'loading') {
     return (
@@ -70,15 +70,17 @@ export default function GlossaryPage() {
   const selected = creating ? null : termId ? (terms.find((term) => String(term.id) === termId) ?? null) : (terms[0] ?? null)
   const missing = !creating && termId !== undefined && selected === null
 
-  function afterSave(saved: GlossaryTerm) {
-    setLoad({ status: 'ready', terms: terms.some((term) => term.id === saved.id) ? terms.map((term) => (term.id === saved.id ? saved : term)) : [...terms, saved] })
-    setNotice('사전 설명을 저장했어요.')
+  // 설명은 저장됐다. imageError가 있으면 이미지 단계만 실패한 것이라 그 안내를 보인다.
+  function afterSave(saved: GlossaryTerm, imageError: string | null) {
+    setLoad({ status: 'ready', terms: terms.some((term) => term.id === saved.id) ? terms.map((term) => (term.id === saved.id ? saved : term)) : [saved, ...terms] })
+    setNotice(imageError ? { text: imageError, failed: true } : { text: '사전 설명을 저장했어요.', failed: false })
+    setFormVersion((version) => version + 1)
     navigate(glossaryTermPath(saved.id))
   }
 
   function afterDelete(deleted: GlossaryTerm) {
     setLoad({ status: 'ready', terms: terms.filter((term) => term.id !== deleted.id) })
-    setNotice('사전 설명을 삭제했어요.')
+    setNotice({ text: '사전 설명을 삭제했어요.', failed: false })
     navigate(operatorPaths.glossaryNew)
   }
 
@@ -105,16 +107,22 @@ export default function GlossaryPage() {
         </section>
         <div className={styles.formColumn}>
           {notice ? (
-            <p role="status" className={styles.status}>
-              {notice}
-            </p>
+            notice.failed ? (
+              <p role="alert" className={styles.error}>
+                오류: {notice.text}
+              </p>
+            ) : (
+              <p role="status" className={styles.status}>
+                {notice.text}
+              </p>
+            )
           ) : null}
           {missing ? (
             <StateMessage kind="empty" title="찾을 수 없는 용어예요" description="목록에서 용어를 골라 주세요." />
           ) : (
             // 용어를 바꾸면 폼을 새로 그려 이전 입력이 남지 않게 한다.
             <TermForm
-              key={selected?.id ?? 'new'}
+              key={`${selected?.id ?? 'new'}:${formVersion}`}
               term={selected}
               terms={terms}
               onSaved={afterSave}

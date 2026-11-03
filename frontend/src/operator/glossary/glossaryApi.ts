@@ -1,46 +1,90 @@
-// 사전 용어 서버 호출(API spec v0.2 E19~E23)을 모은 파일이다. 화면은 이 파일의 함수만 부른다.
-//
-// TODO(MEG-82): E19~E23 명세(MEG-27 첨부)를 받으면 아래 함수 본문을 apiFetch 호출로 바꾼다. 함수 모양(인자·반환)과 화면은 그대로 둔다.
-// 지금은 명세가 저장소에 없어 경로·필드·오류 code를 정할 수 없으므로, 메모리 가짜 저장소로 화면을 먼저 확인한다.
-// 이 저장소는 새로 고치면 사라지고, 합성 데이터만 담는다.
+// 사전 용어 서버 호출(API spec v0.2 E19~E23, 상세는 E06)을 모은 파일이다. 화면은 이 파일의 함수만 부른다.
+// 요청·응답 모양은 backend/app/admin_glossary.py·glossary.py를 따른다. 가짜 응답은 VITE_API_MOCK=true일 때 apiFetch가 고른다.
+import type { ApiRequestInit } from '../../api/client.ts'
 
-export type GlossaryTerm = {
-  id: number
-  label: string
-  description: string
-  imageUrl: string | null
-}
+// useOperatorApi()가 돌려주는 함수. 권한 상실(401·403)이면 로그인 상태를 다시 읽고 오류는 그대로 던진다.
+export type OperatorFetch = <T>(path: string, init?: ApiRequestInit) => Promise<T>
+
+// E19 목록의 용어 하나. 설명과 이미지는 목록에 없고 E06으로 따로 읽는다.
+export type GlossaryTerm = { id: number; key: string; label: string }
+
+export type GlossaryImage = { id: number; url: string; alt: string }
+
+// E06 상세: 설명(마크다운)과 이미지
+export type GlossaryDetail = { description: string; images: GlossaryImage[] }
 
 export type TermInput = { label: string; description: string }
 
-// 저장할 때 이미지를 어떻게 할지: 그대로 둔다 / 지운다 / 새로 올린다
-export type ImageChange = { kind: 'keep' } | { kind: 'remove' } | { kind: 'upload'; file: File }
+// 저장할 때 이미지를 어떻게 할지: 지울 이미지 id와 새로 올릴 파일(한 장). 교체는 지운 뒤 올린다.
+export type ImageChange = { removeIds: number[]; upload: File | null }
 
-// 합성 데이터. 실제 용어가 아니다.
-let store: GlossaryTerm[] = [
-  { id: 1, label: 'DNS', description: '도메인 이름을 서버의 숫자 주소로 바꿔 주는 이름 찾기 서비스예요.', imageUrl: null },
-  { id: 2, label: '패킷', description: '네트워크로 보내는 데이터를 잘게 나눈 조각이에요.', imageUrl: null },
-  { id: 3, label: '라우터', description: '패킷이 갈 길을 골라 전달하는 장비예요.', imageUrl: null },
-  { id: 4, label: '캐시', description: '자주 쓰는 데이터를 가까운 곳에 잠시 보관해 두는 방식이에요.', imageUrl: null },
-]
-let nextId = 5
-
-// E19: 사전 용어 목록
-export async function listTerms(): Promise<GlossaryTerm[]> {
-  return store.map((term) => ({ ...term }))
+// 서버가 용어 key를 만드는 규칙(backend/app/glossary_spans.py normalize_key): NFC, 공백 정리, 영문(ASCII)만 소문자.
+// 서버의 E20은 같은 key면 새로 만들지 않고 기존 용어를 덮어쓰므로, 새 용어를 등록하기 전에 같은 key가 있는지 본다.
+export function termKey(label: string): string {
+  return label
+    .normalize('NFC')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[A-Z]/g, (letter) => letter.toLowerCase())
 }
 
-// E20·E22·E23: id가 없으면 새 용어를 등록하고, 있으면 수정한다. 이미지는 image가 정한 대로 바꾼다.
-export async function saveTerm(id: number | null, input: TermInput, image: ImageChange): Promise<GlossaryTerm> {
-  const existing = id === null ? null : (store.find((term) => term.id === id) ?? null)
-  const imageUrl =
-    image.kind === 'upload' ? URL.createObjectURL(image.file) : image.kind === 'remove' ? null : (existing?.imageUrl ?? null)
-  const saved: GlossaryTerm = { id: existing?.id ?? nextId++, label: input.label, description: input.description, imageUrl }
-  store = existing ? store.map((term) => (term.id === saved.id ? saved : term)) : [...store, saved]
-  return { ...saved }
+// 한 번에 받을 쪽 수의 상한. 용어가 이보다 많으면 나머지는 목록에 나오지 않는다(100개씩 20쪽).
+const MAX_PAGES = 20
+
+// E19: 사전 용어 목록(id 내림차순). next_cursor가 있으면 이어서 받는다.
+export async function listTerms(operatorFetch: OperatorFetch): Promise<GlossaryTerm[]> {
+  const terms: GlossaryTerm[] = []
+  let cursor: string | undefined
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const result = await operatorFetch<{ terms: GlossaryTerm[]; next_cursor: string | null }>('/api/admin/glossary', {
+      query: { limit: 100, cursor },
+    })
+    terms.push(...result.terms)
+    if (!result.next_cursor) break
+    cursor = result.next_cursor
+  }
+  return terms
+}
+
+// E06: 용어 하나의 설명과 이미지. 사전에 없는 용어는 404 not_found다.
+export async function readTerm(operatorFetch: OperatorFetch, id: number): Promise<GlossaryDetail> {
+  const result = await operatorFetch<{ body_markdown: string; images: GlossaryImage[] }>(`/api/glossary/${id}`)
+  return { description: result.body_markdown, images: result.images }
+}
+
+// 설명은 저장했지만 이미지를 지우거나 올리지 못했다. 서버에는 설명이 저장돼 있으므로 saved로 화면이 목록을 갱신한다.
+export class ImageNotSavedError extends Error {
+  readonly saved: GlossaryTerm
+  constructor(saved: GlossaryTerm, cause: unknown) {
+    super('Glossary entry saved but its image change was not', { cause })
+    this.name = 'ImageNotSavedError'
+    this.saved = saved
+  }
+}
+
+// E20·E23·E22: 용어 이름과 설명을 저장한 뒤 이미지를 바꾼다. E20은 label에서 key를 만들어 같은 key의 용어를 고치거나 새로 만든다
+// (id를 받지 않고 이름 변경도 없다). 이미지는 지울 것을 먼저 지우고 새 파일을 올린다. 이미지 단계가 실패하면 ImageNotSavedError다.
+export async function saveTerm(operatorFetch: OperatorFetch, input: TermInput, image: ImageChange): Promise<GlossaryTerm> {
+  const { term } = await operatorFetch<{ term: GlossaryTerm }>('/api/admin/glossary', {
+    method: 'POST',
+    body: { label: input.label, body_markdown: input.description },
+  })
+  try {
+    for (const imageId of image.removeIds) {
+      await operatorFetch(`/api/admin/glossary/${term.id}/images/${imageId}`, { method: 'DELETE' })
+    }
+    if (image.upload) {
+      const form = new FormData()
+      form.append('file', image.upload)
+      await operatorFetch(`/api/admin/glossary/${term.id}/images`, { method: 'POST', body: form })
+    }
+  } catch (failure) {
+    throw new ImageNotSavedError(term, failure)
+  }
+  return term
 }
 
 // E21: 사전 설명 삭제. 설명과 이미지만 지우고 용어 자체(terms 행)는 서버에 남는다(D-060). 사전 목록에서는 사라진다.
-export async function deleteDescription(id: number): Promise<void> {
-  store = store.filter((term) => term.id !== id)
+export async function deleteDescription(operatorFetch: OperatorFetch, id: number): Promise<void> {
+  await operatorFetch(`/api/admin/glossary/${id}`, { method: 'DELETE' })
 }
