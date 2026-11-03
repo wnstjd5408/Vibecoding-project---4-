@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 import httpx
+from markdown_it import MarkdownIt
 
 from app.glossary_spans import code_mask
 from scripts.audit_mermaid_fences import ReadOnlyNotes, check_out_dir
@@ -51,7 +52,11 @@ def candidates(body):
                     before = match[0]
                     after = emphasize(raw, marker)
                     proposed = line[:match.start()] + after + line[match.end():]
-                    if proposed.startswith(("    ", "\t")):
+                    tokens = MarkdownIt().parseInline(proposed)[0].children
+                    required = {1: {"em_open"}, 2: {"strong_open"}, 3: {"em_open", "strong_open"}}[len(marker)]
+                    if not required <= {token.type for token in tokens}:
+                        entry["reason"] = "unparseable_boundary"
+                    elif proposed.startswith(("    ", "\t")):
                         entry["reason"] = "would_create_code_block"
                     else:
                         entry.update(start=offset + match.start(), end=offset + match.end(),

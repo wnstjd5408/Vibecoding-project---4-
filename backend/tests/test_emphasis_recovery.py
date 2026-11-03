@@ -28,7 +28,8 @@ def test_review_required_and_only_selected_locations_change():
 
 @pytest.mark.parametrize("body", ["**정상**", "`**코드 **`", "```\n**코드 **\n```", "    **코드 **",
     "[**링크 **](https://example.test)", "![**그림 **](note-image:abc)", "\\**별표 **",
-    "**A* **", "2 * 3", "**첫 ** **둘 **", "** **", "https://example.test/**경로 **"])
+    "**A* **", "2 * 3", "**첫 ** **둘 **", "** **", "https://example.test/**경로 **",
+    "A**（용어） **", "**    용어 **"])
 def test_protected_or_ambiguous_is_never_eligible(body):
     assert accept(plan(body)) == []
 
