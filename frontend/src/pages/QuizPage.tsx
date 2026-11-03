@@ -10,6 +10,7 @@ import { LOGIN_PROMPT_MESSAGES } from '../loginPrompt/messages.ts'
 import { useLoginPrompt } from '../loginPrompt/useLoginPrompt.ts'
 import { classifyQuizError, pollDelayMs, quizRetryAvailableAt, requestQuizToday } from '../quiz/quizToday.ts'
 import type { QuizFailure } from '../quiz/quizToday.ts'
+import { QuizInteraction } from '../quiz/QuizInteraction.tsx'
 import { ReportControl } from '../reports/ReportControl.tsx'
 import { userPaths } from '../routes/paths.ts'
 import styles from './QuizPage.module.css'
@@ -39,7 +40,6 @@ const MESSAGES = {
   recheck: '다시 확인',
   retry: '다시 시도',
   toNotes: '노트 보러 가기',
-  answered: '답함',
 }
 
 // 화면이 보이는 상태. 서버의 여섯 상태(HTTP 200)와 오류, 로그인 필요를 나눠 보인다.
@@ -80,14 +80,14 @@ export default function QuizPage() {
   // attempt: 사용자가 "다시 확인"·"다시 시도"를 누른 횟수, poll: generating이라 자동으로 다시 부른 횟수
   const [attempt, setAttempt] = useState(0)
   const [poll, setPoll] = useState(0)
-  const [result, setResult] = useState<{ key: number; view: View } | null>(null)
+  const [result, setResult] = useState<{ key: number; account: string; view: View } | null>(null)
   // 서버가 정한 대기 시간이 끝날 때까지 다시 시도 버튼을 막는다(null이면 막지 않는다).
   const [waitingUntil, setWaitingUntil] = useState<number | null>(null)
   const visitor = auth.status !== 'loading' && auth.role === 'visitor'
   const canRequest = auth.status !== 'loading' && !visitor
-  const current = result?.key === attempt ? result.view : null
   // 로그인·로그아웃이 있었으면 이전 세션의 진행 중 요청·429 대기를 이어받지 않는다. 표시 이름은 고유하지 않아 계정을 가르는 데 쓰지 않는다.
   const account = String(currentSession())
+  const current = result?.key === attempt && result.account === account ? result.view : null
   // 다시 확인·다시 시도를 누르면 눌린 버튼이 사라지므로, 결과 영역을 포커스 자리로 잡아 둔다.
   const bodyRef = useRef<HTMLDivElement>(null)
 
@@ -103,26 +103,26 @@ export default function QuizPage() {
     let timer: ReturnType<typeof setTimeout> | undefined
     requestQuizToday(account).then(
       (data: unknown) => {
-        if (!alive) return
+        if (!alive || String(currentSession()) !== account) return
         const response = data as { status?: unknown; retry_after_seconds?: unknown } | null
         if (response?.status === 'generating') {
           // 다른 상태로 바뀌기 전까지만 서버가 준 간격으로 다시 부른다. 요청은 응답을 받은 뒤에만 예약해 겹치지 않는다.
           timer = setTimeout(() => setPoll((value) => value + 1), pollDelayMs(response.retry_after_seconds))
-          setResult({ key: attempt, view: { kind: 'generating' } })
+          setResult({ key: attempt, account, view: { kind: 'generating' } })
           return
         }
-        setResult({ key: attempt, view: toView(data) })
+        setResult({ key: attempt, account, view: toView(data) })
       },
       (error: unknown) => {
-        if (!alive) return
+        if (!alive || String(currentSession()) !== account) return
         // HTTP 401 + login_required만 공통 로그인 안내로 처리한다. 다른 오류는 아래의 오류별 안내다.
         if (handleLoginRequired(error, { body: LOGIN_PROMPT_MESSAGES.quizBody })) {
-          setResult({ key: attempt, view: { kind: 'login' } })
+          setResult({ key: attempt, account, view: { kind: 'login' } })
           return
         }
         const until = quizRetryAvailableAt(account)
         setWaitingUntil(until)
-        setResult({ key: attempt, view: { kind: 'error', reason: classifyQuizError(error), until, seconds: until === null ? 0 : Math.ceil((until - Date.now()) / 1000) } })
+        setResult({ key: attempt, account, view: { kind: 'error', reason: classifyQuizError(error), until, seconds: until === null ? 0 : Math.ceil((until - Date.now()) / 1000) } })
       },
     )
     return () => {
@@ -163,7 +163,7 @@ export default function QuizPage() {
               <QuizCard headingLevel={2} title={item.question}
                 badges={<><AiBadge />{Object.hasOwn(LEVEL, item.difficulty) ? <DifficultyChip level={LEVEL[item.difficulty]} /> : null}</>}
                 actions={<ReportControl target={{ type: 'quiz_item', id: item.id }} />}>
-                {item.answered ? <p className={styles.answered}>{MESSAGES.answered}</p> : null}
+                <QuizInteraction key={`${account}:${attempt}:${poll}:${item.id}`} initial={item} session={Number(account)} reload={recheck} />
               </QuizCard>
             </li>)}
           </ul>

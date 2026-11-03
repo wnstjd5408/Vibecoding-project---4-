@@ -2,6 +2,7 @@
 // 실제 API가 생기면 해당 엔드포인트의 항목만 지우거나 apiSource를 real로 두면 된다.
 import type { ApiErrorBody, NoteListResponse } from '../types.ts'
 import { getMockSession, setMockSession } from './session.ts'
+import { mockQuizAction, mockQuizItems } from './quiz.ts'
 
 export type MockRequest = { method: string; path: string; query: URLSearchParams; body: unknown }
 export type MockResponse = { status: number; body?: unknown }
@@ -250,20 +251,7 @@ const routes: Route[] = [
         body: {
           status: 'ready',
           quiz_date: '2026-10-23',
-          items: [
-            { id: 41, difficulty: '중', question: '합성 질문 1입니다.', answered: false, followups: [], can_request_followup: false },
-            {
-              id: 42,
-              difficulty: '하',
-              question: '합성 질문 2입니다.',
-              answered: true,
-              your_answer: '합성 답변',
-              correct_answer: '합성 정답',
-              explanation: '합성 해설',
-              followups: [{ seq: 1, question: '합성 꼬리 질문', answered: false }],
-              can_request_followup: false,
-            },
-          ],
+          items: mockQuizItems(),
         },
       }
     },
@@ -299,6 +287,11 @@ const routes: Route[] = [
 
 // 등록되지 않은 엔드포인트는 404 not_found로 답한다. 실제 백엔드에 없는 경로를 부른 것과 같다.
 export function handleMock(request: MockRequest): MockResponse {
+  if (request.path.startsWith('/api/quiz/items/')) {
+    if (getMockSession() === 'visitor') return loginRequired()
+    const result = mockQuizAction(request)
+    if (result) return result
+  }
   for (const route of routes) {
     if (route.method !== request.method) continue
     const match = route.pattern.exec(request.path)
