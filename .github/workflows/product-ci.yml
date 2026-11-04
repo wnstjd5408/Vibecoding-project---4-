@@ -6,13 +6,14 @@ on:
   push:
     branches: [main, staging]
 
-# No environment, secrets, deployment or write access in PR code execution.
+# PR jobs have no environment, deployment credentials or write access.
 permissions:
   contents: read
 
 concurrency:
   group: product-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Do not cancel a runner while its external staging deployment is building.
+  cancel-in-progress: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/staging') }}
 
 env:
   CI: "true"
@@ -42,6 +43,8 @@ jobs:
           python-version: "3.12"
           enable-cache: false
       - run: uv sync --locked
+      - name: Staging CD guard tests (no remote credentials)
+        run: python3 -m unittest discover -s ../.github/scripts -p 'test_staging_cd.py' -v
       - name: Unit tests (no remote credentials)
         run: uv run --no-sync pytest tests --ignore=tests/integration --ignore=tests/test_account_issuance_local.py --junitxml=unit-results.xml -q
       - name: Require executed tests without skips
@@ -167,3 +170,31 @@ jobs:
               exit 1
             fi
           done
+
+  staging-cd:
+    name: Staging CD
+    needs: product-ci
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/staging' &&
+      needs.product-ci.result == 'success' && vars.STAGING_CD_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    environment: staging-cd
+    concurrency:
+      group: staging-cd
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Deploy the tested staging SHA and wait for Ready
+        run: python3 .github/scripts/staging_cd.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_TEAM_ID: ${{ vars.VERCEL_TEAM_ID }}
+          PRODUCT_CI_RESULT: ${{ needs.product-ci.result }}
