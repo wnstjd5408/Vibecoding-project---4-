@@ -69,6 +69,7 @@ export function QuizInteraction({ initial, session, reload }: { initial: QuizIte
       <p className={styles.status}>답함</p>
       <div className={styles.text}><strong>내 답</strong><p>{item.your_answer}</p></div>
       <AiBox label="AI 생성 정답과 해설">
+        <h3 className={styles.aiTitle}>정답과 해설</h3>
         <div className={styles.text}><strong>정답</strong><p>{item.correct_answer}</p><strong>해설</strong><p>{item.explanation}</p></div>
       </AiBox>
       {followups.map((followup) => <section key={followup.seq} className={styles.followup} aria-label={`꼬리 질문 ${followup.seq}/2`}>
