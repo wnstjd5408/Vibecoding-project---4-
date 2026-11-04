@@ -128,3 +128,24 @@ def test_glossary_spans_find_literal_stars_in_labelled_code_like_bare_code():
     bare = body_of({PAGE: [block(2, "code", "**A**", None)]})
     assert labelled.startswith("```python\n") and bare.startswith("```\n")
     assert len(find_spans(labelled, [(1, "a*")])) == len(find_spans(bare, [(1, "a*")])) == 1
+
+
+@pytest.mark.parametrize("body", [
+    "```python   \nx = python\n```",         # trailing spaces after the language
+    "```  python\t\nx = python\n```",        # leading spaces and a tab in the info
+    "~~~python\nx = python\n~~~",            # tilde fence
+    "intro\n\n```python",                    # unterminated fence on the last line
+    "a\\*b *c*\n\n```python\nx = python\n```",  # body has `*` and a backslash (code mask path)
+])
+def test_glossary_spans_info_hiding_survives_whitespace_tilde_and_escapes(body):
+    spans = find_spans(body, [(1, "python")])
+    found = [body[s.start:s.end] for s in spans]
+    fence_line_end = body.index("python") + len("python")
+    assert all(s.start >= fence_line_end for s in spans), (body, found)
+    # Code text on the following line is still found, except when the fence has no body at all.
+    assert len(spans) == (0 if body.endswith("```python") else 1)
+
+
+def test_notion_multi_language_choice_with_slash_stays_a_bare_fence():
+    # Notion offers "java/c/c++/c#". "/" is outside the approved [a-z0-9+#.-] set, so it is not kept.
+    assert one_code("int x;", "java/c/c++/c#") == "```\nint x;\n```"
