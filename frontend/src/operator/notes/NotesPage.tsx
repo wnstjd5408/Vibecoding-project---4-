@@ -1,7 +1,8 @@
 // F5-1a 운영자 노트 목록 + F5-1f 삭제 확인(MEG-80). 과목으로 걸러 보고, 수정·삭제·공개 전환으로 이어진다.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { Link, useLocation } from 'react-router'
+import { isApiError } from '../../api/client.ts'
 import { Button, StateMessage } from '../../components/index.ts'
 import { Badge } from '../../components/Badge.tsx'
 import { IconLinkButton } from '../../components/IconButton.tsx'
@@ -17,6 +18,8 @@ import styles from './Notes.module.css'
 const MESSAGES = {
   deleteFailed: '노트를 삭제하지 못했어요. 잠시 뒤에 다시 시도해 주세요.',
   publishFailed: '공개 여부를 바꾸지 못했어요. 잠시 뒤에 다시 시도해 주세요.',
+  // 다른 곳에서 이 노트가 바뀌어 409 stale_revision이 났다. 목록을 새로 읽어 최신 상태로 바꿨다.
+  publishConflict: '이 노트가 다른 곳에서 바뀌어 목록을 새로 불러왔어요. 다시 시도해 주세요.',
   deleted: '노트를 삭제했어요.',
 } as const
 
@@ -42,6 +45,8 @@ export default function NotesPage() {
   const [deleting, setDeleting] = useState(false)
   const [dialogError, setDialogError] = useState('')
   const [publishingId, setPublishingId] = useState<number | null>(null)
+  // 목록을 직접 바꾼 횟수(삭제·공개 전환 성공). 목록을 다시 읽는 요청이 늦게 도착했을 때, 그 사이에 더 최신 변경이 있었으면 그 응답을 버린다.
+  const mutations = useRef(0)
 
   const query = `${subjectId}:${attempt}`
   const current = result?.query === query ? result : null
@@ -73,6 +78,7 @@ export default function NotesPage() {
     setDialogError('')
     try {
       await deleteNote(operatorFetch, target.id)
+      mutations.current += 1
       updateNotes((notes) => notes.filter((note) => note.id !== target.id))
       setNotice(MESSAGES.deleted)
       setTarget(null)
@@ -89,16 +95,27 @@ export default function NotesPage() {
     setActionError('')
     setNotice('')
     try {
-      await setPublished(operatorFetch, note, !note.isPublished)
-      updateNotes((notes) => notes.map((item) => (item.id === note.id ? { ...item, isPublished: !note.isPublished } : item)))
-      // 서버는 UPDATE마다 revision을 올린다. 다음 저장이 충돌로 막히지 않게 목록을 조용히 다시 읽는다.
-      const key = `${subjectId}:${attempt}`
-      listNotes(operatorFetch, subjectId).then(
-        (data) => setResult((old) => (old?.query === key ? { query: key, data } : old)),
-        () => undefined,
-      )
-    } catch {
-      setActionError(MESSAGES.publishFailed)
+      // 서버가 응답한 revision과 공개 여부를 그대로 반영한다. 서버는 UPDATE마다 revision을 올리므로 이 값이 있어야 같은 노트를 다시 전환해도 맞는 expected_revision을 보낸다.
+      // 목록을 다시 읽는 요청에 기대지 않으므로 그 요청이 실패하거나 늦어도 화면 상태가 낡지 않는다.
+      const saved = await setPublished(operatorFetch, note, !note.isPublished)
+      mutations.current += 1
+      updateNotes((notes) => notes.map((item) => (item.id === note.id ? { ...item, isPublished: saved.isPublished, revision: saved.revision } : item)))
+    } catch (failure) {
+      if (isApiError(failure, 'conflict', 'stale_revision')) {
+        // 다른 곳에서 바뀌어 화면의 revision이 낡았다. 목록을 다시 읽어 바로잡아야 다음 시도가 계속 충돌하지 않는다. 읽는 동안은 다른 전환이 끼지 않게 이 전환을 끝내지 않는다.
+        // 응답이 오기 전에 더 최신 변경(삭제·전환)이 있었으면 그 응답은 버린다.
+        const key = `${subjectId}:${attempt}`
+        const startedAt = mutations.current
+        try {
+          const data = await listNotes(operatorFetch, subjectId)
+          if (mutations.current === startedAt) setResult((old) => (old?.query === key ? { query: key, data } : old))
+        } catch {
+          // 다시 읽지 못했다. 안내는 그대로 보이고, 다시 시도하면 같은 충돌을 한 번 더 겪은 뒤 다시 읽는다.
+        }
+        setActionError(MESSAGES.publishConflict)
+      } else {
+        setActionError(MESSAGES.publishFailed)
+      }
     }
     setPublishingId(null)
   }

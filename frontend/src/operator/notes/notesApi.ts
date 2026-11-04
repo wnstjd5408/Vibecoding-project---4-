@@ -106,7 +106,14 @@ export async function deleteNote(operatorFetch: OperatorFetch, id: number): Prom
   await operatorFetch(`/api/admin/notes/${id}`, { method: 'DELETE' })
 }
 
-// E17: 공개 여부 전환. 제목·본문은 보내지 않는다. 서버는 UPDATE마다 revision을 올리므로 호출한 쪽이 목록을 다시 읽는다.
-export async function setPublished(operatorFetch: OperatorFetch, note: Pick<NoteListItem, 'id' | 'revision'>, isPublished: boolean): Promise<void> {
-  await operatorFetch(`/api/admin/notes/${note.id}`, { method: 'PATCH', body: { expected_revision: note.revision, is_published: isPublished } })
+// 공개 전환 뒤 서버가 알려 준 노트의 상태. 서버는 UPDATE마다 revision을 올리므로 호출한 쪽이 이 값을 화면 상태에 반영해야 다음 요청이 맞는 expected_revision을 보낸다.
+export type PublishResult = { revision: number; isPublished: boolean }
+
+// E17: 공개 여부 전환. 제목·본문은 보내지 않는다. 응답({ id, revision, is_published })의 revision과 is_published를 돌려준다.
+export async function setPublished(operatorFetch: OperatorFetch, note: Pick<NoteListItem, 'id' | 'revision'>, isPublished: boolean): Promise<PublishResult> {
+  const saved = await operatorFetch<{ id: number; revision: number; is_published: boolean }>(`/api/admin/notes/${note.id}`, {
+    method: 'PATCH',
+    body: { expected_revision: note.revision, is_published: isPublished },
+  })
+  return { revision: saved.revision, isPublished: saved.is_published }
 }
