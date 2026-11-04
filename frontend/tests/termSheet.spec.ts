@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
+import { goInApp } from './inApp.ts'
 
 // MEG-76 용어 바텀시트(F1-3). playwright.config.ts가 VITE_API_MOCK=true로 서버를 띄우므로 가짜 응답(E05 예시 1, E06 예시 2, E07)으로 시험한다.
 // E06·E07 호출 횟수와 실패 분기는 브라우저 fetch 경로가 필요해 notes.spec.ts에서 시험한다. 실제 백엔드의 E06·E07은 확인하지 못한다.
@@ -59,8 +60,8 @@ test('로그인한 사용자가 열면 열람이 기록돼 기록 실패 안내�
   await page.getByLabel('비밀번호').fill('example-password')
   await page.getByRole('button', { name: '로그인' }).click()
   await expect(page).toHaveURL(/\/quiz$/)
-  // 가짜 로그인 상태는 메모리에만 있어 새로 고치지 않고 임시 화면(/quiz)의 이동 링크로 옮긴다
-  await page.getByRole('link', { name: 'F1-2 노트 읽기(노트 11)' }).click()
+  // 가짜 로그인 상태는 메모리에만 있어 새로 고치지 않고 앱 안에서 경로를 옮긴다
+  await goInApp(page, '/notes/11')
   await term(page).click()
   await expect(sheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
   await expect(page.getByText('열람 기록을 저장하지 못했어요')).toHaveCount(0)

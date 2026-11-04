@@ -3,7 +3,7 @@
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
-  height: 56px;
+  height: var(--app-header-height);
   padding: 0 var(--space-2);
   border-bottom: 1px solid var(--surface-300);
 }
@@ -33,4 +33,35 @@
   display: flex;
   align-items: center;
   gap: var(--space-1);
+}
+
+/* 왼쪽 묶음: 앱 이름 또는 뒤로 가기 링크(PC 폭에서는 둘 다) */
+.lead {
+  display: flex;
+  align-items: center;
+}
+
+/* 앱 이름과 뒤로 가기가 함께 올 때: 모바일에서는 뒤로 가기만 보이고 앱 이름은 PC 폭에서만 보인다 */
+.titleBesideBack {
+  display: none;
+  margin-right: var(--space-4);
+}
+
+@media (min-width: 1024px) {
+  .titleBesideBack {
+    display: inline;
+  }
+
+  /* 화면 전체 폭 헤더: 앱 이름은 왼쪽에서 24px, 오른쪽 조작은 오른쪽 끝에서 24px */
+  .wide {
+    padding: 0 var(--space-6) 0 var(--space-4);
+  }
+
+  /* PC 노트 읽기: 스크롤해도 헤더가 위에 남는다(패널은 헤더 높이만큼 아래에서 시작한다) */
+  .stickyOnWide {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--surface-100);
+  }
 }

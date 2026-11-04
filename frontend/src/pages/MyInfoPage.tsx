@@ -2,12 +2,9 @@
 import { Navigate, useLocation } from 'react-router'
 import { AppHeader, Button, StateMessage } from '../components/index.ts'
 import { useAuth } from '../auth/useAuth.ts'
-import type { AuthRole } from '../auth/authContext.ts'
+import { ROLE_LABEL } from '../account/roleLabel.ts'
 import { userPaths } from '../routes/paths.ts'
 import styles from './MyInfoPage.module.css'
-
-// 역할 표시. 서버 값(member·operator)을 목업 문구로 바꿔 보인다.
-const ROLE_LABEL: Record<Exclude<AuthRole, 'visitor'>, string> = { member: '일반 사용자', operator: '운영자' }
 
 // 계정 메뉴가 넘겨 준 "어디서 열었는지". 없거나 앱 안 경로가 아니면 과목·노트 목록으로 돌아간다.
 function backPath(state: unknown): string {

@@ -1,5 +1,159 @@
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
+import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { fromMarkdown } from 'mdast-util-from-markdown'
+
+test('강조 보정은 문서 전체의 코드·여러 줄 링크·이미지를 승인해도 거부한다', () => {
+  const cases = [
+    { body: '  \t**word **', type: 'code' },
+    { body: '[\n**word **\n](https://example.test)', type: 'link' },
+    { body: '![\n**word **\n](note-image:abc)', type: 'image' },
+    { body: '[\n**word **\n][ref]\n\n[ref]: https://example.test', type: 'linkReference' },
+    { body: '![\n**word **\n][ref]\n\n[ref]: note-image:abc', type: 'imageReference' },
+  ]
+  const backend = fileURLToPath(new URL('../../backend/', import.meta.url))
+  for (const fixture of cases) {
+    const types: string[] = []
+    function visit(node: { type: string; children?: typeof node[] }) { types.push(node.type); node.children?.forEach(visit) }
+    visit(fromMarkdown(fixture.body))
+    expect(types).toContain(fixture.type)
+    const result = JSON.parse(execFileSync('uv', ['run', '--no-sync', '--directory', backend, 'python', '-X', 'utf8', '-c',
+      'import json,sys; from scripts.emphasis_recovery import survey,reviewed_changes; p=survey([{"id":1,"revision":1,"body_markdown":json.load(sys.stdin)}]); cs=p["notes"][0]["candidates"]; rejected=0\nfor c in cs:\n try: reviewed_changes(p,[c["candidate_id"]])\n except ValueError: rejected+=1\nprint(json.dumps({"eligible":sum(c["eligible"] for c in cs),"count":len(cs),"rejected":rejected,"changes":reviewed_changes(p,[])}))'],
+    { input: JSON.stringify(fixture.body), encoding: 'utf8' }))
+    expect(result.count).toBeGreaterThan(0)
+    expect(result.eligible).toBe(0)
+    expect(result.rejected).toBe(result.count)
+    expect(result.changes).toEqual([])
+  }
+})
+
+for (const width of [390, 1280]) {
+  test(`강조 마이그레이션 전후 Mermaid·span·선택 위치 (${width}px)`, async ({ page }) => {
+    const backend = fileURLToPath(new URL('../../backend/', import.meta.url))
+    const result = JSON.parse(execFileSync('uv', ['run', '--no-sync', '--directory', backend, 'python', '-X', 'utf8', '-c',
+      'import json; from dataclasses import asdict; from scripts.emphasis_recovery import survey,reviewed_changes; from app.glossary_spans import find_spans; body="😀 **한글용어 **(Example)\\n\\n```mermaid\\ngraph LR; A-->B\\n```"; plan=survey([{"id":11,"revision":1,"body_markdown":body}]); ids=[c["candidate_id"] for c in plan["notes"][0]["candidates"] if c["eligible"]]; after=reviewed_changes(plan,ids)[0]["after"]; print(json.dumps({"before":body,"after":after,"spans":[asdict(s) for s in find_spans(after,[(1,"한글용어")])]}))'],
+    { encoding: 'utf8' }))
+    await setup(page)
+    await page.setViewportSize({ width, height: 844 })
+    let applied = false
+    await page.route('**/api/notes/11', route => route.fulfill({ json: {
+      id: 11, revision: applied ? 2 : 1, title: '합성 마이그레이션', studied_on: null, subjects: [], sources: [],
+      body_markdown: applied ? result.after : result.before, images: {}, glossary_terms: [], glossary_spans: applied ? result.spans : [],
+    } }))
+    await page.goto('/notes/11')
+    const root = page.locator('[data-note-body]')
+    await expect(root.locator('strong')).toHaveCount(0)
+    await expect(root).toContainText('**한글용어 **')
+    applied = true
+    await page.reload()
+    await expect(root.locator('strong')).toHaveText('한글용어')
+    await expect(root.locator('[data-term-id="1"]')).toHaveText('한글용어')
+    await expect(root.locator('img')).toHaveCount(1)
+    await expect.poll(() => root.locator('img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
+    const range = await root.evaluate(async element => {
+      const { sourceRangeOfSelection } = await import('/src/notes/selection.ts')
+      const selection = document.createRange()
+      selection.selectNodeContents(element.querySelector('[data-term-id="1"]')!)
+      return sourceRangeOfSelection(element, selection)
+    })
+    expect(range).not.toBeNull()
+    expect(result.after.slice(range!.start, range!.end)).toBe('한글용어')
+    expect([...result.after.slice(0, range!.start)].length).toBe(result.spans[0].start)
+    expect([...result.after.slice(0, range!.end)].length).toBe(result.spans[0].end)
+  })
+}
+
+for (const width of [390, 1280]) {
+  test(`Notion 강조 공백 가져오기와 실제 span·선택 위치 (${width}px)`, async ({ page }) => {
+    const backend = fileURLToPath(new URL('../../backend/', import.meta.url))
+    const items = [
+      { plain_text: '😀 시작 ' },
+      { plain_text: '한글용어 ', annotations: { bold: true } },
+      { plain_text: ' 기울임 ', annotations: { italic: true } },
+      { plain_text: '복합 ', annotations: { bold: true, italic: true } },
+      { plain_text: 'A* ', annotations: { bold: true } },
+      { plain_text: '코드*', annotations: { code: true } },
+    ]
+    const result = JSON.parse(execFileSync('uv', ['run', '--no-sync', '--directory', backend, 'python', '-X', 'utf8', '-c',
+      'import json,sys; from dataclasses import asdict; from scripts.notion_content import rich_text; from app.glossary_spans import find_spans; body=rich_text(json.load(sys.stdin)); print(json.dumps({"body":body,"spans":[asdict(s) for s in find_spans(body,[(1,"한글용어")])]}))'],
+    { input: JSON.stringify(items), encoding: 'utf8' }))
+    const tree = fromMarkdown(result.body)
+    const types: string[] = []
+    function visit(node: { type: string; children?: typeof node[] }) { types.push(node.type); node.children?.forEach(visit) }
+    visit(tree)
+    expect(types.filter(t => t === 'strong')).toHaveLength(3)
+    expect(types.filter(t => t === 'emphasis')).toHaveLength(2)
+    await setup(page)
+    await page.setViewportSize({ width, height: 844 })
+    await page.route('**/api/notes/11', route => route.fulfill({ json: {
+      id: 11, revision: 2, title: '합성 강조 회귀', studied_on: null, subjects: [], sources: [],
+      body_markdown: result.body, images: {}, glossary_terms: [], glossary_spans: result.spans,
+    } }))
+    await page.goto('/notes/11')
+    const root = page.locator('[data-note-body]')
+    expect(await root.textContent()).toBe(items.map(i => i.plain_text).join(''))
+    await expect(root.locator('strong').first()).toHaveText('한글용어')
+    await expect(root.locator('em strong')).toHaveText('복합')
+    await expect(root.locator('[data-term-id="1"]')).toHaveText('한글용어')
+    const range = await root.evaluate(async element => {
+      const { sourceRangeOfSelection } = await import('/src/notes/selection.ts')
+      const selection = document.createRange()
+      selection.selectNodeContents(element.querySelector('[data-term-id="1"]')!)
+      return sourceRangeOfSelection(element, selection)
+    })
+    // DOM source ranges are UTF-16; the API contract uses codepoints.
+    expect(range).not.toBeNull()
+    expect({ start: [...result.body.slice(0, range!.start)].length,
+      end: [...result.body.slice(0, range!.end)].length })
+      .toEqual({ start: result.spans[0].start, end: result.spans[0].end })
+    expect(result.body.slice(range!.start, range!.end)).toBe('한글용어')
+  })
+}
+
+// Exercise the real importer output, not a hand-written approximation of Markdown.
+function importedBody() {
+  const backend = fileURLToPath(new URL('../../backend/', import.meta.url))
+  const fixture = readFileSync(new URL('../../backend/tests/fixtures/notion_nested_blocks.json', import.meta.url), 'utf8')
+  return execFileSync('uv', ['run', '--no-sync', '--directory', backend, 'python', '-c',
+    'import json,sys; from types import SimpleNamespace; from scripts.notion_content import convert; tree=json.load(sys.stdin); print(convert(SimpleNamespace(children=lambda key: tree[key]), "00000000-0000-4000-8000-000000000001").markdown)'],
+  { input: fixture, encoding: 'utf8' }).trimEnd()
+}
+
+for (const width of [390, 1280]) {
+  test(`가져온 토글 코드·표를 구조와 원문 위치를 유지해 표시한다 (${width}px)`, async ({ page }) => {
+    const body = importedBody()
+    await setup(page)
+    await page.setViewportSize({ width, height: 844 })
+    const start = [...body.slice(0, body.indexOf('ExampleTerm'))].length
+    await page.route('**/api/notes/11', (route) => route.fulfill({ json: {
+      id: 11, revision: 1, title: 'Imported synthetic note', studied_on: null, subjects: [], sources: [],
+      body_markdown: body, images: {}, glossary_terms: [],
+      glossary_spans: [{ start, end: start + 'ExampleTerm'.length, term_id: 1 }],
+    } }))
+    await page.goto('/notes/11')
+    const root = page.locator('[data-note-body]')
+    await expect(root.locator('pre code')).toHaveText(['print(1)\n\nprint(2)', 'nested()'])
+    await expect(root.getByRole('table')).toHaveCount(1)
+    await expect(root.getByRole('columnheader')).toHaveText(['Name', 'Value'])
+    await expect(root.getByRole('cell')).toHaveText(['ExampleTerm', 'A | B', '<script>bad()</script>', 'Reference'])
+    await expect(root.locator('td strong')).toHaveText('ExampleTerm')
+    await expect(root.locator('[data-term-id="1"]')).toHaveText('ExampleTerm')
+    await expect(root.getByRole('link', { name: 'Reference' })).toHaveAttribute('href', 'https://example.test/reference')
+    await expect(root.locator('script')).toHaveCount(0)
+    await expect(root.getByText('Child paragraph', { exact: true })).toBeVisible()
+    const range = await root.evaluate(async (element) => {
+      const { sourceRangeOfSelection } = await import('/src/notes/selection.ts')
+      const term = element.querySelector('[data-term-id="1"]')!
+      const selection = document.createRange()
+      selection.selectNodeContents(term)
+      return sourceRangeOfSelection(element, selection)
+    })
+    expect(range && body.slice(range.start, range.end)).toBe('ExampleTerm')
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  })
+}
 
 const subjects = [{ id: 1, name: '네트워크', note_count: 2 }, { id: 2, name: 'AI', note_count: 1 }]
 const notes = [
@@ -782,3 +936,1859 @@ for (const [name, close] of [
     await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
   })
 }
+
+// ---- MEG-106 AI 설명(E09): 요청 규칙, 오류 코드별 안내, 재시도 키. 브라우저의 실제 fetch 경로에 합성 HTTP 응답을 준다. ----
+// 실제 백엔드의 E09(서버 저장·원장·세션 만료)는 확인하지 못한다.
+
+const aiButton = (page: Page) => page.getByRole('button', { name: 'AI 설명', exact: true })
+const aiLoginSheet = (page: Page) => page.getByRole('dialog', { name: '로그인이 필요해요' })
+const retryButton = (page: Page) => page.getByRole('button', { name: '다시 시도' })
+
+const aiNote = (body: string, revision = 5) => ({
+  id: 31, revision, title: 'AI 설명 시험', studied_on: null, subjects: [], sources: [], body_markdown: body, images: {}, glossary_terms: [], glossary_spans: [],
+})
+const aiSuccess = { source: 'ai', term: { id: 12, key: 'unknownword', label: 'UnknownWord' }, explanation: { id: 31, body: '합성 AI 설명입니다.', review_status: 'pending', cached: false }, reportable: true, is_favorite: false }
+const aiError = (code: string, detail?: string) => ({ error: { code, message: 'synthetic english message', request_id: 'r-test-0001', ...(detail ? { detail } : {}) } })
+
+type AiCall = { key: string | undefined; body: { note_id: number; note_revision: number; selection: { start: number; end: number } } }
+type AiReply = { status: number; json: unknown } | 'abort'
+
+async function setupAi(page: Page, options: { member: boolean; body?: string; revision?: number; respond?: (call: AiCall, n: number) => AiReply | Promise<AiReply> }) {
+  const calls: AiCall[] = []
+  const notes = { count: 0 }
+  await page.route('**/api/me', (route) => route.fulfill({ json: options.member ? { authenticated: true, role: 'member', display_name: '합성 사용자' } : { authenticated: false } }))
+  await page.route('**/api/notes/31', (route) => {
+    notes.count += 1
+    return route.fulfill({ json: aiNote(options.body ?? 'hello UnknownWord 끝', options.revision ?? 5) })
+  })
+  await page.route('**/api/ai/explanations', async (route) => {
+    const request = route.request()
+    const call: AiCall = { key: request.headers()['idempotency-key'], body: request.postDataJSON() }
+    calls.push(call)
+    const reply = await (options.respond?.(call, calls.length) ?? { status: 200, json: aiSuccess })
+    if (reply === 'abort') return route.abort()
+    return route.fulfill(reply)
+  })
+  return { calls, notes }
+}
+
+async function selectAiText(page: Page, needle: string) {
+  await page.locator('[data-note-body]').waitFor()
+  await page.evaluate((text) => {
+    const root = document.querySelector('[data-note-body]')!
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const at = node.textContent?.indexOf(text) ?? -1
+      if (at < 0) continue
+      const range = document.createRange()
+      range.setStart(node, at)
+      range.setEnd(node, at + text.length)
+      const selection = document.getSelection()!
+      selection.removeAllRanges()
+      selection.addRange(range)
+      return
+    }
+    throw new Error(`글자를 찾지 못했어요: ${text}`)
+  }, needle)
+}
+
+async function askAi(page: Page, needle = 'UnknownWord') {
+  await selectAiText(page, needle)
+  await aiButton(page).click()
+}
+
+test('E09 요청은 Idempotency-Key 헤더와 코드포인트 위치의 본문을 보낸다(이모지 뒤 선택)', async ({ page }) => {
+  const { calls } = await setupAi(page, { member: true, body: '😀😀 앞 글자 UnknownWord 뒤', revision: 7 })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls).toHaveLength(1)
+  // 😀는 UTF-16으로 두 칸이지만 코드포인트로는 한 칸이다. 이모지 둘 + " 앞 글자 " 6칸 → 8부터 11글자
+  expect(calls[0].body).toEqual({ note_id: 31, note_revision: 7, selection: { start: 8, end: 19 } })
+  expect(calls[0].key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+})
+
+test('방문자는 E09 요청 없이 로그인 안내가 열린다', async ({ page }) => {
+  const { calls } = await setupAi(page, { member: false })
+  await page.goto('/notes/31')
+  await expect(page.getByText('hello')).toBeVisible()
+  await askAi(page)
+  await expect(aiLoginSheet(page)).toBeVisible()
+  await page.waitForTimeout(300)
+  expect(calls).toHaveLength(0)
+})
+
+test('위치를 계산하지 못하는 선택과 공백만 고른 선택에는 AI 설명 버튼이 없다', async ({ page }) => {
+  const { calls } = await setupAi(page, { member: true, body: '정상 글자\n\n    들여쓴 코드\n\n앞   뒤' })
+  await page.goto('/notes/31')
+  await expect(page.getByText('들여쓴 코드')).toBeVisible()
+  await selectAiText(page, '들여쓴 코드')
+  await page.waitForTimeout(200)
+  await expect(aiButton(page)).toHaveCount(0)
+  await selectAiText(page, '   ')
+  await page.waitForTimeout(200)
+  await expect(aiButton(page)).toHaveCount(0)
+  await selectAiText(page, '정상 글자')
+  await expect(aiButton(page)).toBeVisible()
+  expect(calls).toHaveLength(0)
+})
+
+// AC-3: 오류 코드마다 다른 안내가 보이고, 어느 것도 로그인 안내로 바뀌지 않는다.
+const FAILURES = [
+  ['429 ai_limit_reached', { status: 429, json: aiError('ai_limit_reached') }, '오늘 쓸 수 있는 AI 설명을 모두 썼어요. 나중에 다시 시도해 주세요.', false],
+  ['502 ai_unavailable', { status: 502, json: aiError('ai_unavailable') }, 'AI가 설명을 만들지 못했어요. 다시 시도해 주세요.', true],
+  ['409 in_progress', { status: 409, json: aiError('conflict', 'in_progress') }, '같은 설명을 만드는 중이에요. 잠시 뒤에 다시 확인해 주세요.', true],
+  ['409 result_unavailable', { status: 409, json: aiError('conflict', 'result_unavailable') }, '이전 요청의 설명을 다시 가져올 수 없어요. 새로 요청해 주세요.', true],
+  ['409 stale_revision', { status: 409, json: aiError('conflict', 'stale_revision') }, '노트가 바뀌었어요. 노트를 다시 불러온 뒤 단어를 다시 골라 주세요.', false],
+  ['429 rate_limited', { status: 429, json: aiError('rate_limited') }, '요청이 많아요. 잠시 뒤에 다시 시도해 주세요.', true],
+  ['404 not_found', { status: 404, json: aiError('not_found') }, '설명할 수 없는 노트예요', false],
+  ['422 validation_failed', { status: 422, json: { error: { ...aiError('validation_failed').error, fields: [{ name: 'selection.end', reason: 'out_of_range', message: 'Value is out of range' }] } } }, '이 선택으로는 설명을 만들 수 없어요. 다른 단어를 골라 주세요.', false],
+  ['500 internal_error', { status: 500, json: aiError('internal_error') }, 'AI 설명을 불러오지 못했어요', true],
+] as const
+
+for (const [name, reply, message, retryable] of FAILURES) {
+  test(`E09 ${name}는 전용 안내를 보이고 로그인 안내로 바뀌지 않는다`, async ({ page }) => {
+    await setupAi(page, { member: true, respond: () => reply })
+    await page.goto('/notes/31')
+    await askAi(page)
+    const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+    await expect(sheet.getByRole('alert')).toContainText(message)
+    // message(영어 고정 문구) 글자는 화면에 나오지 않는다
+    await expect(page.getByText('synthetic english message')).toHaveCount(0)
+    await expect(aiLoginSheet(page)).toHaveCount(0)
+    await expect(retryButton(page)).toHaveCount(retryable ? 1 : 0)
+  })
+}
+
+test('오류 안내 문구는 서로 모두 다르다', () => {
+  const texts = FAILURES.map(([, , message]) => message)
+  expect(new Set(texts).size).toBe(texts.length)
+})
+
+test('502 뒤 다시 시도하면 새 키, 409 in_progress 뒤 다시 시도하면 같은 키를 쓴다', async ({ page }) => {
+  const { calls } = await setupAi(page, {
+    member: true,
+    respond: (_call, n) => n === 1 ? { status: 502, json: aiError('ai_unavailable') }
+      : n <= 3 ? { status: 409, json: aiError('conflict', 'in_progress') }
+      : { status: 200, json: aiSuccess },
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('AI가 설명을 만들지 못했어요. 다시 시도해 주세요.')).toBeVisible()
+  await retryButton(page).click()
+  await expect(page.getByText('같은 설명을 만드는 중이에요. 잠시 뒤에 다시 확인해 주세요.')).toBeVisible()
+  expect(calls).toHaveLength(2)
+  await retryButton(page).click()
+  await expect.poll(() => calls.length).toBe(3)
+  await expect(retryButton(page)).toBeVisible()
+  await retryButton(page).click()
+  await expect(page.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls).toHaveLength(4)
+  expect(calls[1].key).not.toBe(calls[0].key) // 502(끝난 요청) 뒤: 새 키
+  expect(calls[2].key).toBe(calls[1].key) // in_progress 뒤: 같은 키
+  expect(calls[3].key).toBe(calls[1].key)
+})
+
+test('응답을 받지 못한 요청은 같은 키로, 409 result_unavailable 뒤에는 새 키로 다시 보낸다', async ({ page }) => {
+  const { calls } = await setupAi(page, {
+    member: true,
+    respond: (_call, n) => n === 1 ? 'abort'
+      : n === 2 ? { status: 409, json: aiError('conflict', 'result_unavailable') }
+      : { status: 200, json: aiSuccess },
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('AI 설명을 불러오지 못했어요')).toBeVisible()
+  await retryButton(page).click() // 응답을 못 받았으니 서버가 처리했는지 모른다 → 같은 키
+  await expect(page.getByText('이전 요청의 설명을 다시 가져올 수 없어요. 새로 요청해 주세요.')).toBeVisible()
+  await retryButton(page).click() // result_unavailable 뒤 → 새 키
+  await expect(page.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls).toHaveLength(3)
+  expect(calls[1].key).toBe(calls[0].key)
+  expect(calls[2].key).not.toBe(calls[1].key)
+})
+
+test('응답을 기다리는 중에는 다시 시도 버튼이 없고, 시트를 닫았다 같은 선택을 다시 열어도 요청은 한 번이다', async ({ page }) => {
+  const held = gate()
+  const { calls } = await setupAi(page, { member: true, respond: async () => { await held.promise; return { status: 200, json: aiSuccess } } })
+  await page.goto('/notes/31')
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('AI 설명을 만드는 중이에요')).toBeVisible()
+  await expect(retryButton(page)).toHaveCount(0)
+  await expect.poll(() => calls.length).toBe(1)
+  await page.keyboard.press('Escape')
+  await askAi(page)
+  await expect(sheet.getByText('AI 설명을 만드는 중이에요')).toBeVisible()
+  held.release()
+  await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls).toHaveLength(1)
+})
+
+test('로그인 사용자의 401 login_required만 로그인 안내를 연다', async ({ page }) => {
+  await setupAi(page, { member: true, respond: () => ({ status: 401, json: aiError('login_required') }) })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(aiLoginSheet(page)).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' })).toBeHidden()
+})
+
+test('401이어도 code가 login_required가 아니면 로그인 안내를 열지 않는다', async ({ page }) => {
+  await setupAi(page, { member: true, respond: () => ({ status: 401, json: aiError('invalid_credentials') }) })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('AI 설명을 불러오지 못했어요')).toBeVisible()
+  await expect(aiLoginSheet(page)).toHaveCount(0)
+})
+
+test('시트를 닫은 뒤 늦게 도착한 401은 로그인 안내를 열지 않는다', async ({ page }) => {
+  const held = gate()
+  const { calls } = await setupAi(page, { member: true, respond: async () => { await held.promise; return { status: 401, json: aiError('login_required') } } })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect.poll(() => calls.length).toBe(1)
+  await page.keyboard.press('Escape')
+  held.release()
+  await page.waitForTimeout(300)
+  await expect(aiLoginSheet(page)).toHaveCount(0)
+})
+
+test('409 stale_revision이면 노트를 다시 불러오고 새 개정으로 단어를 다시 고를 수 있다', async ({ page }) => {
+  const { calls, notes } = await setupAi(page, { member: true, respond: (call) => call.body.note_revision === 5 ? { status: 409, json: aiError('conflict', 'stale_revision') } : { status: 200, json: aiSuccess } })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('노트가 바뀌었어요. 노트를 다시 불러온 뒤 단어를 다시 골라 주세요.')).toBeVisible()
+  const before = notes.count
+  // 노트가 개정 6으로 바뀌었다
+  await page.route('**/api/notes/31', (route) => route.fulfill({ json: aiNote('hello UnknownWord 끝', 6) }))
+  await page.getByRole('button', { name: '노트 다시 불러오기' }).click()
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' })).toBeHidden()
+  await expect(page.getByText('hello')).toBeVisible()
+  await expect(aiButton(page)).toHaveCount(0) // 이전 선택은 버린다
+  await askAi(page)
+  await expect(page.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls.map((call) => call.body.note_revision)).toEqual([5, 6])
+  expect(before).toBeGreaterThanOrEqual(1)
+})
+
+// PR #67 AI 리뷰 P2 ② 서버가 retry_after_seconds로 정한 대기 시간 전에는 같은 선택의 요청을 다시 보내지 않는다.
+const withRetryAfter = (code: string, seconds: number, detail?: string) => ({ error: { ...aiError(code, detail).error, retry_after_seconds: seconds } })
+
+test('429 rate_limited의 retry_after_seconds 동안은 다시 시도해도 요청이 늘지 않고, 시트를 닫았다 열어도 같다', async ({ page }) => {
+  await page.clock.install()
+  const { calls } = await setupAi(page, {
+    member: true,
+    respond: (_call, n) => n === 1 ? { status: 429, json: withRetryAfter('rate_limited', 60) } : { status: 200, json: aiSuccess },
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('60초 뒤에 다시 시도할 수 있어요')).toBeVisible()
+  await expect(retryButton(page)).toHaveAttribute('aria-disabled', 'true')
+  await retryButton(page).click({ force: true }) // aria-disabled라 Playwright는 기본으로 누르지 않는다. 눌러도 요청이 나가지 않는지 본다
+  await page.waitForTimeout(200)
+  expect(calls).toHaveLength(1) // 대기 시간 전에는 요청이 나가지 않는다
+  // 닫았다 같은 선택을 다시 열어도 대기가 이어진다(서버에 다시 묻지 않는다)
+  await page.keyboard.press('Escape')
+  await askAi(page)
+  await expect(sheet.getByText('요청이 많아요. 잠시 뒤에 다시 시도해 주세요.')).toBeVisible()
+  await expect(retryButton(page)).toHaveAttribute('aria-disabled', 'true')
+  await page.waitForTimeout(200)
+  expect(calls).toHaveLength(1)
+  // 대기 시간이 지나면 다시 시도할 수 있다
+  await page.clock.fastForward(61_000)
+  await expect(retryButton(page)).not.toHaveAttribute('aria-disabled', 'true')
+  await retryButton(page).click()
+  await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls).toHaveLength(2)
+})
+
+test('409 in_progress의 retry_after_seconds도 기다린 뒤 같은 키로 다시 보낸다', async ({ page }) => {
+  await page.clock.install()
+  const { calls } = await setupAi(page, {
+    member: true,
+    respond: (_call, n) => n === 1 ? { status: 409, json: withRetryAfter('conflict', 30, 'in_progress') } : { status: 200, json: aiSuccess },
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('30초 뒤에 다시 시도할 수 있어요')).toBeVisible()
+  await retryButton(page).click({ force: true }) // aria-disabled라 Playwright는 기본으로 누르지 않는다. 눌러도 요청이 나가지 않는지 본다
+  await page.waitForTimeout(200)
+  expect(calls).toHaveLength(1)
+  await page.clock.fastForward(31_000)
+  await expect(retryButton(page)).not.toHaveAttribute('aria-disabled', 'true')
+  await retryButton(page).click()
+  await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls).toHaveLength(2)
+  expect(calls[1].key).toBe(calls[0].key)
+})
+
+// PR #67 AI 리뷰 P2 ① review_status가 없는 1회용 설명에도 "AI 생성·검수 전"을 보인다. 검수가 끝난 값이 오면 "AI 생성"이다.
+test('review_status가 없는 1회용 설명은 "AI 생성·검수 전", 검수 끝난 설명은 "AI 생성"을 보인다', async ({ page }) => {
+  let reviewed = false
+  await setupAi(page, {
+    member: true,
+    respond: () => reviewed
+      ? { status: 200, json: { ...aiSuccess, explanation: { ...aiSuccess.explanation, review_status: 'approved' } } }
+      : { status: 200, json: { source: 'ai', term: null, explanation: { id: null, body: '합성 1회용 AI 설명입니다.' }, reportable: false } },
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('합성 1회용 AI 설명입니다.')).toBeVisible()
+  await expect(sheet.getByText('AI 생성·검수 전')).toBeVisible()
+  await page.keyboard.press('Escape')
+  reviewed = true
+  await askAi(page)
+  await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+  await expect(sheet.getByText('AI 생성', { exact: true })).toBeVisible()
+  await expect(sheet.getByText('AI 생성·검수 전')).toHaveCount(0)
+})
+
+// PR #67 AI 리뷰(재검증) P2 서버가 준 대기 시간은 줄이지 않는다. 600초를 넘는 값도 기한 전에는 요청이 늘지 않는다.
+test('429 retry_after_seconds가 600초를 넘어도 서버 기한 전에는 다시 보내지 않고 기한 뒤에 보낸다', async ({ page }) => {
+  await page.clock.install()
+  const { calls } = await setupAi(page, {
+    member: true,
+    respond: (_call, n) => n === 1 ? { status: 429, json: withRetryAfter('rate_limited', 900) } : { status: 200, json: aiSuccess },
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('900초 뒤에 다시 시도할 수 있어요')).toBeVisible()
+  await page.clock.fastForward(601_000)
+  await expect(retryButton(page)).toHaveAttribute('aria-disabled', 'true') // 600초가 지나도 서버 기한(900초)까지는 막혀 있다
+  await retryButton(page).click({ force: true })
+  await page.waitForTimeout(200)
+  expect(calls).toHaveLength(1)
+  await page.clock.fastForward(300_000)
+  await expect(retryButton(page)).not.toHaveAttribute('aria-disabled', 'true')
+  await retryButton(page).click()
+  await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+  expect(calls).toHaveLength(2)
+})
+
+// ---- MEG-108 오늘의 퀴즈(E11): 여섯 상태, generating 재조회, 오류별 안내. 브라우저의 실제 fetch 경로에 합성 HTTP 응답을 준다. ----
+// 실제 백엔드의 E11(퀴즈 생성·저장, 서버의 08:30 경계, 세션 만료)은 확인하지 못한다.
+
+type QuizReply = { status: number; json: unknown } | { status: number; body: string; contentType: string } | 'abort'
+
+async function setupQuiz(page: Page, options: { member?: boolean; respond: (n: number) => QuizReply | Promise<QuizReply> }) {
+  const calls = { count: 0 }
+  await page.route('**/api/me', (route) => route.fulfill({ json: options.member === false ? { authenticated: false } : { authenticated: true, role: 'member', display_name: '합성 사용자' } }))
+  await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
+  await page.route('**/api/quiz/today', async (route) => {
+    calls.count += 1
+    const reply = await options.respond(calls.count)
+    if (reply === 'abort') return route.abort()
+    return route.fulfill(reply)
+  })
+  return calls
+}
+
+const quizItems = [
+  { id: 41, difficulty: '중', question: '합성 질문 1입니다.', answered: false, followups: [], can_request_followup: false },
+  { id: 42, difficulty: '하', question: '합성 질문 2입니다.', answered: true, your_answer: '합성 답변', correct_answer: '합성 정답', explanation: '합성 해설', followups: [], can_request_followup: false },
+]
+const ok = (body: unknown): QuizReply => ({ status: 200, json: body })
+const quizRetry = (page: Page) => page.getByRole('button', { name: '다시 시도' })
+const quizRecheck = (page: Page) => page.getByRole('button', { name: '다시 확인' })
+
+// AC-1~3: 여섯 상태는 모두 HTTP 200이고 각각 다른 화면으로 보인다.
+const QUIZ_STATES = [
+  ['ready', { status: 'ready', quiz_date: '2026-10-23', items: quizItems }, '합성 질문 1입니다.', false],
+  ['not_open', { status: 'not_open' }, '오늘의 퀴즈는 아침 8시 30분부터 볼 수 있어요', true],
+  ['none', { status: 'none' }, '오늘 풀 퀴즈가 없어요', true],
+  ['generating', { status: 'generating', retry_after_seconds: 30 }, '퀴즈를 만드는 중이에요', false],
+  ['failed', { status: 'failed' }, '오늘의 퀴즈를 만들지 못했어요', false],
+  ['ai_limit_reached', { status: 'ai_limit_reached' }, '지금은 AI 사용 한도가 차서 퀴즈를 만들 수 없어요', true],
+] as const
+
+for (const [name, body, text, canRecheck] of QUIZ_STATES) {
+  test(`E11 ${name}는 HTTP 200의 전용 화면으로 보이고 오류나 로그인 안내가 아니다`, async ({ page }) => {
+    const calls = await setupQuiz(page, { respond: () => ok(body) })
+    await page.goto('/quiz')
+    await expect(page.getByRole('heading', { name: text })).toBeVisible()
+    await expect(page.getByRole('alert')).toHaveCount(0) // 오류 안내가 아니다
+    await expect(page.getByRole('dialog')).toHaveCount(0) // 로그인 안내가 아니다
+    await expect(quizRecheck(page)).toHaveCount(canRecheck ? 1 : 0)
+    await expect(quizRetry(page)).toHaveCount(0)
+    expect(calls.count).toBe(1)
+  })
+}
+
+test('여섯 상태의 안내 문구는 서로 모두 다르다', () => {
+  const titles = QUIZ_STATES.map(([, , text]) => text)
+  expect(new Set(titles).size).toBe(titles.length)
+})
+
+test('ready 응답의 정답·해설·내 답은 화면에 나오지 않는다', async ({ page }) => {
+  await setupQuiz(page, { respond: () => ok({ status: 'ready', quiz_date: '2026-10-23', items: quizItems }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '합성 질문 2입니다.' })).toBeVisible()
+  await expect(page.getByText('답함', { exact: true })).toHaveCount(1)
+  for (const hidden of ['합성 정답', '합성 해설', '합성 답변']) await expect(page.getByText(hidden)).toHaveCount(0)
+})
+
+test('not_open·none에서 다시 확인을 누르면 다시 조회하고 08:30이 되어도 저절로 갱신하지 않는다', async ({ page }) => {
+  await page.clock.install()
+  const calls = await setupQuiz(page, { respond: (n) => n === 1 ? ok({ status: 'not_open' }) : ok({ status: 'ready', quiz_date: '2026-10-23', items: quizItems }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '오늘의 퀴즈는 아침 8시 30분부터 볼 수 있어요' })).toBeVisible()
+  await page.clock.fastForward(60 * 60 * 1000) // 한 시간이 지나도 저절로 다시 부르지 않는다
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(1)
+  await quizRecheck(page).click()
+  await expect(page.getByRole('heading', { name: '합성 질문 1입니다.' })).toBeVisible()
+  expect(calls.count).toBe(2)
+})
+
+test('generating은 서버가 준 retry_after_seconds 뒤에 다시 부르고, 다른 상태가 되면 더 부르지 않는다', async ({ page }) => {
+  await page.clock.install()
+  const calls = await setupQuiz(page, {
+    respond: (n) => n <= 2 ? ok({ status: 'generating', retry_after_seconds: 7 }) : ok({ status: 'ready', quiz_date: '2026-10-23', items: quizItems }),
+  })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '퀴즈를 만드는 중이에요' })).toBeVisible()
+  expect(calls.count).toBe(1)
+  await page.clock.fastForward(6_000)
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(1) // 아직 7초가 안 됐다
+  await page.clock.fastForward(1_500)
+  await expect.poll(() => calls.count).toBe(2)
+  await expect(page.getByRole('heading', { name: '퀴즈를 만드는 중이에요' })).toBeVisible() // 다시 generating이어도 화면이 깜박이지 않는다
+  await page.clock.fastForward(7_500)
+  await expect(page.getByRole('heading', { name: '합성 질문 1입니다.' })).toBeVisible()
+  expect(calls.count).toBe(3)
+  await page.clock.fastForward(5 * 60 * 1000) // ready가 된 뒤에는 반복하지 않는다
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(3)
+})
+
+test('generating 응답에 retry_after_seconds가 없으면 임시로 5초 뒤에 다시 부르고, 너무 짧은 값은 1초로 맞춘다', async ({ page }) => {
+  await page.clock.install()
+  const calls = await setupQuiz(page, {
+    respond: (n) => n === 1 ? ok({ status: 'generating' }) : n === 2 ? ok({ status: 'generating', retry_after_seconds: 0.2 }) : ok({ status: 'none' }),
+  })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '퀴즈를 만드는 중이에요' })).toBeVisible()
+  await page.clock.fastForward(4_500)
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(1)
+  await page.clock.fastForward(1_000)
+  await expect.poll(() => calls.count).toBe(2)
+  await page.clock.fastForward(500)
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(2) // 0.2초는 1초로 맞춰진다
+  await page.clock.fastForward(1_000)
+  await expect.poll(() => calls.count).toBe(3)
+  await expect(page.getByRole('heading', { name: '오늘 풀 퀴즈가 없어요' })).toBeVisible()
+})
+
+test('generating 중 화면을 떠나면 반복 요청이 멈추고 응답을 기다리는 동안에는 요청이 겹치지 않는다', async ({ page }) => {
+  await page.clock.install()
+  const held = gate()
+  const calls = await setupQuiz(page, {
+    respond: async (n) => {
+      if (n === 1) return ok({ status: 'generating', retry_after_seconds: 3 })
+      await held.promise // 두 번째 응답은 붙잡아 둔다
+      return ok({ status: 'generating', retry_after_seconds: 3 })
+    },
+  })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '퀴즈를 만드는 중이에요' })).toBeVisible()
+  await page.clock.fastForward(3_500)
+  await expect.poll(() => calls.count).toBe(2)
+  await page.clock.fastForward(30_000) // 두 번째 응답이 아직이라 세 번째를 겹쳐 보내지 않는다
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(2)
+  await goInAppQuiz(page, '/') // 화면을 떠난다
+  held.release()
+  await page.clock.fastForward(60_000)
+  await page.waitForTimeout(300)
+  expect(calls.count).toBe(2) // 떠난 뒤에는 더 부르지 않는다
+})
+
+test('다시 확인을 누르면 요청이 하나만 나가고 응답 전에는 버튼이 없다', async ({ page }) => {
+  const held = gate()
+  const calls = await setupQuiz(page, {
+    respond: async (n) => {
+      if (n === 1) return ok({ status: 'none' })
+      await held.promise
+      return ok({ status: 'ready', quiz_date: '2026-10-23', items: quizItems })
+    },
+  })
+  await page.goto('/quiz')
+  await quizRecheck(page).click()
+  await expect(page.getByRole('heading', { name: '오늘의 퀴즈를 불러오는 중이에요' })).toBeVisible()
+  await expect(quizRecheck(page)).toHaveCount(0)
+  expect(calls.count).toBe(2)
+  held.release()
+  await expect(page.getByRole('heading', { name: '합성 질문 1입니다.' })).toBeVisible()
+  expect(calls.count).toBe(2)
+})
+
+// AC-4 오류
+test('방문자는 E11 요청 없이 로그인 안내가 열린다', async ({ page }) => {
+  const calls = await setupQuiz(page, { member: false, respond: () => ok({ status: 'none' }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('dialog', { name: '로그인이 필요해요' }).getByText('오늘의 퀴즈는 로그인한 뒤에 볼 수 있어요. 계정은 운영자가 만들어 줘요.')).toBeVisible()
+  await page.waitForTimeout(300)
+  expect(calls.count).toBe(0)
+})
+
+test('E11 로그인 사용자의 401 login_required는 공통 로그인 안내를 연다', async ({ page }) => {
+  await setupQuiz(page, { respond: () => ({ status: 401, json: aiError('login_required') }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('dialog', { name: '로그인이 필요해요' })).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+})
+
+test('E11 401이어도 code가 login_required가 아니면 로그인 안내를 열지 않는다', async ({ page }) => {
+  await setupQuiz(page, { respond: () => ({ status: 401, json: aiError('invalid_credentials') }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('alert')).toContainText('퀴즈를 불러오지 못했어요')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+})
+
+const QUIZ_ERRORS = [
+  ['429 rate_limited', { status: 429, json: aiError('rate_limited') }, '요청이 많아요. 잠시 뒤에 다시 시도해 주세요.'],
+  ['502 ai_unavailable', { status: 502, json: aiError('ai_unavailable') }, '퀴즈를 만드는 중 AI에 문제가 생겼어요. 다시 시도해 주세요.'],
+  ['500 internal_error', { status: 500, json: aiError('internal_error') }, '퀴즈를 불러오지 못했어요'],
+  ['네트워크 오류', 'abort', '퀴즈를 불러오지 못했어요'],
+] as const
+
+for (const [name, reply, message] of QUIZ_ERRORS) {
+  test(`E11 ${name}는 전용 안내와 다시 시도를 보이고 저절로 다시 부르지 않으며 로그인 안내가 아니다`, async ({ page }) => {
+    await page.clock.install()
+    const calls = await setupQuiz(page, { respond: (n) => n === 1 ? reply : ok({ status: 'none' }) })
+    await page.goto('/quiz')
+    await expect(page.getByRole('alert')).toContainText(message)
+    await expect(page.getByText('synthetic english message')).toHaveCount(0) // 영어 message 글자는 보이지 않는다
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await page.clock.fastForward(10 * 60 * 1000)
+    await page.waitForTimeout(200)
+    expect(calls.count).toBe(1) // 저절로 다시 부르지 않는다
+    await quizRetry(page).click() // 사용자가 누르면 다시 보낸다
+    await expect(page.getByRole('heading', { name: '오늘 풀 퀴즈가 없어요' })).toBeVisible()
+    expect(calls.count).toBe(2)
+  })
+}
+
+test('429의 retry_after_seconds 동안은 다시 시도해도 요청이 늘지 않고, 화면을 나갔다 돌아와도 같으며, 기한 뒤에 보낸다', async ({ page }) => {
+  await page.clock.install()
+  const calls = await setupQuiz(page, {
+    respond: (n) => n === 1 ? { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 60 } } } : ok({ status: 'none' }),
+  })
+  await page.goto('/quiz')
+  await expect(page.getByText('60초 뒤에 다시 시도할 수 있어요')).toBeVisible()
+  await expect(quizRetry(page)).toHaveAttribute('aria-disabled', 'true')
+  await quizRetry(page).click({ force: true }) // aria-disabled라 Playwright는 기본으로 누르지 않는다. 눌러도 요청이 나가지 않는지 본다
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(1)
+  await goInAppQuiz(page, '/')
+  await goInAppQuiz(page, '/quiz') // 나갔다 돌아와도 서버 기한 전에는 요청하지 않는다
+  await expect(page.getByRole('alert')).toContainText('요청이 많아요')
+  await page.waitForTimeout(200)
+  expect(calls.count).toBe(1)
+  await page.clock.fastForward(61_000)
+  await expect(quizRetry(page)).not.toHaveAttribute('aria-disabled', 'true')
+  await quizRetry(page).click()
+  await expect(page.getByRole('heading', { name: '오늘 풀 퀴즈가 없어요' })).toBeVisible()
+  expect(calls.count).toBe(2)
+})
+
+// 앱 안에서 경로를 옮긴다(새로 고치지 않아 모듈의 요청 상태가 이어진다)
+async function goInAppQuiz(page: Page, path: string) {
+  await page.evaluate((to) => {
+    history.pushState({}, '', to)
+    dispatchEvent(new PopStateEvent('popstate'))
+  }, path)
+}
+
+// 자체 점검에서 찾은 빈틈: 서버가 약속하지 않은 status나 모양이 이상한 응답을 줘도 화면이 깨지지 않고 오류 안내와 다시 시도가 보인다.
+for (const [name, body] of [
+  ['모르는 status', { status: 'something_new' }],
+  ['status가 없는 응답', {}],
+  ['ready인데 items가 배열이 아님', { status: 'ready', quiz_date: '2026-10-23', items: null }],
+] as const) {
+  test(`E11 ${name}는 화면을 깨지 않고 불러오지 못했다는 안내와 다시 시도를 보인다`, async ({ page }) => {
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    const calls = await setupQuiz(page, { respond: (n) => n === 1 ? ok(body) : ok({ status: 'none' }) })
+    await page.goto('/quiz')
+    await expect(page.getByRole('alert')).toContainText('퀴즈를 불러오지 못했어요')
+    await expect(page.getByRole('heading', { level: 1, name: '오늘의 퀴즈' })).toBeVisible()
+    await quizRetry(page).click()
+    await expect(page.getByRole('heading', { name: '오늘 풀 퀴즈가 없어요' })).toBeVisible()
+    expect(calls.count).toBe(2)
+    expect(errors).toEqual([])
+  })
+}
+
+test('ready의 문항이 비어 있으면 퀴즈 없음 안내를 보인다', async ({ page }) => {
+  await setupQuiz(page, { respond: () => ok({ status: 'ready', quiz_date: '2026-10-23', items: [] }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '오늘 풀 퀴즈가 없어요' })).toBeVisible()
+})
+
+// 독립 리뷰에서 나온 빈틈: 본문이 null인 응답, 문항 배열 속 이상한 값, 포커스, 세션 만료 뒤 로그인 길, 계정 전환.
+test('E11 본문이 JSON null이어도 로딩에 멈추지 않고 불러오지 못했다는 안내와 다시 시도를 보인다', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const calls = await setupQuiz(page, { respond: (n) => n === 1 ? { status: 200, body: 'null', contentType: 'application/json' } : ok({ status: 'none' }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('alert')).toContainText('퀴즈를 불러오지 못했어요')
+  await quizRetry(page).click()
+  await expect(page.getByRole('heading', { name: '오늘 풀 퀴즈가 없어요' })).toBeVisible()
+  expect(calls.count).toBe(2)
+  expect(errors).toEqual([])
+})
+
+test('ready의 문항 배열에 null·낯선 값이 섞여도 읽을 수 있는 문항만 보이고, 하나도 읽을 수 없으면 오류 안내다', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await setupQuiz(page, {
+    respond: (n) => n === 1
+      ? ok({ status: 'ready', quiz_date: '2026-10-23', items: [null, 7, { id: 'x' }, { ...quizItems[0], difficulty: 'constructor' }] })
+      : ok({ status: 'ready', quiz_date: '2026-10-23', items: [null, {}] }),
+  })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '합성 질문 1입니다.' })).toBeVisible()
+  await expect(page.getByRole('main').getByRole('listitem')).toHaveCount(1)
+  await expect(page.getByText('난이도')).toHaveCount(0) // 모르는 난이도 값은 칩 없이 둔다
+  expect(errors).toEqual([])
+  await page.reload() // 두 번째 응답(읽을 수 있는 문항 없음)을 받는다
+  await expect(page.getByRole('alert')).toContainText('퀴즈를 불러오지 못했어요')
+  expect(errors).toEqual([])
+})
+
+test('다시 확인을 누르면 포커스가 사라지지 않고 결과 영역에 남는다', async ({ page }) => {
+  const held = gate()
+  await setupQuiz(page, { respond: async (n) => { if (n === 1) return ok({ status: 'none' }); await held.promise; return ok({ status: 'not_open' }) } })
+  await page.goto('/quiz')
+  await quizRecheck(page).click()
+  await expect(page.getByRole('heading', { name: '오늘의 퀴즈를 불러오는 중이에요' })).toBeVisible()
+  await expect(page.locator('main > div[tabindex="-1"]')).toBeFocused()
+  held.release()
+  await expect(page.getByRole('heading', { name: '오늘의 퀴즈는 아침 8시 30분부터 볼 수 있어요' })).toBeVisible()
+  await expect(page.locator('main > div[tabindex="-1"]')).toBeFocused()
+})
+
+test('로그인 사용자의 401 login_required 뒤 안내를 닫아도 화면에 로그인으로 가는 길이 있다', async ({ page }) => {
+  await setupQuiz(page, { respond: () => ({ status: 401, json: aiError('login_required') }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('dialog', { name: '로그인이 필요해요' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('main').getByRole('link', { name: '로그인' })).toHaveAttribute('href', '/login')
+})
+
+test('429 대기는 같은 계정에만 적용되고 다른 계정으로 바뀌면 이어받지 않는다', async ({ page }) => {
+  const calls = await setupQuiz(page, {
+    respond: (n) => n === 1 ? { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 60 } } } : ok({ status: 'none' }),
+  })
+  await page.goto('/')
+  const outcomes = await page.evaluate(async () => {
+    const { requestQuizToday } = await import('/src/quiz/quizToday.ts')
+    const result = async (account: string) => requestQuizToday(account).then(() => 'ok', () => 'error')
+    return [await result('member:가'), await result('member:가'), await result('member:나')]
+  })
+  expect(outcomes).toEqual(['error', 'error', 'ok']) // 같은 계정은 서버 기한까지 막히고(요청 안 나감), 다른 계정은 바로 요청한다
+  expect(calls.count).toBe(2)
+})
+
+test('generating 대기 중(타이머 예약 상태)에 화면을 떠나면 이후 요청이 나가지 않는다', async ({ page }) => {
+  await page.clock.install()
+  const calls = await setupQuiz(page, { respond: () => ok({ status: 'generating', retry_after_seconds: 10 }) })
+  await page.goto('/quiz')
+  await expect(page.getByRole('heading', { name: '퀴즈를 만드는 중이에요' })).toBeVisible()
+  await page.clock.fastForward(3_000)
+  await goInAppQuiz(page, '/')
+  await expect(page.getByRole('heading', { level: 1, name: '과목' })).toBeVisible()
+  await page.clock.fastForward(60_000)
+  await page.waitForTimeout(300)
+  expect(calls.count).toBe(1)
+})
+
+// PR #79 AI 리뷰 P1: 표시 이름·역할이 같은 다른 계정이 이전 계정의 진행 중 E11 요청과 429 대기를 이어받으면 안 된다.
+// 계정 구분은 표시 이름이 아니라 로그인·로그아웃 때마다 올라가는 세션 번호로 한다. 브라우저에서 실제 로그아웃·로그인 흐름으로 시험한다.
+async function setupAccountSwitch(page: Page, respond: (n: number) => QuizReply | Promise<QuizReply>) {
+  const state = { loggedIn: true, calls: 0 }
+  await page.route('**/api/me', (route) => route.fulfill({ json: state.loggedIn ? { authenticated: true, role: 'member', display_name: '같은이름' } : { authenticated: false } }))
+  await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
+  await page.route('**/api/auth/logout', (route) => {
+    state.loggedIn = false
+    return route.fulfill({ status: 204 })
+  })
+  await page.route('**/api/auth/login', (route) => {
+    state.loggedIn = true
+    return route.fulfill({ json: { user: { role: 'member', display_name: '같은이름' } } })
+  })
+  await page.route('**/api/quiz/today', async (route) => {
+    state.calls += 1
+    const reply = await respond(state.calls)
+    if (reply === 'abort') return route.abort()
+    return route.fulfill(reply)
+  })
+  return state
+}
+
+// 로그아웃한 뒤 같은 표시 이름의 다른 계정(B)으로 로그인해 퀴즈 화면으로 온다.
+async function switchToSameNameAccount(page: Page) {
+  await page.getByRole('button', { name: /^내 계정/ }).click()
+  await page.getByRole('menuitem', { name: '로그아웃' }).click()
+  await expect(page).toHaveURL(/\/$/)
+  await goInAppQuiz(page, '/login')
+  await page.getByLabel('이메일').fill('b@example.test')
+  await page.getByLabel('비밀번호').fill('example-password')
+  await page.getByRole('button', { name: '로그인' }).click()
+  await expect(page).toHaveURL(/\/quiz$/)
+}
+
+const quizReady = (title: string): QuizReply => ok({ status: 'ready', quiz_date: '2026-10-23', items: [{ ...quizItems[0], question: title }] })
+
+test('A의 E11 요청이 진행 중일 때 로그아웃하고 같은 표시 이름의 B로 로그인해도 B는 A의 요청·문항을 받지 않는다', async ({ page }) => {
+  const held = gate()
+  const state = await setupAccountSwitch(page, async (n) => {
+    if (n === 1) {
+      await held.promise
+      return quizReady('A의 문항')
+    }
+    return quizReady('B의 문항')
+  })
+  await page.goto('/quiz')
+  await expect.poll(() => state.calls).toBe(1)
+  await switchToSameNameAccount(page)
+  await expect(page.getByRole('heading', { name: 'B의 문항' })).toBeVisible()
+  expect(state.calls).toBe(2) // B는 A의 진행 중 요청을 이어받지 않고 자기 요청을 보낸다
+  held.release() // 늦게 도착한 A의 응답
+  await page.waitForTimeout(300)
+  await expect(page.getByText('A의 문항')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'B의 문항' })).toBeVisible()
+})
+
+test('A가 429 대기 중일 때 같은 표시 이름의 B로 로그인하면 B는 그 대기를 이어받지 않는다', async ({ page }) => {
+  const state = await setupAccountSwitch(page, (n) => n === 1
+    ? { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 600 } } }
+    : ok({ status: 'none' }))
+  await page.goto('/quiz')
+  await expect(page.getByText('600초 뒤에 다시 시도할 수 있어요')).toBeVisible()
+  await switchToSameNameAccount(page)
+  await expect(page.getByRole('heading', { name: '오늘 풀 퀴즈가 없어요' })).toBeVisible()
+  expect(state.calls).toBe(2)
+  await expect(page.getByText('초 뒤에 다시 시도할 수 있어요')).toHaveCount(0)
+})
+
+// ---- MEG-107 오류 신고(E10). 실제 AI 설명 시트와 퀴즈 카드에서 브라우저 fetch 경로와 합성 HTTP 응답으로 시험한다. ----
+// 실제 백엔드의 E10 저장, 서버의 중복 방지, 운영자 신고 목록은 확인하지 못한다.
+
+type ReportCall = { target: { type: string; id: number }; body: string }
+type ReportReply = { status: number; json: unknown } | 'abort'
+
+async function setupReport(page: Page, respond: (call: ReportCall, n: number) => ReportReply | Promise<ReportReply>, ai: { explain?: unknown } = {}) {
+  const calls: ReportCall[] = []
+  await setupAi(page, { member: true, respond: () => ({ status: 200, json: ai.explain ?? aiSuccess }) })
+  await page.route('**/api/reports', async (route) => {
+    calls.push(route.request().postDataJSON())
+    const reply = await respond(calls[calls.length - 1], calls.length)
+    if (reply === 'abort') return route.abort()
+    return route.fulfill(reply)
+  })
+  return calls
+}
+
+const reportSheet = (page: Page) => page.getByRole('dialog', { name: '오류 신고' })
+const reportOpen = (page: Page) => page.getByRole('dialog', { name: 'UnknownWord' }).getByRole('button', { name: '오류 신고' })
+const reportSubmit = (page: Page) => reportSheet(page).getByRole('button', { name: '신고 보내기' })
+const reportInput = (page: Page) => reportSheet(page).getByLabel('신고 내용')
+const created = (): ReportReply => ({ status: 201, json: { id: 5, status: 'open' } })
+
+async function openReportFromAi(page: Page, text = '합성 신고 내용') {
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('합성 AI 설명입니다.')).toBeVisible()
+  await reportOpen(page).click()
+  await expect(reportSheet(page)).toBeVisible()
+  if (text) await reportInput(page).fill(text)
+}
+
+test('AC-1 AI 설명 시트에서 신고를 보내면 target과 본문이 전달되고 201 뒤 입력 화면이 닫히며 접수 안내가 보인다', async ({ page }) => {
+  const calls = await setupReport(page, () => created())
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSheet(page)).toBeHidden()
+  await expect(page.getByRole('status').filter({ hasText: '신고가 접수됐어요' })).toBeVisible()
+  expect(calls).toEqual([{ target: { type: 'ai_explanation', id: 31 }, body: '합성 신고 내용' }])
+  await expect(page.getByRole('status').filter({ hasText: '이미 접수된 신고예요' })).toHaveCount(0)
+})
+
+test('AC-1 퀴즈 카드에서 신고를 보내면 quiz_item 문항 id와 본문이 전달된다', async ({ page }) => {
+  const calls: ReportCall[] = []
+  await setupQuiz(page, { respond: () => ok({ status: 'ready', quiz_date: '2026-10-23', items: quizItems }) })
+  await page.route('**/api/reports', (route) => {
+    calls.push(route.request().postDataJSON())
+    return route.fulfill({ status: 201, json: { id: 6, status: 'open' } })
+  })
+  await page.goto('/quiz')
+  const second = page.getByRole('main').getByRole('listitem').nth(1)
+  await second.getByRole('button', { name: '오류 신고' }).click()
+  await reportInput(page).fill('질문이 이상해요')
+  await reportSubmit(page).click()
+  await expect(reportSheet(page)).toBeHidden()
+  await expect(second.getByRole('status').filter({ hasText: '신고가 접수됐어요' })).toBeVisible()
+  await expect(page.getByRole('main').getByRole('listitem').first().getByRole('status')).toHaveText('') // 다른 카드에는 안내가 없다
+  expect(calls).toEqual([{ target: { type: 'quiz_item', id: 42 }, body: '질문이 이상해요' }])
+})
+
+test('reportable이 false인 1회용 AI 설명에는 신고 버튼이 없다', async ({ page }) => {
+  await setupReport(page, () => created(), { explain: { source: 'ai', term: null, explanation: { id: null, body: '합성 1회용 AI 설명입니다.' }, reportable: false } })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('합성 1회용 AI 설명입니다.')).toBeVisible()
+  await expect(page.getByRole('button', { name: '오류 신고' })).toHaveCount(0)
+})
+
+test('reportable이 true여도 explanation.id가 없으면 신고 버튼이 없다', async ({ page }) => {
+  await setupReport(page, () => created(), { explain: { ...aiSuccess, explanation: { ...aiSuccess.explanation, id: null } } })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByText('합성 AI 설명입니다.')).toBeVisible()
+  await expect(page.getByRole('button', { name: '오류 신고' })).toHaveCount(0)
+})
+
+test('AC-3 기존 신고가 200으로 돌아오면 오류가 아니라 성공이고 "이미 접수된 신고예요"가 보인다', async ({ page }) => {
+  await setupReport(page, () => ({ status: 200, json: { id: 5, status: 'open' } }))
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSheet(page)).toBeHidden()
+  await expect(page.getByRole('status').filter({ hasText: '신고가 접수됐어요' })).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: '이미 접수된 신고예요' })).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+})
+
+test('AC-2 404는 공통 안내를 보이고 입력한 내용을 유지한다(사유를 추측하지 않는다)', async ({ page }) => {
+  await setupReport(page, () => ({ status: 404, json: aiError('not_found') }))
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSheet(page).getByRole('alert')).toContainText('신고할 대상을 찾을 수 없어요')
+  await expect(reportSheet(page)).toBeVisible()
+  await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+})
+
+test('AC-2 422는 fields[].reason에 따라 내용 칸 아래에 안내하고 입력을 유지한다', async ({ page }) => {
+  await setupReport(page, () => ({ status: 422, json: { error: { ...aiError('validation_failed').error, fields: [{ name: 'body', reason: 'too_long', message: 'Value is too long' }] } } }))
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSheet(page).getByRole('alert')).toContainText('1,000자 이하')
+  await expect(reportInput(page)).toHaveAttribute('aria-invalid', 'true')
+  await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+  await expect(reportSheet(page)).toBeVisible()
+})
+
+test('AC-2 401 login_required는 로그인 안내를 열고, 안내를 닫아도 작성한 신고 내용이 남는다', async ({ page }) => {
+  await setupReport(page, () => ({ status: 401, json: aiError('login_required') }))
+  await openReportFromAi(page, '로그인이 풀리기 전에 쓴 내용')
+  await reportSubmit(page).click()
+  await expect(aiLoginSheet(page)).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(aiLoginSheet(page)).toBeHidden()
+  await expect(reportSheet(page)).toBeVisible()
+  await expect(reportInput(page)).toHaveValue('로그인이 풀리기 전에 쓴 내용')
+})
+
+test('AC-2 429는 입력을 유지하고 retry_after_seconds가 지난 뒤에만 다시 보낼 수 있다', async ({ page }) => {
+  await page.clock.install()
+  const calls = await setupReport(page, (_call, n) => n === 1
+    ? { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 30 } } }
+    : created())
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSheet(page).getByRole('alert')).toContainText('30초 뒤에 다시 보낼 수 있어요')
+  await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+  await reportSubmit(page).click({ force: true })
+  await page.waitForTimeout(200)
+  expect(calls).toHaveLength(1) // 기한 전에는 다시 보내지 않는다
+  await page.clock.fastForward(31_000)
+  await expect(reportSubmit(page)).not.toHaveAttribute('aria-disabled', 'true')
+  await reportSubmit(page).click()
+  await expect(reportSheet(page)).toBeHidden()
+  expect(calls).toHaveLength(2)
+})
+
+test('AC-2 네트워크 오류 뒤에는 입력을 유지하고 바로 다시 보낼 수 있다', async ({ page }) => {
+  const calls = await setupReport(page, (_call, n) => n === 1 ? 'abort' : created())
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSheet(page).getByRole('alert')).toContainText('신고를 보내지 못했어요')
+  await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+  await reportSubmit(page).click()
+  await expect(reportSheet(page)).toBeHidden()
+  expect(calls).toHaveLength(2)
+})
+
+test('입력 경계: 빈 본문도 보내고, 현재 글자 수와 상한을 보이며, 상한을 넘는 입력은 1,000자로 줄인다', async ({ page }) => {
+  const calls = await setupReport(page, () => created())
+  await openReportFromAi(page, '')
+  await expect(reportSheet(page).getByText('0 / 1,000자')).toBeVisible()
+  await reportInput(page).fill('😀'.repeat(1200)) // 😀는 UTF-16으로 두 칸이지만 코드포인트로는 하나다. 글자 수는 코드포인트로 센다
+  await expect(reportSheet(page).getByText('1,000 / 1,000자')).toBeVisible()
+  expect([...(await reportInput(page).inputValue())]).toHaveLength(1000)
+  await reportInput(page).fill('')
+  await reportSubmit(page).click()
+  await expect(reportSheet(page)).toBeHidden()
+  expect(calls).toEqual([{ target: { type: 'ai_explanation', id: 31 }, body: '' }])
+})
+
+test('보내는 동안에는 보내기 버튼이 막혀 같은 신고가 두 번 나가지 않는다', async ({ page }) => {
+  const held = gate()
+  const calls = await setupReport(page, async () => {
+    await held.promise
+    return created()
+  })
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSubmit(page)).toHaveAttribute('aria-disabled', 'true')
+  await reportSubmit(page).click({ force: true })
+  await page.waitForTimeout(200)
+  expect(calls).toHaveLength(1)
+  held.release()
+  await expect(reportSheet(page)).toBeHidden()
+})
+
+// 독립 리뷰 보완: 보내는 중 시트를 닫은 뒤 늦게 429가 와도 다시 열면 이유가 보이고, 보내는 동안에는 입력칸이 잠긴다.
+test('보내는 중 시트를 닫은 뒤 늦게 429가 와도 다시 열면 대기 안내가 보이고 보내기가 막혀 있다', async ({ page }) => {
+  const held = gate()
+  const calls = await setupReport(page, async () => {
+    await held.promise
+    return { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 600 } } }
+  })
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await page.keyboard.press('Escape')
+  await expect(reportSheet(page)).toBeHidden()
+  held.release()
+  await page.waitForTimeout(300)
+  await reportOpen(page).click()
+  await expect(reportSheet(page).getByRole('alert')).toContainText('600초 뒤에 다시 보낼 수 있어요')
+  await expect(reportSubmit(page)).toHaveAttribute('aria-disabled', 'true')
+  await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+  expect(calls).toHaveLength(1)
+})
+
+test('보내는 동안에는 입력칸이 읽기 전용이라 그 사이에 고친 내용이 성공 뒤 조용히 사라지지 않는다', async ({ page }) => {
+  const held = gate()
+  await setupReport(page, async () => {
+    await held.promise
+    return created()
+  })
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportInput(page)).toHaveAttribute('aria-disabled', 'true')
+  await expect(reportInput(page)).toHaveAttribute('readonly', '')
+  held.release()
+  await expect(reportSheet(page)).toBeHidden()
+})
+
+test('신고 시트에서 Esc나 닫기를 눌러도 바깥 AI 설명 시트는 열려 있다(겹친 시트는 안쪽만 닫힌다)', async ({ page }) => {
+  await setupReport(page, () => created())
+  await openReportFromAi(page, '')
+  await page.keyboard.press('Escape')
+  await expect(reportSheet(page)).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' })).toBeVisible()
+  await reportOpen(page).click()
+  await reportSheet(page).getByRole('button', { name: '닫기' }).click()
+  await expect(reportSheet(page)).toBeHidden()
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' })).toBeVisible()
+  await expect(page.getByText('합성 AI 설명입니다.')).toBeVisible()
+})
+
+// 준성님 답변(2026-11-02) 반영: 422의 target 오류와 알 수 없는 필드·reason도 안내와 입력 유지, 1,000자는 코드포인트 기준(조합 이모지 포함).
+const validation = (fields: { name: string; reason: string }[]): ReportReply => ({
+  status: 422,
+  json: { error: { ...aiError('validation_failed').error, fields: fields.map((field) => ({ ...field, message: 'synthetic english message' })) } },
+})
+
+for (const [name, reply] of [
+  ['target required', validation([{ name: 'target', reason: 'required' }])],
+  ['target.type invalid_value', validation([{ name: 'target.type', reason: 'invalid_value' }])],
+] as const) {
+  test(`AC-2 422 ${name}는 대상 안내를 보이고 입력을 유지한다`, async ({ page }) => {
+    await setupReport(page, () => reply)
+    await openReportFromAi(page)
+    await reportSubmit(page).click()
+    await expect(reportSheet(page).getByRole('alert')).toContainText('신고할 대상을 찾을 수 없어요')
+    await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+  })
+}
+
+test('AC-2 알 수 없는 422 필드·reason도 안내를 보이고 입력을 유지한다(message로 분기하지 않는다)', async ({ page }) => {
+  await setupReport(page, () => validation([{ name: 'something_new', reason: 'unknown_reason' }]))
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(reportSheet(page).getByRole('alert')).toContainText('신고를 보내지 못했어요')
+  await expect(reportInput(page)).toHaveValue('합성 신고 내용')
+  await expect(reportSheet(page)).toBeVisible()
+})
+
+test('입력 경계: 1,000자는 코드포인트 기준이다(조합 이모지는 화면에 하나여도 여러 글자로 센다)', async ({ page }) => {
+  const calls = await setupReport(page, () => created())
+  await openReportFromAi(page, '')
+  const family = '👨‍👩‍👧' // 코드포인트 5개(사람 3 + 이음 문자 2)
+  expect([...family]).toHaveLength(5)
+  await reportInput(page).fill(family.repeat(200)) // 정확히 1,000 코드포인트: 줄이지 않고 그대로 보낸다
+  await expect(reportSheet(page).getByText('1,000 / 1,000자')).toBeVisible()
+  await reportSubmit(page).click()
+  await expect(reportSheet(page)).toBeHidden()
+  expect(calls[0].body).toBe(family.repeat(200))
+  await reportOpen(page).click()
+  await reportInput(page).fill(family.repeat(201)) // 1,005 코드포인트: 서버가 거부하기 전에 화면이 1,000으로 줄인다
+  await expect(reportSheet(page).getByText('1,000 / 1,000자')).toBeVisible()
+  expect([...(await reportInput(page).inputValue())]).toHaveLength(1000)
+})
+
+// PR #88 Codex 리뷰 P2: 겹쳐 열린 BottomSheet가 각자 저장한 overflow를 복원하다가 로그인 페이지로 이동한 뒤에도 스크롤 잠금이 남았다.
+// 마지막 모달이 닫힐 때 원래 값으로 돌아가야 한다.
+const bodyOverflow = (page: Page) => page.evaluate(() => document.body.style.overflow)
+
+test('신고 중 401로 로그인 안내를 열고 로그인 링크로 이동하면 페이지 스크롤 잠금이 풀린다', async ({ page }) => {
+  await setupReport(page, () => ({ status: 401, json: aiError('login_required') }))
+  await openReportFromAi(page)
+  await reportSubmit(page).click()
+  await expect(aiLoginSheet(page)).toBeVisible()
+  expect(await bodyOverflow(page)).toBe('hidden')
+  await aiLoginSheet(page).getByRole('link', { name: '로그인' }).click()
+  await expect.poll(() => bodyOverflow(page)).toBe('')
+})
+
+test('겹친 시트는 안쪽만 닫아도 바깥 시트가 열려 있는 동안 스크롤 잠금을 유지하고, 모두 닫히면 푼다', async ({ page }) => {
+  await setupReport(page, () => created())
+  await openReportFromAi(page, '')
+  expect(await bodyOverflow(page)).toBe('hidden')
+  await page.keyboard.press('Escape') // 신고 시트만 닫는다
+  await expect(reportSheet(page)).toBeHidden()
+  expect(await bodyOverflow(page)).toBe('hidden') // AI 설명 시트가 아직 열려 있다
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' })).toBeHidden()
+  expect(await bodyOverflow(page)).toBe('')
+})
+
+// ---- MEG-137 AI 설명(E09) 요청·재시도 키·대기를 로그인 세션별로 분리. 실제 로그아웃·로그인 흐름과 합성 HTTP 응답으로 시험한다. ----
+// 같은 노트·개정·선택을 다른 계정(표시 이름이 같아도 된다)이 요청해도 이전 세션의 진행 중 요청·응답·오류·대기·재시도 키를 이어받으면 안 된다.
+// 실제 백엔드의 E09·세션 만료·권한/열람 기록은 확인하지 못한다.
+
+async function setupAiSwitch(page: Page, respond: (call: AiCall, n: number) => AiReply | Promise<AiReply>) {
+  const state = { loggedIn: true, calls: [] as AiCall[] }
+  await page.route('**/api/me', (route) => route.fulfill({ json: state.loggedIn ? { authenticated: true, role: 'member', display_name: '같은이름' } : { authenticated: false } }))
+  await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
+  await page.route('**/api/notes/31', (route) => route.fulfill({ json: aiNote('hello UnknownWord 끝', 5) }))
+  await page.route('**/api/auth/logout', (route) => {
+    state.loggedIn = false
+    return route.fulfill({ status: 204 })
+  })
+  await page.route('**/api/auth/login', (route) => {
+    state.loggedIn = true
+    return route.fulfill({ json: { user: { role: 'member', display_name: '같은이름' } } })
+  })
+  await page.route('**/api/ai/explanations', async (route) => {
+    const request = route.request()
+    const call: AiCall = { key: request.headers()['idempotency-key'], body: request.postDataJSON() }
+    state.calls.push(call)
+    const reply = await respond(call, state.calls.length)
+    if (reply === 'abort') return route.abort()
+    return route.fulfill(reply)
+  })
+  return state
+}
+
+// 열려 있는 시트를 닫고 로그아웃한 뒤 같은 표시 이름의 다른 계정(B)으로 로그인해, 같은 노트로 돌아온다.
+async function switchToAccountB(page: Page) {
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: /^내 계정/ }).click()
+  await page.getByRole('menuitem', { name: '로그아웃' }).click()
+  await expect(page).toHaveURL(/\/$/)
+  await goInAppQuiz(page, '/login')
+  await page.getByLabel('이메일').fill('b@example.test')
+  await page.getByLabel('비밀번호').fill('example-password')
+  await page.getByRole('button', { name: '로그인' }).click()
+  await expect(page).toHaveURL(/\/quiz$/)
+  await goInAppQuiz(page, '/notes/31')
+  await page.locator('[data-note-body]').waitFor()
+}
+
+const aiText = (text: string) => ({ status: 200, json: { ...aiSuccess, explanation: { ...aiSuccess.explanation, body: text } } })
+
+test('AC-1 A의 E09가 진행 중일 때 닫고 로그아웃 → B 로그인 → 같은 선택을 요청하면 B가 별도 요청을 보내 B 응답만 보이고, 늦은 A 성공은 영향이 없다', async ({ page }) => {
+  const held = gate()
+  const state = await setupAiSwitch(page, async (_call, n) => {
+    if (n === 1) {
+      await held.promise
+      return aiText('A의 설명')
+    }
+    return aiText('B의 설명')
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect.poll(() => state.calls.length).toBe(1)
+  await switchToAccountB(page)
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('B의 설명')).toBeVisible()
+  expect(state.calls).toHaveLength(2) // B는 A의 진행 중 요청을 이어받지 않고 자기 요청을 보낸다
+  held.release() // 늦게 도착한 A의 성공
+  await page.waitForTimeout(300)
+  await expect(page.getByText('A의 설명')).toHaveCount(0)
+  await expect(sheet.getByText('B의 설명')).toBeVisible()
+})
+
+test('AC-1 늦게 도착한 A의 오류도 B 화면과 상태에 영향을 주지 않는다', async ({ page }) => {
+  const held = gate()
+  const state = await setupAiSwitch(page, async (_call, n) => {
+    if (n === 1) {
+      await held.promise
+      return { status: 500, json: aiError('internal_error') }
+    }
+    return aiText('B의 설명')
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect.poll(() => state.calls.length).toBe(1)
+  await switchToAccountB(page)
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('B의 설명')).toBeVisible()
+  held.release()
+  await page.waitForTimeout(300)
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await expect(sheet.getByText('B의 설명')).toBeVisible()
+})
+
+for (const [name, reply, wait] of [
+  ['429 rate_limited', { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 600 } } }, '600초 뒤에 다시 시도할 수 있어요'],
+  ['409 in_progress', { status: 409, json: { error: { ...aiError('conflict', 'in_progress').error, retry_after_seconds: 600 } } }, '600초 뒤에 다시 시도할 수 있어요'],
+] as const) {
+  test(`AC-2 A의 ${name} 대기가 B에게 이어지지 않는다`, async ({ page }) => {
+    const state = await setupAiSwitch(page, (_call, n) => n === 1 ? reply : aiText('B의 설명'))
+    await page.goto('/notes/31')
+    await askAi(page)
+    await expect(page.getByRole('dialog', { name: 'UnknownWord' }).getByText(wait)).toBeVisible()
+    await switchToAccountB(page)
+    await askAi(page)
+    const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+    await expect(sheet.getByText('B의 설명')).toBeVisible()
+    expect(state.calls).toHaveLength(2)
+    await expect(sheet.getByText('초 뒤에 다시 시도할 수 있어요')).toHaveCount(0)
+  })
+}
+
+test('AC-2 B의 대기가 있는 중 늦게 온 A의 응답이 B의 대기를 바꾸지 않는다', async ({ page }) => {
+  await page.clock.install()
+  const held = gate()
+  const state = await setupAiSwitch(page, async (_call, n) => {
+    if (n === 1) {
+      await held.promise
+      return { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 5 } } }
+    }
+    return { status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 600 } } }
+  })
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect.poll(() => state.calls.length).toBe(1)
+  await switchToAccountB(page)
+  await askAi(page)
+  const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+  await expect(sheet.getByText('600초 뒤에 다시 시도할 수 있어요')).toBeVisible()
+  held.release() // A의 늦은 429(5초 대기)
+  await page.waitForTimeout(300)
+  await page.clock.fastForward(10_000) // A의 5초가 지나도 B는 600초 대기를 유지한다
+  await expect(retryButton(page)).toHaveAttribute('aria-disabled', 'true')
+  await retryButton(page).click({ force: true })
+  await page.waitForTimeout(200)
+  expect(state.calls).toHaveLength(2)
+})
+
+test('AC-3 A의 응답 미확정(network_error) 뒤 B의 첫 요청은 새 Idempotency-Key를 쓴다', async ({ page }) => {
+  const state = await setupAiSwitch(page, (_call, n) => n === 1 ? 'abort' : aiText('B의 설명'))
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' }).getByText('AI 설명을 불러오지 못했어요')).toBeVisible()
+  await switchToAccountB(page)
+  await askAi(page)
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' }).getByText('B의 설명')).toBeVisible()
+  expect(state.calls).toHaveLength(2)
+  expect(state.calls[0].key).toBeTruthy()
+  expect(state.calls[1].key).toBeTruthy()
+  expect(state.calls[1].key).not.toBe(state.calls[0].key)
+})
+
+// 독립 리뷰 보완: 로그인·로그아웃이 실패하면 세션이 바뀐 것이 아니므로 같은 계정의 재시도 키·대기가 끊기지 않는다. 대기 조회는 요청을 시작한 세션 번호로 한다.
+test('로그아웃이 실패하면 같은 계정의 응답 미확정 재시도 키가 이어진다', async ({ page }) => {
+  const state = await setupAiSwitch(page, (_call, n) => n === 1 ? 'abort' : aiText('A의 설명'))
+  await page.route('**/api/auth/logout', (route) => route.fulfill({ status: 500, json: aiError('internal_error') })) // 나중에 등록한 경로가 우선한다
+  await page.goto('/notes/31')
+  await askAi(page)
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' }).getByText('AI 설명을 불러오지 못했어요')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: /^내 계정/ }).click()
+  await page.getByRole('menuitem', { name: '로그아웃' }).click()
+  await expect(page.getByRole('alert')).toBeVisible() // 로그아웃 실패 안내. 로그인 상태는 그대로다
+  await page.keyboard.press('Escape')
+  await askAi(page)
+  await expect(page.getByRole('dialog', { name: 'UnknownWord' }).getByText('A의 설명')).toBeVisible()
+  expect(state.calls).toHaveLength(2)
+  expect(state.calls[1].key).toBe(state.calls[0].key) // 같은 세션이라 응답을 받지 못한 요청의 키를 다시 쓴다
+})
+
+test('로그인에 실패해도 세션 번호는 올라가지 않고 성공하면 올라간다', async ({ page }) => {
+  await page.route('**/api/me', (route) => route.fulfill({ json: { authenticated: false } }))
+  let fail = true
+  await page.route('**/api/auth/login', (route) => fail
+    ? route.fulfill({ status: 401, json: aiError('invalid_credentials') })
+    : route.fulfill({ json: { user: { role: 'member', display_name: '같은이름' } } }))
+  await page.goto('/')
+  const result = await page.evaluate(async (shouldFail) => {
+    const { login } = await import('/src/auth/login.ts')
+    const { currentSession } = await import('/src/auth/sessionGeneration.ts')
+    const before = currentSession()
+    await login('a@example.test', 'wrong').catch(() => {})
+    const afterFailure = currentSession()
+    return { before, afterFailure, shouldFail }
+  }, fail)
+  expect(result.afterFailure).toBe(result.before)
+  fail = false
+  const afterSuccess = await page.evaluate(async () => {
+    const { login } = await import('/src/auth/login.ts')
+    const { currentSession } = await import('/src/auth/sessionGeneration.ts')
+    const before = currentSession()
+    await login('a@example.test', 'right')
+    return currentSession() > before
+  })
+  expect(afterSuccess).toBe(true)
+})
+
+test('서버 대기 시각은 요청을 시작한 세션 번호로 조회한다(다른 세션 번호로는 보이지 않는다)', async ({ page }) => {
+  await page.route('**/api/ai/explanations', (route) => route.fulfill({ status: 429, json: { error: { ...aiError('rate_limited').error, retry_after_seconds: 60 } } }))
+  await page.goto('/')
+  const result = await page.evaluate(async () => {
+    const { requestExplanation, retryAvailableAt } = await import('/src/ai/explain.ts')
+    const target = { noteId: 31, revision: 5, start: 0, end: 4 }
+    await requestExplanation(target, 9001).catch(() => {})
+    return { same: retryAvailableAt(target, 9001) !== null, other: retryAvailableAt(target, 9002) }
+  })
+  expect(result.same).toBe(true)
+  expect(result.other).toBeNull()
+})
+
+// ---- MEG-140 노트 본문의 mermaid 코드 블록을 다이어그램 그림으로 보여준다. 실제 노트 화면과 합성 HTTP 응답으로 시험한다. ----
+// 언어 표시가 있는 울타리(```mermaid)만 그린다. 실제 Notion 노트에 표시가 남는 것은 MEG-149(가져오기)가 끝나야 한다. 이 시험은 합성 노트다.
+
+const FLOW = '```mermaid\ngraph TD\n  A[시작] --> B[끝]\n```'
+const diagram = (page: Page) => page.getByRole('img', { name: 'mermaid 다이어그램' })
+
+async function openMermaidNote(page: Page, body: string) {
+  await setupAi(page, { member: false, body })
+  await page.goto('/notes/31')
+  await page.locator('[data-note-body]').waitFor()
+}
+
+test('AC-1 mermaid 블록이 든 노트를 열면 그 자리에 다이어그램 그림이 보이고 원문 코드는 보이지 않는다', async ({ page }) => {
+  await openMermaidNote(page, `앞 문단\n\n${FLOW}\n\n뒤 문단`)
+  await expect(diagram(page)).toBeVisible()
+  expect(await diagram(page).evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true)
+  const body = page.locator('[data-note-body]')
+  await expect(body.getByText('graph TD')).toBeHidden() // 원문은 눈에 보이지 않는 접근성 설명에만 있다
+  await expect(body.locator('pre')).toHaveCount(0)
+  await expect(body.getByText('앞 문단')).toBeVisible()
+  await expect(body.getByText('뒤 문단')).toBeVisible()
+})
+
+test('AC-1 한 노트의 mermaid 블록 여러 개가 모두 그려진다', async ({ page }) => {
+  await openMermaidNote(page, `${FLOW}\n\n사이 문단\n\n\`\`\`mermaid\nsequenceDiagram\n  가->>나: 안녕\n\`\`\``)
+  await expect(diagram(page)).toHaveCount(2)
+  await expect(diagram(page).first()).toBeVisible()
+  await expect(diagram(page).nth(1)).toBeVisible()
+})
+
+test('AC-2 문법이 틀린 mermaid 블록은 노트를 깨지 않고 원래 코드 블록으로 보인다', async ({ page }) => {
+  await openMermaidNote(page, '앞 문단\n\n```mermaid\ngraph TD\n  A[ --> \n```\n\n뒤 문단')
+  const body = page.locator('[data-note-body]')
+  await expect(body.locator('pre')).toContainText('graph TD')
+  await expect(diagram(page)).toHaveCount(0)
+  await expect(body.getByText('뒤 문단')).toBeVisible()
+  // mermaid가 오류를 그리며 문서에 남기는 요소가 없다
+  await expect(page.getByText('Syntax error in text')).toHaveCount(0)
+})
+
+test('AC-3 mermaid 라벨에 넣은 HTML·스크립트는 실행되지 않는다', async ({ page }) => {
+  const injected = '```mermaid\ngraph TD\n  A["<img src=x onerror=window.__pwned=1>"] --> B["<script>window.__pwned=2</script>"]\n  click A call window.__pwned()\n```'
+  await openMermaidNote(page, injected)
+  const body = page.locator('[data-note-body]')
+  // 그림으로 그려지거나 코드 블록으로 돌아가거나 어느 쪽이든, 이 둘 중 하나는 보여야 한다
+  await expect(diagram(page).or(body.locator('pre'))).toBeVisible()
+  await page.waitForTimeout(500)
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: unknown }).__pwned)).toBeUndefined()
+  expect(await page.evaluate(() => document.querySelectorAll('img[src="x"]').length)).toBe(0)
+})
+
+test('AC-4 mermaid가 아닌 코드 블록과 사전 용어 형광펜, 본문은 그대로 보인다', async ({ page }) => {
+  await openMermaidNote(page, `\`\`\`js\nconst a = 1\n\`\`\`\n\n${FLOW}\n\n\`\`\`\n언어 없는 코드\n\`\`\``)
+  const body = page.locator('[data-note-body]')
+  await expect(diagram(page)).toBeVisible()
+  await expect(body.locator('pre')).toHaveCount(2) // js와 언어 없는 코드 블록은 그대로다
+  await expect(body.locator('pre').first()).toContainText('const a = 1')
+  await expect(body.locator('pre').nth(1)).toContainText('언어 없는 코드')
+})
+
+test('mermaid가 없는 노트를 열 때는 mermaid 코드를 내려받지 않는다(지연 로드)', async ({ page }) => {
+  const requested: string[] = []
+  // 우리 소스 파일(MermaidBlock.tsx 등)이 아니라 라이브러리 요청만 본다
+  page.on('request', (request) => { if (/\/node_modules\/\.vite\/deps\/(mermaid|chunk-)/i.test(request.url()) && /mermaid/i.test(request.url())) requested.push(request.url()) })
+  await openMermaidNote(page, '그냥 문단\n\n```js\nconst a = 1\n```')
+  await expect(page.locator('[data-note-body] pre')).toContainText('const a = 1')
+  await page.waitForTimeout(500)
+  expect(requested).toEqual([])
+})
+
+const diagramSource = async (page: Page) => decodeURIComponent((await diagram(page).getAttribute('src')) ?? '').toLowerCase()
+
+test('다이어그램 색은 디자인 토큰을 따르고 그림자를 쓰지 않는다', async ({ page }) => {
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  const svg = await diagramSource(page)
+  expect(svg).toContain('#16202f') // --ink
+  expect(svg).toContain('#76818f') // --line-strong
+  expect(svg).not.toContain('lineargradient')
+  expect(svg).not.toContain('<foreignobject') // 글자는 SVG 글자로 그린다(그림 안에서 HTML 글꼴에 기대지 않는다)
+})
+
+test('좁은 화면에서 넓은 다이어그램은 글자를 읽을 수 있는 크기를 지키고 가로로 스크롤한다', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const steps = Array.from({ length: 7 }, (_, index) => `S${index}[${index + 1}번째 단계]`).join(' --> ')
+  await openMermaidNote(page, `\`\`\`mermaid\ngraph LR\n  ${steps}\n\`\`\``)
+  await expect(diagram(page)).toBeVisible()
+  const size = await diagram(page).evaluate((img: HTMLImageElement) => {
+    const box = img.parentElement!
+    return { shown: img.getBoundingClientRect().width, natural: img.naturalWidth, scrolls: box.scrollWidth > box.clientWidth }
+  })
+  expect(size.natural).toBeGreaterThan(390) // 이 그림은 화면보다 넓다
+  expect(Math.round(size.shown)).toBe(size.natural) // 줄이지 않고 원래 크기로 보인다
+  expect(size.scrolls).toBe(true) // 대신 가로로 스크롤한다
+})
+
+test('좁은 화면에서도 작은 다이어그램은 늘어나지 않고 원래 크기다', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  const size = await diagram(page).evaluate((img: HTMLImageElement) => ({ shown: img.getBoundingClientRect().width, natural: img.naturalWidth }))
+  expect(Math.round(size.shown)).toBe(size.natural)
+})
+
+test('디자인 규칙: 어떤 종류의 다이어그램에도 그림자·neo 모양이 적용되지 않는다', async ({ page }) => {
+  await openMermaidNote(page, `${FLOW}\n\n\`\`\`mermaid\nsequenceDiagram\n  가->>나: 안녕\n\`\`\`\n\n\`\`\`mermaid\nclassDiagram\n  A <|-- B\n\`\`\``)
+  await expect(diagram(page)).toHaveCount(3)
+  await expect(diagram(page).nth(2)).toBeVisible()
+  // 문서 속 <style>에는 쓰이지 않는 neo 전용 규칙이 글자로 남아 있으므로, 글자 검색이 아니라 실제 요소의 속성을 본다
+  const found = await page.evaluate(() => [...document.querySelectorAll('[data-note-body] img')].map((img) => {
+    const text = decodeURIComponent((img as HTMLImageElement).src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+    const doc = new DOMParser().parseFromString(text, 'image/svg+xml')
+    return { neo: doc.querySelectorAll('[data-look="neo"]').length, filtered: doc.querySelectorAll('[filter]').length }
+  }))
+  expect(found).toEqual([{ neo: 0, filtered: 0 }, { neo: 0, filtered: 0 }, { neo: 0, filtered: 0 }])
+})
+
+test('data-theme="dark" 안에서는 어두운 토큰 색으로 그린다', async ({ page }) => {
+  // 이 앱에서 어두운 토큰은 data-theme 속성이 있을 때만 적용된다(자동 다크 모드 없음).
+  await page.addInitScript(() => {
+    const timer = setInterval(() => {
+      if (document.documentElement) {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        clearInterval(timer)
+      }
+    }, 0)
+  })
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  const svg = await diagramSource(page)
+  expect(svg).toContain('#eef1f5') // 어두운 --ink
+  expect(svg).not.toContain('#16202f')
+})
+
+// 독립 검토 반영: 약한 시험 보강(지연 로드의 양성 대조, 그려진 그림의 내용 검사), 작성자의 설정 지시문 차단, 더 많은 다이어그램 종류.
+const decodedSvgs = (page: Page) => page.evaluate(() => [...document.querySelectorAll('[data-note-body] img')].map((img) => {
+  const text = decodeURIComponent((img as HTMLImageElement).src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml')
+  const handlers = [...doc.querySelectorAll('*')].flatMap((element) => [...element.attributes].filter((attribute) => /^on/i.test(attribute.name)).map((attribute) => attribute.name))
+  const scriptLinks = [...doc.querySelectorAll('*')].flatMap((element) => [...element.attributes].filter((attribute) => /href$/i.test(attribute.name) && /^\s*javascript:/i.test(attribute.value)).map((attribute) => attribute.value))
+  return { scripts: doc.querySelectorAll('script').length, images: doc.querySelectorAll('img').length, handlers, scriptLinks, neo: doc.querySelectorAll('[data-look="neo"]').length, filtered: doc.querySelectorAll('[filter]').length }
+}))
+
+test('AC-3 그려진 그림 안에 스크립트·이미지 태그·이벤트 처리기·javascript: 링크가 없다(라벨은 글자로만 남는다)', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n  A["<img src=x onerror=window.__pwned=1>"] --> B["<b>굵게</b> <script>window.__pwned=2</script>"]\n```')
+  await expect(diagram(page)).toBeVisible() // 이 입력은 그림으로 그려져야 한다(코드로 돌아가면 이 시험이 알려 준다)
+  expect(await decodedSvgs(page)).toEqual([{ scripts: 0, images: 0, handlers: [], scriptLinks: [], neo: 0, filtered: 0 }])
+})
+
+test('지연 로드 시험이 실제로 요청을 잡는다(mermaid가 있는 노트에서는 라이브러리 요청이 생긴다)', async ({ page }) => {
+  const requested: string[] = []
+  page.on('request', (request) => { if (/\/node_modules\/\.vite\/deps\/(mermaid|chunk-)/i.test(request.url()) && /mermaid/i.test(request.url())) requested.push(request.url()) })
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  expect(requested.length).toBeGreaterThan(0)
+})
+
+test('노트 작성자는 설정 지시문과 머리말로 모양·테마를 바꿀 수 없다(디자인 토큰 고정)', async ({ page }) => {
+  const directive = '```mermaid\n%%{init: {"look": "neo", "theme": "dark", "themeVariables": {"primaryColor": "#ff0000"}}}%%\ngraph TD\n  A[시작] --> B[끝]\n```'
+  const frontmatter = '```mermaid\n---\nconfig:\n  look: neo\n  theme: forest\n---\ngraph TD\n  A[시작] --> B[끝]\n```'
+  await openMermaidNote(page, `${directive}\n\n${frontmatter}`)
+  await expect(diagram(page)).toHaveCount(2)
+  await expect(diagram(page).nth(1)).toBeVisible()
+  expect(await decodedSvgs(page)).toEqual([
+    { scripts: 0, images: 0, handlers: [], scriptLinks: [], neo: 0, filtered: 0 },
+    { scripts: 0, images: 0, handlers: [], scriptLinks: [], neo: 0, filtered: 0 },
+  ])
+  for (const index of [0, 1]) {
+    const svg = decodeURIComponent((await diagram(page).nth(index).getAttribute('src')) ?? '').toLowerCase()
+    expect(svg).toContain('#16202f') // 디자인 토큰의 --ink
+    expect(svg).not.toContain('#ff0000')
+  }
+})
+
+test('디자인 규칙: 상태·관계·여정·파이 같은 다른 종류에서도 그림자·neo 모양이 없다', async ({ page }) => {
+  await openMermaidNote(page, [
+    '```mermaid\nstateDiagram-v2\n  [*] --> 대기\n  대기 --> 완료\n```',
+    '```mermaid\nerDiagram\n  USER ||--o{ NOTE : writes\n```',
+    '```mermaid\njourney\n  title 하루\n  section 아침\n    일어나기: 3: 나\n```',
+    '```mermaid\npie title 비율\n  "가" : 60\n  "나" : 40\n```',
+  ].join('\n\n'))
+  await expect(diagram(page)).toHaveCount(4)
+  await expect(diagram(page).nth(3)).toBeVisible()
+  const found = await decodedSvgs(page)
+  expect(found.map((item) => ({ neo: item.neo, filtered: item.filtered }))).toEqual(Array.from({ length: 4 }, () => ({ neo: 0, filtered: 0 })))
+})
+
+// PR #98 Codex 리뷰 P2 반영: 일반 스타일 문법(classDef·class·style·linkStyle·:::)으로 디자인 토큰 색을 우회하지 못하게 하고,
+// 그려진 그림의 접근 가능한 이름에 원문 내용을 남긴다.
+test('디자인 토큰: classDef·class·style·linkStyle·:::로 지정한 색은 그림에 적용되지 않고 그림은 그대로 그려진다', async ({ page }) => {
+  const styled = [
+    '```mermaid\ngraph TD\n  A[시작] --> B[끝]\n  classDef custom fill:#ff0000,color:#00ff00,stroke:#0000ff;\n  class A custom;\n```',
+    '```mermaid\ngraph TD\n  A[시작]:::custom --> B[끝]\n  classDef custom fill:#ff0001,color:#00ff01,stroke:#0000fe;\n```',
+    '```mermaid\ngraph TD\n  A[시작] --> B[끝]\n  style A fill:#ff0002,stroke:#00ff02,color:#0000fd\n  linkStyle 0 stroke:#ff0003,stroke-width:4px\n```',
+    '```mermaid\nstateDiagram-v2\n  [*] --> 대기\n  대기 --> 완료\n  classDef warn fill:#ff0004,color:#00ff04\n  class 대기 warn\n```',
+  ].join('\n\n')
+  await openMermaidNote(page, styled)
+  await expect(diagram(page)).toHaveCount(4) // 스타일 줄만 지우고 그림은 그린다(코드로 돌아가지 않는다)
+  await expect(diagram(page).nth(3)).toBeVisible()
+  for (let index = 0; index < 4; index += 1) {
+    const svg = decodeURIComponent((await diagram(page).nth(index).getAttribute('src')) ?? '').toLowerCase()
+    for (const color of ['#ff0000', '#00ff00', '#0000ff', '#ff0001', '#00ff01', '#0000fe', '#ff0002', '#00ff02', '#0000fd', '#ff0003', '#ff0004', '#00ff04']) expect(svg, `${index}번째 그림에 ${color}`).not.toContain(color)
+  }
+})
+
+test('스타일 줄을 지워도 클래스 다이어그램의 class 선언은 그대로 그려진다(과하게 지우지 않는다)', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nclassDiagram\n  class Animal {\n    +String name\n  }\n  class Dog\n  Animal <|-- Dog\n```')
+  await expect(diagram(page)).toBeVisible()
+  const svg = decodeURIComponent((await diagram(page).getAttribute('src')) ?? '')
+  expect(svg).toContain('Animal')
+  expect(svg).toContain('Dog')
+})
+
+test('디자인 토큰: 시퀀스 다이어그램의 rect·box 색 지정도 적용되지 않고 그림은 그대로 그려진다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nsequenceDiagram\n  box rgb(255, 0, 7) 서버쪽\n    participant 서버\n  end\n  participant 사용자\n  rect rgb(0, 255, 8)\n    사용자->>서버: 요청\n  end\n  rect rgba(1, 2, 255, 0.5)\n    서버-->>사용자: 응답\n  end\n```')
+  await expect(diagram(page)).toBeVisible()
+  const svg = decodeURIComponent((await diagram(page).getAttribute('src')) ?? '').toLowerCase()
+  for (const color of ['rgb(255, 0, 7)', 'rgb(0, 255, 8)', 'rgba(1, 2, 255', 'rgb(255,0,7)', 'rgb(0,255,8)']) expect(svg).not.toContain(color)
+  expect(svg).toContain('서버쪽') // 이름은 남고 색만 사라진다
+})
+
+// PR #98 Codex 재리뷰 반영: 세미콜론으로 이어 쓴 스타일, 긴 원문의 접근 가능한 설명(잘리지 않음), Mermaid 접근성 문법(accTitle·accDescr).
+test('디자인 토큰: 세미콜론으로 이어 쓴 style·classDef·class도 지워지고 그림은 그대로 그려진다', async ({ page }) => {
+  await openMermaidNote(page, [
+    '```mermaid\ngraph TD; A[Start] --> B[End]; style A fill:#ff0000;\n```',
+    '```mermaid\ngraph TD; A[시작] --> B[끝]; classDef warn fill:#ff0010,color:#00ff10; class A warn; linkStyle 0 stroke:#0000ee;\n```',
+    '```mermaid\ngraph TD\n  A[시작]:::warn --> B[끝]; classDef warn fill:#ff0011\n```',
+  ].join('\n\n'))
+  await expect(diagram(page)).toHaveCount(3)
+  await expect(diagram(page).nth(2)).toBeVisible()
+  for (let index = 0; index < 3; index += 1) {
+    const svg = decodeURIComponent((await diagram(page).nth(index).getAttribute('src')) ?? '').toLowerCase()
+    for (const color of ['#ff0000', '#ff0010', '#00ff10', '#0000ee', '#ff0011']) expect(svg, `${index}번째 그림에 ${color}`).not.toContain(color)
+  }
+})
+
+test('세미콜론 처리는 따옴표·괄호 안의 라벨을 훼손하지 않는다', async ({ page }) => {
+  // 따옴표 없는 라벨의 ;는 Mermaid에서도 문장 끝이라 따옴표로 감싼 라벨만 시험한다
+  await openMermaidNote(page, '```mermaid\ngraph TD\n  A["앞; 뒤"] --> B["문장; style X fill 같은 글"]; C["괄호; 안"] --> A\n```')
+  await expect(diagram(page)).toBeVisible()
+  // mermaid가 라벨을 단어별 tspan으로 나눠 그리므로 SVG 원문이 아니라 그림에 보이는 글자(textContent)로 확인한다
+  const shown = await diagram(page).evaluate((img: HTMLImageElement) => {
+    const text = decodeURIComponent(img.src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+    // <style>의 글자는 빼고 <text>의 글자만 모으며, 줄바꿈에 따른 공백 차이를 없애려고 공백을 모두 지운다
+    return [...new DOMParser().parseFromString(text, 'image/svg+xml').querySelectorAll('text')].map((element) => element.textContent ?? '').join('').replace(/\s+/g, '')
+  })
+  expect(shown).toContain('앞;뒤')
+  expect(shown).toContain('문장;styleXfill같은글')
+  expect(shown).toContain('괄호;안')
+})
+
+test('접근성: 그림의 접근 가능한 이름은 짧고, 전체 원문은 접근 가능한 설명으로 전달된다', async ({ page }) => {
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  await expect(diagram(page)).toHaveAccessibleName('mermaid 다이어그램')
+  await expect(diagram(page)).toHaveAccessibleDescription(/원문: graph TD; A\[시작\] --> B\[끝\]/)
+  // 원문은 눈에 보이지 않는다(코드로 보이지 않는다)
+  await expect(page.locator('[data-note-body]').getByText('graph TD')).toBeHidden()
+})
+
+test('접근성: 긴 원문도 잘리지 않아 마지막 노드와 관계까지 접근 가능한 설명에 남는다', async ({ page }) => {
+  const lines = Array.from({ length: 81 }, (_, index) => `N${index}[노드${index}] --> N${index + 1}[노드${index + 1}]`).join('\n  ')
+  await openMermaidNote(page, `\`\`\`mermaid\ngraph TD\n  ${lines}\n\`\`\``)
+  await expect(diagram(page)).toBeVisible()
+  const description = await diagram(page).evaluate((img: HTMLImageElement) => document.getElementById(img.getAttribute('aria-describedby') ?? '')?.textContent ?? '')
+  expect(description.length).toBeGreaterThan(1000) // 예전의 1,000자 제한을 넘는다
+  expect(description).toContain('N0[노드0] --> N1[노드1]')
+  expect(description).toContain('N80[노드80] --> N81[노드81]') // 마지막 관계
+  expect(description.endsWith('…')).toBe(false)
+  await expect(diagram(page)).toHaveAccessibleDescription(/N80\[노드80\] --> N81\[노드81\]/)
+})
+
+test('접근성: Mermaid의 accTitle·accDescr를 접근 가능한 이름·설명에 반영한다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n  accTitle: 요청 흐름\n  accDescr: 브라우저가 서버에 요청하고 응답을 받는다\n  A[브라우저] --> B[서버]\n```')
+  await expect(diagram(page)).toBeVisible()
+  await expect(diagram(page)).toHaveAccessibleName('mermaid 다이어그램: 요청 흐름')
+  await expect(diagram(page)).toHaveAccessibleDescription(/브라우저가 서버에 요청하고 응답을 받는다.*원문: /)
+})
+
+// PR #98 Codex 3차 리뷰 반영: 따옴표 안의 글(여러 줄 포함)은 스타일 처리에서 건드리지 않고, 이름으로 지정한 색도 지운다.
+const shownText = (page: Page, index = 0) => diagram(page).nth(index).evaluate((img: HTMLImageElement) => {
+  const text = decodeURIComponent(img.src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+  return [...new DOMParser().parseFromString(text, 'image/svg+xml').querySelectorAll('text')].map((element) => element.textContent ?? '').join('').replace(/\s+/g, '')
+})
+
+test('따옴표 안의 :::는 라벨 글자로 남고 그림이 그대로 그려진다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n A["Address :::example"] --> B[End]\n```')
+  await expect(diagram(page)).toBeVisible() // 닫는 따옴표가 지워져 문법 오류로 코드가 되면 이 시험이 알려 준다
+  expect(await shownText(page)).toContain('Address:::example')
+})
+
+test('여러 줄 따옴표 라벨 속 style·classDef·class로 시작하는 줄도 라벨 내용으로 남는다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\ngraph TD\n A["first line\nstyle guide\nclassDef notes\nclass these items\nlast line"] --> B[End]\n```')
+  await expect(diagram(page)).toBeVisible()
+  const shown = await shownText(page)
+  for (const piece of ['firstline', 'styleguide', 'classDefnotes', 'classtheseitems', 'lastline']) expect(shown).toContain(piece)
+})
+
+test('디자인 토큰: 시퀀스 box에 이름으로 지정한 색은 지우고 그룹 이름은 남긴다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nsequenceDiagram\nbox Aqua Server\n participant A\nend\nA->>A: hello\n```')
+  await expect(diagram(page)).toBeVisible()
+  const svg = decodeURIComponent((await diagram(page).getAttribute('src')) ?? '').toLowerCase()
+  expect(svg).not.toContain('aqua')
+  expect(await shownText(page)).toContain('Server')
+})
+
+test('box의 첫 글자가 색 이름이 아니면 그룹 이름을 그대로 둔다', async ({ page }) => {
+  await openMermaidNote(page, '```mermaid\nsequenceDiagram\nbox Backend Team\n participant A\nend\nA->>A: hello\n```')
+  await expect(diagram(page)).toBeVisible()
+  expect(await shownText(page)).toContain('BackendTeam')
+})
+
+// ---- MEG-144 PC 사이드 패널(1024px 이상). 용어가 둘인 긴 노트와 합성 HTTP 응답으로 실제 fetch 경로를 시험한다. ----
+// 실제 백엔드의 E06·E08·E09와 실제 Windows 브라우저(Edge·Chrome) 대조(AC-6)는 확인하지 못한다.
+const PC_VIEWPORT = { width: 1280, height: 800 }
+const FILLER = Array.from({ length: 40 }, (_, index) => `긴 본문의 ${index + 1}번째 문단입니다. 스크롤해도 헤더와 패널의 위치가 유지되는지 보려고 길게 이어 씁니다.`).join('\n\n')
+const TWO_TERMS_BODY = `앞 ExampleTerm 중간 SecondTerm 뒤\n\n${FILLER}`
+const twoTermsNote = {
+  id: 11, revision: 1, title: '두 용어 노트', studied_on: null, subjects: [], sources: [], images: {},
+  body_markdown: TWO_TERMS_BODY,
+  glossary_terms: [{ term_id: 7, key: 'exampleterm', label: 'ExampleTerm' }, { term_id: 8, key: 'secondterm', label: 'SecondTerm' }],
+  glossary_spans: [
+    { term_id: 7, start: TWO_TERMS_BODY.indexOf('ExampleTerm'), end: TWO_TERMS_BODY.indexOf('ExampleTerm') + 'ExampleTerm'.length },
+    { term_id: 8, start: TWO_TERMS_BODY.indexOf('SecondTerm'), end: TWO_TERMS_BODY.indexOf('SecondTerm') + 'SecondTerm'.length },
+  ],
+}
+
+async function setupPcTerms(page: Page, options: { favoriteStatus?: number } = {}) {
+  const calls = { glossary7: 0, glossary8: 0, favorites: 0, views: 0 }
+  await page.route('**/api/me', (route) => route.fulfill({ json: { authenticated: true, role: 'member', display_name: '합성 사용자' } }))
+  await page.route('**/api/notes/11', (route) => route.fulfill({ json: twoTermsNote }))
+  await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
+  await page.route('**/api/glossary/7', (route) => {
+    calls.glossary7 += 1
+    return route.fulfill({ json: { ...glossary(), is_favorite: false } })
+  })
+  await page.route('**/api/glossary/8', (route) => {
+    calls.glossary8 += 1
+    return route.fulfill({ json: { term: { id: 8, key: 'secondterm', label: 'SecondTerm' }, body_markdown: '둘째 용어의 합성 설명입니다.', images: [], is_favorite: false } })
+  })
+  await page.route('**/api/term-views', (route) => {
+    calls.views += 1
+    return route.fulfill({ json: { recorded: true } })
+  })
+  await page.route('**/api/favorites/7', (route) => {
+    calls.favorites += 1
+    if (options.favoriteStatus && options.favoriteStatus !== 200) return route.fulfill(serverError(options.favoriteStatus))
+    return route.fulfill({ json: { term_id: 7, is_favorite: true } })
+  })
+  return calls
+}
+
+const firstTerm = (page: Page) => page.getByRole('link', { name: 'ExampleTerm' })
+const secondTerm = (page: Page) => page.getByRole('link', { name: 'SecondTerm' })
+const firstPanel = (page: Page) => page.getByRole('dialog', { name: 'ExampleTerm' })
+const secondPanel = (page: Page) => page.getByRole('dialog', { name: 'SecondTerm' })
+
+test.describe('PC 폭 패널(실제 fetch 경로)', () => {
+  test.use({ viewport: PC_VIEWPORT })
+
+  test('AC-3 열린 패널에서 다른 용어를 누르면 내용만 바뀌고 포커스는 누른 링크에 남으며, 닫으면 마지막 링크로 돌아간다', async ({ page }) => {
+    const calls = await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page)).toBeVisible()
+    await expect(firstPanel(page).getByRole('heading', { name: 'ExampleTerm' })).toBeFocused() // 처음 열 때만 제목으로
+    await secondTerm(page).click()
+    await expect(secondPanel(page)).toBeVisible()
+    await expect(page.getByRole('dialog')).toHaveCount(1) // 패널은 하나이고 내용만 바뀐다
+    await expect(secondPanel(page).getByText('둘째 용어의 합성 설명입니다.')).toBeVisible()
+    await expect(secondTerm(page)).toBeFocused() // 제목으로 다시 옮기지 않는다
+    await expect(secondTerm(page)).toHaveAttribute('aria-expanded', 'true')
+    await expect(firstTerm(page)).toHaveAttribute('aria-expanded', 'false')
+    expect(calls.glossary8).toBeGreaterThan(0) // 둘째 용어의 설명을 받았다(개발 모드의 StrictMode가 효과를 두 번 실행하므로 횟수는 단정하지 않는다)
+    await page.keyboard.press('Escape')
+    await expect(secondPanel(page)).toBeHidden()
+    await expect(secondTerm(page)).toBeFocused() // 마지막으로 누른 링크
+    await expect(secondTerm(page)).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  test('AC-4 패널 안 즐겨찾기 성공은 눌림과 안내로 보인다', async ({ page }) => {
+    await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await firstPanel(page).getByRole('button', { name: '즐겨찾기', exact: true }).click()
+    await expect(firstPanel(page).getByRole('button', { name: '즐겨찾기함' })).toBeVisible()
+    await expect(firstPanel(page).getByRole('status').filter({ hasText: '즐겨찾기에 저장했어요' })).toHaveCount(1)
+  })
+
+  test('AC-4 즐겨찾기 저장이 실패하면 패널 안에 오류 안내가 보이고 눌림 상태는 그대로다', async ({ page }) => {
+    await setupPcTerms(page, { favoriteStatus: 500 })
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await firstPanel(page).getByRole('button', { name: '즐겨찾기', exact: true }).click()
+    await expect(firstPanel(page).getByRole('alert')).toContainText('즐겨찾기를 저장하지 못했어요')
+    await expect(firstPanel(page).getByRole('button', { name: '즐겨찾기', exact: true })).toBeVisible()
+    await expect(firstPanel(page)).toBeVisible()
+  })
+
+  test('AC-7 스크롤해도 헤더는 위에 남고 패널은 헤더 아래에 붙으며, 패널이 열린 채 본문이 스크롤된다', async ({ page }) => {
+    await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page)).toBeVisible()
+    await page.evaluate(() => window.scrollTo(0, 900))
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(300) // 본문 스크롤이 잠겨 있지 않다
+    const header = await page.getByRole('banner').boundingBox()
+    const sheet = await firstPanel(page).boundingBox()
+    expect(Math.round(header?.y ?? -1)).toBe(0) // 헤더는 화면 위에 그대로
+    expect(Math.round(sheet?.y ?? -1)).toBe(Math.round((header?.y ?? 0) + (header?.height ?? 0))) // 패널은 헤더 바로 아래에 붙어 빈 띠가 없다
+    expect(Math.round((sheet?.y ?? 0) + (sheet?.height ?? 0))).toBe(PC_VIEWPORT.height)
+    await expect(page.getByRole('banner').getByRole('link', { name: '목록' })).toBeVisible()
+  })
+
+  test('기록: 패널이 열린 채 창 폭을 1024px 아래로 줄이면 같은 용어가 바텀시트로 바뀌어 열려 있고, 다시 넓히면 패널로 돌아온다', async ({ page }) => {
+    await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page)).toBeVisible()
+    expect(await firstPanel(page).evaluate((element) => element.matches(':modal'))).toBe(false)
+    const isModal = () => firstPanel(page).evaluate((element) => element.matches(':modal'))
+    await page.setViewportSize({ width: 800, height: 800 })
+    await expect(firstPanel(page)).toBeVisible() // 열림 상태는 유지된다(내용은 새로 그려진다)
+    await expect.poll(isModal).toBe(true) // 창 크기 변화를 React가 반영할 때까지 기다린다
+    await page.setViewportSize(PC_VIEWPORT)
+    await expect(firstPanel(page)).toBeVisible()
+    await expect.poll(isModal).toBe(false)
+  })
+
+  test('기록: 1024px에서도 본문이 패널에 가려지지 않는다(공간이 모자라 본문 열이 줄어든다)', async ({ page }) => {
+    await setupPcTerms(page)
+    await page.setViewportSize({ width: 1024, height: 800 })
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page)).toBeVisible()
+    const article = await page.locator('article').boundingBox()
+    const sheet = await firstPanel(page).boundingBox()
+    expect((article?.x ?? 0) + (article?.width ?? 0)).toBeLessThanOrEqual(sheet?.x ?? 0)
+    expect(Math.round(article?.width ?? 0)).toBeLessThan(720)
+    expect(Math.round(article?.width ?? 0)).toBeGreaterThan(300)
+  })
+})
+
+// 독립 검토 반영: 창 폭이 1024px 경계를 넘어도 열린 패널의 내용을 다시 부르지 않는다(AI 설명은 호출 한도·비용이 걸려 있다).
+test.describe('PC 폭 패널: 창 폭 전환 중 요청', () => {
+  test.use({ viewport: PC_VIEWPORT })
+
+  test('열린 용어 패널은 창 폭이 경계를 넘어도 E06·E07을 다시 부르지 않고 내용이 그대로다', async ({ page }) => {
+    const calls = await setupPcTerms(page)
+    await page.goto('/notes/11')
+    await firstTerm(page).click()
+    await expect(firstPanel(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    await expect.poll(() => calls.views).toBeGreaterThan(0)
+    const before = { glossary: calls.glossary7, views: calls.views }
+    const isModal = () => firstPanel(page).evaluate((element) => element.matches(':modal'))
+    await page.setViewportSize({ width: 800, height: 800 })
+    await expect.poll(isModal).toBe(true)
+    await expect(firstPanel(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    await page.setViewportSize(PC_VIEWPORT)
+    await expect.poll(isModal).toBe(false)
+    await expect(firstPanel(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+    await page.waitForTimeout(300)
+    expect({ glossary: calls.glossary7, views: calls.views }).toEqual(before) // 요청이 늘지 않았다
+  })
+
+  test('열린 AI 설명 패널은 창 폭이 경계를 넘어도 E09를 다시 부르지 않는다', async ({ page }) => {
+    const { calls } = await setupAi(page, { member: true })
+    await page.goto('/notes/31')
+    await askAi(page)
+    const sheet = page.getByRole('dialog', { name: 'UnknownWord' })
+    await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+    const before = calls.length
+    expect(before).toBeGreaterThan(0)
+    const isModal = () => sheet.evaluate((element) => element.matches(':modal'))
+    await page.setViewportSize({ width: 800, height: 800 })
+    await expect.poll(isModal).toBe(true)
+    await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+    await page.setViewportSize(PC_VIEWPORT)
+    await expect.poll(isModal).toBe(false)
+    await expect(sheet.getByText('합성 AI 설명입니다.')).toBeVisible()
+    await page.waitForTimeout(300)
+    expect(calls).toHaveLength(before) // E09 요청이 늘지 않았다
+  })
+})
+
+// ---- MEG-166 계정 전환 뒤 이전 즐겨찾기(E08) 응답이 현재 화면에 반영되지 않게 한다. 실제 로그아웃·로그인 흐름과 합성 HTTP 응답으로 시험한다. ----
+// MEG-76 로컬 검증 S7: 회원 A의 E08 응답을 보류한 채 로그아웃하거나 B로 전환하면, 늦게 도착한 A의 응답이 현재 시트의 버튼을 덮어썼다.
+// 합성 응답 시험이며 실제 백엔드 결과는 로컬 검증에서 따로 확인한다.
+
+type FavoriteUser = 'a' | 'b'
+
+async function setupFavoriteSwitch(page: Page, respondFirst: (held: Promise<void>) => Promise<{ status: number; json: object }>) {
+  const held = gate()
+  const state = {
+    loggedIn: true,
+    user: 'a' as FavoriteUser,
+    saved: { a: false, b: false } as Record<FavoriteUser, boolean>,
+    bodies: [] as { favorited: boolean }[],
+    release: held.release,
+  }
+  await page.route('**/api/me', (route) => route.fulfill({ json: state.loggedIn ? { authenticated: true, role: 'member', display_name: '같은이름' } : { authenticated: false } }))
+  await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
+  await page.route('**/api/notes/11', (route) => route.fulfill({ json: termNote }))
+  await page.route('**/api/term-views', (route) => route.fulfill({ json: { recorded: state.loggedIn } }))
+  await page.route('**/api/glossary/7', (route) => route.fulfill({ json: state.loggedIn ? { ...glossary(), is_favorite: state.saved[state.user] } : glossary() }))
+  await page.route('**/api/auth/logout', (route) => {
+    state.loggedIn = false
+    return route.fulfill({ status: 204 })
+  })
+  await page.route('**/api/auth/login', (route) => {
+    const email = (route.request().postDataJSON() as { email: string }).email
+    state.user = email.startsWith('a') ? 'a' : 'b'
+    state.loggedIn = true
+    return route.fulfill({ json: { user: { role: 'member', display_name: '같은이름' } } })
+  })
+  await page.route('**/api/favorites/7', async (route) => {
+    const body = route.request().postDataJSON() as { favorited: boolean }
+    state.bodies.push(body)
+    if (state.bodies.length === 1) return route.fulfill(await respondFirst(held.promise)) // 첫 요청(A)만 보류한다
+    state.saved[state.user] = body.favorited
+    return route.fulfill({ json: { term_id: 7, is_favorite: body.favorited } })
+  })
+  return state
+}
+
+// A가 즐겨찾기를 눌러 E08이 진행 중일 때 시트를 닫고 로그아웃한다. email이 있으면 그 계정으로 다시 로그인해 같은 노트로 돌아온다.
+async function leaveAccountA(page: Page, email?: string) {
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: /^내 계정/ }).click()
+  await page.getByRole('menuitem', { name: '로그아웃' }).click()
+  await expect(page).toHaveURL(/\/$/)
+  if (email) {
+    await goInAppQuiz(page, '/login')
+    await page.getByLabel('이메일').fill(email)
+    await page.getByLabel('비밀번호').fill('example-password')
+    await page.getByRole('button', { name: '로그인' }).click()
+    await expect(page).toHaveURL(/\/quiz$/)
+  }
+  await goInAppQuiz(page, '/notes/11')
+  await page.locator('[data-note-body]').waitFor()
+}
+
+async function startPendingFavoriteAsA(page: Page, state: Awaited<ReturnType<typeof setupFavoriteSwitch>>) {
+  await page.goto('/notes/11')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await favoriteOff(page).click()
+  await expect.poll(() => state.bodies.length).toBe(1) // A의 E08이 서버에 도착했고 응답만 보류 중이다
+}
+
+const aSucceeds = (held: Promise<void>) => held.then(() => ({ status: 200, json: { term_id: 7, is_favorite: true } }))
+const aFailsLoginRequired = (held: Promise<void>) => held.then(() => ({ status: 401, json: loginRequiredFailure().body }))
+
+test('MEG-166 AC-1 A의 E08 성공 응답을 보류하고 로그아웃해 방문자로 같은 용어를 열어도, 늦은 응답이 버튼을 켜거나 안내를 띄우지 않는다', async ({ page }) => {
+  const state = await setupFavoriteSwitch(page, aSucceeds)
+  await startPendingFavoriteAsA(page, state)
+  await leaveAccountA(page)
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+  state.release() // 늦게 도착한 A의 성공
+  await page.waitForTimeout(400)
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+  await expect(favoriteOn(page)).toHaveCount(0)
+  await expect(page.getByText('즐겨찾기에 저장했어요')).toHaveCount(0)
+  await expect(loginPromptSheet(page)).toHaveCount(0)
+})
+
+test('MEG-166 AC-2 A의 응답을 보류하고 B로 전환하면 B의 상태가 유지되고, B의 다음 클릭은 B의 현재 상태에 맞는 요청을 보낸다', async ({ page }) => {
+  const state = await setupFavoriteSwitch(page, aSucceeds)
+  await startPendingFavoriteAsA(page, state)
+  await leaveAccountA(page, 'b@example.test')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false')
+  expect(await favoriteOff(page).getAttribute('aria-disabled')).not.toBe('true') // A의 진행 중 요청 때문에 막히지 않는다
+  state.release()
+  await page.waitForTimeout(400)
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false') // B의 E06 상태 그대로
+  await expect(favoriteOn(page)).toHaveCount(0)
+  await favoriteOff(page).click() // B의 현재 상태(꺼짐)에 맞는 요청: 켜기
+  await expect(favoriteOn(page)).toBeVisible()
+  expect(state.bodies).toEqual([{ favorited: true }, { favorited: true }])
+  expect(state.saved.b).toBe(true)
+})
+
+test('MEG-166 AC-3 세션 전환 전 시작한 실패 응답(401 login_required)은 현재 화면에 로그인 안내·오류를 띄우거나 요청 상태를 막지 않는다', async ({ page }) => {
+  const state = await setupFavoriteSwitch(page, aFailsLoginRequired)
+  await startPendingFavoriteAsA(page, state)
+  await leaveAccountA(page)
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  expect(await favoriteOff(page).getAttribute('aria-disabled')).not.toBe('true') // 응답이 도착하기 전에도 A의 진행 중 요청으로 막히지 않는다
+  state.release() // 늦게 도착한 A의 401
+  await page.waitForTimeout(400)
+  await expect(loginPromptSheet(page)).toHaveCount(0)
+  await expect(termSheet(page)).toBeVisible() // 용어 시트가 닫히지 않는다
+  await expect(termSheet(page).getByRole('alert')).toHaveCount(0)
+  expect(await favoriteOff(page).getAttribute('aria-disabled')).not.toBe('true')
+})
+
+test('MEG-166 같은 계정이라도 로그아웃 후 다시 로그인하면 이전 요청을 이어받지 않고 E06의 값으로 맞춘다', async ({ page }) => {
+  const state = await setupFavoriteSwitch(page, aSucceeds)
+  await startPendingFavoriteAsA(page, state)
+  await leaveAccountA(page, 'a@example.test')
+  await termLink(page).click()
+  await expect(termSheet(page).getByText('합성 설명 문장입니다.')).toBeVisible()
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false') // E06은 저장 전 상태(꺼짐)다
+  expect(await favoriteOff(page).getAttribute('aria-disabled')).not.toBe('true')
+  state.release()
+  await page.waitForTimeout(400)
+  await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false') // 이전 세션의 응답으로 바뀌지 않는다
+})
