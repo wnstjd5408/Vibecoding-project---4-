@@ -19,9 +19,21 @@ from .wiki_dev import manifest
 from .wiki_examples import example_messages
 from .wiki_quality import style_warnings
 
-VERSION = "wiki-live-v7-evidence"
+VERSION = "wiki-live-v8-abstention"
 MAX_OUTPUT = 3000
 SECTIONS = ("정의", "작동 원리", "활용 예시", "주의사항")
+# Exact, claim-free refusal: an empty citation list alone never exempts prose
+# from the normal citation requirement. This is a model output contract, not
+# automatic source relevance detection or a production fallback.
+INSUFFICIENT_EVIDENCE = {
+    "summary": ["제공된 자료로는 선택한 용어를 설명할 근거가 부족합니다.",
+                "관련 자료를 확인해야 합니다.", "근거를 확인하기 전에는 설명을 보류합니다."],
+    "explanation": "**정의**\n제공된 자료로는 정의를 확인하기 어렵습니다.\n"
+                   "**작동 원리**\n관련 근거가 필요해 동작 설명을 보류합니다.\n"
+                   "**활용 예시**\n적용할 기술 동작의 근거가 없어 예시를 제시하지 않습니다.\n"
+                   "**주의사항**\n선택한 용어와 관련된 자료를 확인해 주세요.",
+    "source_ids": [],
+}
 PROMPT = r'''비전공자를 위한 한국어 CS 설명을 JSON 객체 하나로 작성한다.
 
 [근거]
@@ -40,6 +52,7 @@ PROMPT = r'''비전공자를 위한 한국어 CS 설명을 JSON 객체 하나로
 [근거가 부족할 때]
 - sources가 비어 있으면 개념을 설명하지 않는다. 4개 절을 유지하고 근거 확인이 필요함을 알리며 source_ids는 []로 둔다.
 - 일부만 있으면 있는 내용만 설명하고 부족한 부분만 확인을 안내한다.
+- sources가 있어도 선택 용어의 설명에 사용할 근거가 전혀 없으면 아래 고정 근거 부족 JSON을 그대로 출력한다. 내용을 추가하거나 바꾸지 않는다.
 - 예시는 적용할 기술 동작이 근거에 있을 때만 쓴다. 없으면 예시 대신 그 이유를 쓴다.
 
 [용어 풀이]
@@ -77,6 +90,7 @@ PROMPT = r'''비전공자를 위한 한국어 CS 설명을 JSON 객체 하나로
 - summary는 문자열 3개의 배열, explanation은 문자열, source_ids는 문자열 배열이다.
 - 문자열 내부 줄바꿈은 JSON 규칙에 따라 \n으로 이스케이프한다.
 - 출력 전 JSON 유효성, 요약 3개, 본문 4개 절, 예시에 구체적인 상황과 문제가 있고 그 상황에서의 행동이 설명됐는지 확인한다.'''
+PROMPT += "\n\n[고정 근거 부족 응답]\n" + json.dumps(INSUFFICIENT_EVIDENCE, ensure_ascii=False)
 
 
 OUTPUT_SCHEMA = {
@@ -225,7 +239,8 @@ def _checked_state(plan, approval, ap, mode):
 
 def _validate_wiki(text, sources):
     checked = validate_output(text, sources)
-    if not checked["source_ids"]:
+    abstained = all(checked[k] == v for k, v in INSUFFICIENT_EVIDENCE.items())
+    if not checked["source_ids"] and not abstained:
         raise DatasetError("wiki_live: citation_required")
     explanation = checked["explanation"]
     # Headings must be separate lines with substantive content before the next section.
@@ -239,6 +254,7 @@ def _validate_wiki(text, sources):
         if not body:
             raise DatasetError("wiki_live: empty_section")
     checked["style_warnings"] = style_warnings(explanation)
+    checked["response_kind"] = "insufficient_evidence" if abstained else "answer"
     return checked
 
 

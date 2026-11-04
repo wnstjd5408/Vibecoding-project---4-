@@ -398,3 +398,63 @@ def test_partial_evidence_is_not_repaired_with_rubric(cases):
     assert payload["context"] != payload["sources"]["1"]
     assert payload["sources"] == {"1": "Retry repeats a failed operation."}
     assert "required condition" not in json.dumps(payload)
+
+
+def test_unrelated_evidence_abstention_continues_and_preserves_denominator(cases, tmp_path):
+    from evals.wiki_live import INSUFFICIENT_EVIDENCE
+    cases[0]["term"] = "스택"
+    for evidence in cases[0]["internal_evidence"] + cases[0]["evidence"]:
+        evidence["text"] = "합성 행사 안내: 도서관은 월요일에 문을 닫습니다."
+    approval, ledger = prepared(cases, tmp_path)
+    transport = Scripted([response(body=json.dumps(INSUFFICIENT_EVIDENCE))])
+    state = run(cases, manifest(cases), approval, transport, mode="mock")
+    row = state["slots"]["WDEV01:U"]
+    assert row["status"] == "ok"  # Mechanical completion, not quality approval.
+    assert row["structured_output"]["response_kind"] == "insufficient_evidence"
+    assert row["structured_output"]["references"] == []
+    state = run(cases, manifest(cases), approval, transport, phase="remaining", mode="mock")
+    assert len(transport.calls) == state["attempts"] == len(state["slots"]) == 6
+    assert all(row["status"] == "ok" for row in state["slots"].values())
+    assert state["slots"]["WDEV02:U"]["structured_output"]["response_kind"] == "answer"
+    assert read(ledger) == state
+    run(cases, manifest(cases), approval, transport, phase="remaining", mode="mock")
+    assert len(transport.calls) == 6
+
+
+@pytest.mark.parametrize("field", ["summary", "explanation"])
+def test_abstention_cannot_smuggle_uncited_claims(cases, tmp_path, field):
+    from evals.wiki_live import INSUFFICIENT_EVIDENCE
+    obj = copy.deepcopy(INSUFFICIENT_EVIDENCE)
+    claim = " 스택은 항상 작업을 자동으로 복구합니다."
+    if field == "summary":
+        obj[field][0] += claim
+    else:
+        obj[field] += claim
+    approval, _ = prepared(cases, tmp_path)
+    transport = Scripted([response(body=json.dumps(obj))])
+    state = run(cases, manifest(cases), approval, transport, mode="mock")
+    assert state["slots"]["WDEV01:U"]["status"] == "error"
+    with pytest.raises(DatasetError, match="halted_manual_recovery_required"):
+        run(cases, manifest(cases), approval, transport, phase="remaining", mode="mock")
+    assert len(transport.calls) == 1
+
+
+def test_uncited_normal_answer_still_rejected():
+    from evals.wiki_live import _validate_wiki
+    obj = json.loads(response()["output"]["message"]["content"][0]["text"])
+    obj["source_ids"] = []
+    obj["explanation"] = obj["explanation"].replace("[1]", "").replace("[2]", "")
+    with pytest.raises(DatasetError, match="citation_required"):
+        _validate_wiki(json.dumps(obj), {"1": "synthetic"})
+
+
+def test_pre_abstention_approval_rejected_before_call(cases, tmp_path, monkeypatch):
+    import evals.wiki_live as wiki
+    with monkeypatch.context() as old:
+        old.setattr(wiki, "VERSION", "wiki-live-v7-evidence")
+        old.setattr(wiki, "PROMPT", "Previous approved system prompt")
+        approval, _ = prepared(cases, tmp_path)
+    transport = Scripted()
+    with pytest.raises(DatasetError, match="approval_mismatch"):
+        run(cases, manifest(cases), approval, transport, mode="mock")
+    assert transport.calls == []

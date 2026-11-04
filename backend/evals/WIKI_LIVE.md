@@ -59,7 +59,35 @@ human_approved가 false이면 정식 결과는 pending을 유지한다.
 실제 출력·원장·사용량·검수 기록은 비공개 경로에 보관한다.
 공개 PR에는 합성 테스트와 공개 가능한 검증 요약만 포함한다.
 
-## Grounding prompt v6
+## Current contract: v8 abstention (quality unverified)
+
+`wiki-live-v8-abstention` adds one exact, claim-free insufficient-evidence response
+to the system prompt. With nonempty but unrelated sources, the model can return
+the `INSUFFICIENT_EVIDENCE` JSON in `wiki_live.py` with no citations. JSON key order
+and serialization whitespace may differ; the parsed values must match exactly.
+Arbitrary uncited prose, including a technical claim appended to that response,
+still fails validation. A partial-evidence answer must keep its supported content
+and citations; this exception is only for wholly unsupported explanations.
+
+The runner records `response_kind=insufficient_evidence` and mechanical `status=ok`,
+retains the attempt, usage and scheduled slot, and can continue to the remaining
+approved slots. It does not infer that the sources really are unrelated. Human
+review must check whether abstention was justified, including unnecessary refusal
+when useful evidence exists. Existing six-case answer scoring is unchanged: no
+review remains pending, and a refusal does not satisfy required concepts or
+conditions. Do not count format acceptance as teaching-quality success or remove
+abstentions from the denominator. The independent probes still require reviewed
+inputs and a separately agreed semantic evaluation contract before live execution.
+
+Empty sources remain blocked by live preflight. This change does not implement a
+production fallback or alter the sealed baseline. The examples, output schema and
+model settings stay fixed, but the system prompt and runner version change; old
+approvals cannot execute v8. Preserve old records. v6/v7 evidence cannot establish
+v8 quality, and the v7-only comparison protocol below is historical. Freeze and
+authorize a new version-specific execution/comparison plan before any paid call.
+Offline regression verifies this contract, not model adherence or quality.
+
+## Grounding prompt v6 (historical)
 
 `wiki-live-v6-grounding` sends one independent source/output demonstration
 (stack) before the actual final user payload. The
