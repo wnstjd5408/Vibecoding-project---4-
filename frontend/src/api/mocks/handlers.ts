@@ -154,9 +154,10 @@ const routes: Route[] = [
     method: 'GET',
     pattern: /^\/api\/notes\/(\d+)$/,
     handle: (_request, [noteId]) => {
-      // 운영자가 노트 화면에서 만들거나 고친 노트는 그 저장소의 내용을 준다.
+      // 운영자가 노트 화면에서 만들거나 고친 노트는 그 저장소의 내용을 준다. 비공개로 바꾸거나 삭제한 노트는 예시 노트라도 404다.
       const stored = readNoteForMock(Number(noteId))
-      if (stored) return { status: 200, body: stored }
+      if (stored?.kind === 'hidden') return notFound()
+      if (stored?.kind === 'found') return { status: 200, body: stored.body }
       if (noteId === '12') return { status: 200, body: RICH_NOTE }
       if (noteId !== '11') return notFound()
       return {

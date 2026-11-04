@@ -8,7 +8,7 @@ import { Button, StateMessage, TextField } from '../../components/index.ts'
 import { operatorPaths } from '../../routes/paths.ts'
 import { useOperatorApi } from '../useOperatorApi.ts'
 import { NoteDeleteDialog } from './NoteDeleteDialog.tsx'
-import { deleteNote, getNote, saveNote } from './notesApi.ts'
+import { BODY_MAX, TITLE_MAX, deleteNote, getNote, saveNote } from './notesApi.ts'
 import type { OperatorNote } from './notesApi.ts'
 import styles from './Notes.module.css'
 
@@ -133,12 +133,13 @@ function NoteForm({ note, onReload }: NoteFormProps) {
 
   return (
     <form className={styles.formCard} onSubmit={handleSubmit}>
-      <TextField label="제목" required maxLength={200} value={title} onChange={(event) => setTitle(event.target.value)} />
+      <TextField label="제목" required maxLength={TITLE_MAX} value={title} onChange={(event) => setTitle(event.target.value)} />
       <TextField label="학습일" type="date" required value={studiedOn} onChange={(event) => setStudiedOn(event.target.value)} />
       <TextField
         label="본문"
         multiline
         required
+        maxLength={BODY_MAX}
         className={styles.body}
         hint={MESSAGES.imageHint}
         value={body}
