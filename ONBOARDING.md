@@ -35,6 +35,23 @@ Claude Code로 바이브코딩하는 팀원을 위한 안내다. 사람과 Claud
 
 PR 하나에는 티켓 하나만 담는다. 브랜치 이름, PR 제목, 본문 형식이 틀리면 `Check PR metadata` 검사가 실패한다. 이 검사가 통과했다고 기능이 맞는 것은 아니다.
 
+## 로컬 DB로 검증하기
+
+기본 환경은 Supabase local(Docker)이다. 직접 설치한 로컬 PostgreSQL 17로도 검증할 수 있다. 다만 확인할 수 있는 범위가 다르므로 작업에 맞게 고른다.
+
+| 검증할 것 | Supabase local | 로컬 PostgreSQL 17 |
+|---|---|---|
+| 마이그레이션 적용 | 가능 | 가능. 역할 3개(`anon`·`authenticated`·`service_role`)와 `auth.users` 빈 표가 필요하다 |
+| SQL 함수, 동시성, 테이블 권한 | 가능 | 가능 |
+| 로그인, 계정 발급(Auth), REST 호출 | 가능 | 불가 |
+| FastAPI를 실제 DB에 연결해 API 호출 | 가능 | 불가 |
+
+- FastAPI는 Supabase Auth·REST 주소로 DB에 접근한다(`backend/app/supabase.py`). 로그인과 API 호출 확인은 Supabase local에서만 할 수 있다.
+- 로컬 PostgreSQL을 준비하는 방법은 [백엔드 로컬 가이드](docs/backend-local-guide.md) 6절의 "로컬 PostgreSQL로 SQL만 확인할 때"를 따른다. Supabase local 설정은 같은 문서 1~5절이다.
+- PR의 "AC별 검증 결과"에 사용한 환경을 적는다. 예: `검증: 로컬 PostgreSQL 17에서 마이그레이션 적용과 SQL 시험 통과`.
+- 로컬 PostgreSQL만 쓴 AC에는 "Auth·REST·API 호출 미검증"을 함께 적는다. 이 부분을 통과로 쓰지 않는다.
+- AI의 `test-verifier`는 Supabase local이 떠 있는지만 확인하고 직접 띄우지 않는다. 꺼져 있으면 통합 시험은 미검증으로 보고된다.
+
 ## Claude에게 줄 시작 문장
 
 그대로 복사해서 번호만 바꾼다.
@@ -93,6 +110,7 @@ Linear 티켓 MEG-<번호>를 읽고 작업해 줘.
 |---|---|
 | [README.md](README.md) | 설치·실행·프런트 API 호출 사용법·기여 규칙 |
 | [AGENTS.md](AGENTS.md) | Claude가 지킬 공통 규칙 |
+| [docs/backend-local-guide.md](docs/backend-local-guide.md) | 백엔드 로컬 환경(Supabase local, 로컬 PostgreSQL) 설정과 합성 테스트 데이터 |
 | [docs/decisions.md](docs/decisions.md) | 지금까지의 제품·기술 결정 |
 | [docs/architecture.md](docs/architecture.md) | 기술 구조 공개 요약 |
 | Linear MEG-27 첨부 문서 | API spec v0.2, 사용자 흐름 |

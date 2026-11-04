@@ -114,14 +114,73 @@ Secure 쿠키를 그대로 시험하려고 `check`의 앱 주소는 `https://loc
 
 행 수가 다르다는 오류가 나오면 API 시험으로 데이터가 바뀌었을 수 있습니다. fixture로 기준 상태를 복원하고 check를 다시 실행하세요. 이 점검은 초기 상태 확인용이며, 이미 작성한 제품 API의 기능 시험을 대신하지 않습니다.
 
-AI 원장 SQL 함수(한도 예약·정산, 퀴즈 선점, 설명 무효화) 시험은 로컬 Supabase가 아니라 네트워크를 끈 일회용 PostgreSQL 컨테이너에서 돕니다. 운영 DB 주소는 받지 않습니다. 컨테이너 이름을 넣지 않으면 건너뜁니다.
+### 로컬 PostgreSQL로 SQL만 확인할 때
+
+마이그레이션과 SQL 함수는 Supabase local 없이 일반 PostgreSQL 17에서도 확인할 수 있습니다. 저장소의 SQL 시험(`backend/tests/integration/*_sql.py`)이 이 방식입니다. 한도 예약·정산, 퀴즈 선점, 설명 무효화, 용어 관리, 노트 저장 같은 SQL 함수가 여기에 들어갑니다.
+
+다만 일반 PostgreSQL에는 Supabase Auth와 REST가 없습니다. 로그인, 계정 발급, API 호출은 확인할 수 없으므로 위의 `check`를 대신하지 못합니다. 두 환경의 확인 범위는 [ONBOARDING.md](../ONBOARDING.md)의 "로컬 DB로 검증하기" 표에 있습니다.
+
+SQL 시험은 운영 DB 주소를 받지 않습니다. 환경변수에 컨테이너 이름을 넣지 않으면 건너뜁니다.
+
+**방법 1. 일회용 컨테이너 (저장소의 SQL 시험을 그대로 실행)**
+
+시험은 컨테이너가 `--network none`이 아니면 시작하지 않습니다.
 
 ```powershell
-docker run -d --rm --name meg86-sql-test --network none -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17
-$env:AI_LEDGER_TEST_CONTAINER = "meg86-sql-test"
-uv run pytest tests/integration/test_ai_ledger_sql.py -q
-docker stop meg86-sql-test
+docker run -d --rm --name sql-test --network none -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17
+$env:AI_LEDGER_TEST_CONTAINER = "sql-test"
+$env:GLOSSARY_SQL_TEST_CONTAINER = "sql-test"
+$env:NOTION_IMPORT_TEST_CONTAINER = "sql-test"
+$env:EMPHASIS_TEST_CONTAINER = "sql-test"
+$env:NOTE_WRITE_TEST_CONTAINER = "sql-test"
+uv run pytest tests/integration -q
+docker stop sql-test
 ```
+
+시험 하나만 돌리려면 해당 파일의 환경변수 하나만 설정하면 됩니다. 예를 들어 AI 원장 시험은 `AI_LEDGER_TEST_CONTAINER`만 설정하고 `tests/integration/test_ai_ledger_sql.py`를 실행합니다.
+
+**방법 2. 직접 설치한 PostgreSQL 17 (psql로 직접 확인)**
+
+저장소의 SQL 시험은 `docker exec`로 컨테이너에 접속하므로 직접 설치한 PostgreSQL에서는 그대로 돌지 않습니다. 대신 같은 준비를 psql로 해서 마이그레이션 적용과 권한을 확인합니다. 이 절차의 SQL은 방법 1의 시험이 쓰는 것과 같지만, 직접 설치본에서는 아직 시험하지 않았습니다. 개인 PC의 로컬 서버에만 실행하고 원격 주소에는 실행하지 마세요.
+
+1. 시험 전용 DB를 만듭니다.
+
+   ```powershell
+   psql -U postgres -c "create database meg_sql_check"
+   ```
+
+2. Supabase가 기본으로 제공하는 역할 3개를 만듭니다. 서버 전체에 만들어지며, 이미 있으면 `already exists` 오류가 나므로 건너뜁니다.
+
+   ```powershell
+   psql -U postgres -c "create role anon" -c "create role authenticated" -c "create role service_role bypassrls"
+   ```
+
+3. 마이그레이션이 참조하는 `auth.users`를 빈 표로 만듭니다. `id` 열만 있는 단순한 표라서 Supabase Auth의 실제 열·트리거와 다릅니다.
+
+   ```powershell
+   psql -U postgres -d meg_sql_check -c "create schema auth" -c "create table auth.users (id uuid primary key)" -c "grant usage on schema public to service_role"
+   ```
+
+4. 저장소 루트에서 마이그레이션을 파일명 순서대로 적용합니다. 오류가 나면 거기서 멈춥니다.
+
+   ```powershell
+   Get-ChildItem supabase\migrations\*.sql | Sort-Object Name | ForEach-Object { psql -U postgres -d meg_sql_check -v ON_ERROR_STOP=1 -q -f $_.FullName }
+   ```
+
+5. 권한을 확인합니다. `anon`은 `permission denied for table profiles`로 거부되고, `service_role`은 `0`을 반환하면 정상입니다.
+
+   ```powershell
+   psql -U postgres -d meg_sql_check -c "set role anon; select count(*) from public.profiles"
+   psql -U postgres -d meg_sql_check -c "set role service_role; select count(*) from public.profiles"
+   ```
+
+6. 끝나면 시험 DB를 지웁니다.
+
+   ```powershell
+   psql -U postgres -c "drop database meg_sql_check"
+   ```
+
+일반 PostgreSQL로 확인한 결과는 PR에 "로컬 PostgreSQL 17" 환경으로 적고, Auth·REST·API 호출은 미검증이라고 함께 남기세요.
 
 ## 7. 서버와 화면 실행
 
