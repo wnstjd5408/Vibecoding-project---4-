@@ -186,6 +186,9 @@ def deploy(env, config, api, sleep=time.sleep, monotonic=time.monotonic):
             require(current_head() == sha,
                     "Deployment became Ready after staging advanced; do not accept it as the current staging version.")
             record(env, "READY — runtime smoke remains a separate check", deployment)
+            if env.get("GITHUB_OUTPUT"):
+                with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                    output.write(f"deployment_id={deployment_id(deployment)}\n")
             return
         require(ready in ("INITIALIZING", "QUEUED", "BUILDING"),
                 "Deployment failed, was canceled/blocked, or returned unknown state.")
