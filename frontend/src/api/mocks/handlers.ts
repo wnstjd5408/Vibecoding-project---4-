@@ -6,6 +6,7 @@ import { getMockSession, setMockSession } from './session.ts'
 import { adminReportRoutes } from './adminReportMocks.ts'
 export type MockRequest = { method: string; path: string; query: URLSearchParams; body: unknown }
 export type MockResponse = { status: number; body?: unknown }
+import { adminGlossaryRoutes, readOperatorTerm } from './adminGlossaryMocks.ts'
 
 export type Route = {
   method: string
@@ -133,6 +134,7 @@ const routes: Route[] = [
       return { status: 200, body: { user: { role: account.role, display_name: account.display_name } } }
     },
   },
+  ...adminGlossaryRoutes,
   // E02 로그아웃. 세션이 없어도 204다.
   {
     method: 'POST',
@@ -200,6 +202,9 @@ const routes: Route[] = [
     method: 'GET',
     pattern: /^\/api\/glossary\/(\d+)$/,
     handle: (_request, [termId]) => {
+      // 운영자가 용어 사전 화면(E19~E23 가짜 응답)에서 만든 용어는 그 저장소의 내용을 준다.
+      const operatorTerm = readOperatorTerm(Number(termId))
+      if (operatorTerm) return { status: 200, body: operatorTerm }
       if (termId !== '7') return notFound()
       const body = {
         term: { id: 7, key: 'exampleterm', label: 'ExampleTerm' },

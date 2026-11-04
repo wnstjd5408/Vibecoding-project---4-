@@ -14,7 +14,13 @@
   이스케이프해 저장하므로 용어 `A*`는 본문의 `A` + 백슬래시 + `*`와 일치한다. 위치는 이스케이프 백슬래시를 포함한
   원문 구간이다(원문을 자른 뒤 이스케이프를 풀면 용어 글자가 된다). 코드(인라인 코드, 코드 블록) 안의 백슬래시는
   CommonMark처럼 글자 그대로 둔다. 가져오기도 코드는 이스케이프하지 않고 저장한다.
-- 한계: 강조 표시 `*`와 글자 `*`를 구분하지 않는다(`**A**`에서 용어 `A*`가 일치할 수 있다). 마크다운 파서가 필요하다.
+- 강조 표시 `*`(마크다운 굵게·기울임의 구분 문자)는 화면에 보이지 않는 글자라 찾지 않는다(MEG-143). CommonMark의 강조 규칙
+  (left/right-flanking, 열고 닫는 짝 맞추기, 3의 배수 규칙) 중 `*`만 따라 짝이 맞은 구분 문자를 숨김으로 표시한다.
+  그래서 `**A**`에서 용어 `A*`는 일치하지 않고 짧은 용어 `A`가 일치한다. 짝이 없는 `*`(`2 * 3`, `A* 설명`),
+  백슬래시로 이스케이프된 `*`, 코드 안의 `*`는 화면에 보이는 글자라 그대로 찾는다.
+- 한계: `_` 강조는 다루지 않는다. 강조는 줄 단위로 짝을 맞춘다(줄바꿈 하나로도 블록이 바뀐다는 위 규칙과 같다). 줄을 넘는
+  강조(`**A` 줄바꿈 `B**`)는 짝이 맞지 않아 글자로 남는다. 링크 글자 안의 중첩·`<em>` 같은 HTML은 다루지 않는다.
+  한 줄에서 짝을 찾는 거꾸로 훑기는 가까운 여는 묶음 100개까지만 본다(그보다 먼 짝은 글자로 남는다).
 """
 
 import bisect
@@ -259,11 +265,100 @@ def _mask_code_spans(text: str, mask: bytearray) -> None:
         index = candidates[later] + 1
 
 
+# 닫는 `*` 묶음이 짝을 찾으려고 거꾸로 훑는 여는 묶음의 최대 개수. 이보다 먼 묶음과는 짝을 짓지 않는다(글자로 남는다).
+_EMPHASIS_LOOKBACK = 100
+
+
+def _is_space(char: str) -> bool:
+    # 줄 처음·끝(빈 문자열)은 공백으로 본다(CommonMark).
+    return char == "" or char.isspace()
+
+
+def _is_punctuation(char: str) -> bool:
+    # CommonMark 0.31: 유니코드 P(문장부호)·S(기호) 범주.
+    return char != "" and unicodedata.category(char)[0] in "PS"
+
+
+def _emphasis_delimiters(text: str, skip) -> list[int]:
+    """`*` 강조의 여는·닫는 구분 문자로 짝이 맞은 글자의 위치를 돌려준다(CommonMark process emphasis의 `*` 부분).
+
+    줄마다 따로 짝을 맞춘다. skip(i)가 참인 글자(이스케이프됐거나 코드·숨김 구간 안)는 구분 문자가 될 수 없고 줄 안의
+    `*` 묶음을 끊는다. 짝이 없는 `*`는 돌려주지 않는다(화면에 글자로 보인다).
+    """
+    marks: list[int] = []
+    line_start = 0
+    while line_start <= len(text):
+        line_end = text.find("\n", line_start)
+        line_end = len(text) if line_end == -1 else line_end
+        if "*" in text[line_start:line_end]:
+            marks.extend(_line_emphasis_delimiters(text, line_start, line_end, skip))
+        line_start = line_end + 1
+    return marks
+
+
+def _line_emphasis_delimiters(text: str, start: int, end: int, skip) -> list[int]:
+    # 1. `*` 묶음을 모으고 열 수 있는지(left-flanking)·닫을 수 있는지(right-flanking)를 정한다.
+    # [시작, 처음 길이, 남은 길이, 열 수 있음, 닫을 수 있음, 닫는 쪽으로 왼쪽부터 쓴 수, 여는 쪽으로 오른쪽부터 쓴 수]
+    # 한 묶음은 먼저 닫는 쪽(왼쪽 글자부터)으로 쓰이고 남은 글자가 나중에 여는 쪽(오른쪽 글자부터)으로 쓰일 수 있다(`**B***A*`의 `***`).
+    runs: list[list] = []
+    index = start
+    while index < end:
+        if text[index] != "*" or skip(index):
+            index += 1
+            continue
+        run_end = index
+        while run_end < end and text[run_end] == "*" and not skip(run_end):
+            run_end += 1
+        before = text[index - 1] if index > start else ""
+        after = text[run_end] if run_end < end else ""
+        before_space, before_punct = _is_space(before), _is_punctuation(before)
+        after_space, after_punct = _is_space(after), _is_punctuation(after)
+        left = not after_space and (not after_punct or before_space or before_punct)
+        right = not before_space and (not before_punct or after_space or after_punct)
+        runs.append([index, run_end - index, run_end - index, left, right, 0, 0])
+        index = run_end
+
+    # 2. 닫는 묶음마다 거꾸로 올라가며 열 수 있는 묶음과 짝을 짓는다. 짝 사이의 묶음은 글자로 남는다.
+    marks: list[int] = []
+    openers: list[list] = []
+    for closer in runs:
+        while closer[4] and closer[2] > 0:
+            found = None
+            # 한 줄에 짝이 안 맞는 묶음이 아주 많을 때 제곱으로 느려지지 않도록 가까운 _EMPHASIS_LOOKBACK개만 본다.
+            for position in range(len(openers) - 1, max(len(openers) - _EMPHASIS_LOOKBACK, 0) - 1, -1):
+                opener = openers[position]
+                # 3의 배수 규칙: 한쪽이 열고 닫을 수 있을 때 길이의 합이 3의 배수이면(둘 다 3의 배수가 아니면) 짝이 아니다.
+                # 길이는 앞서 일부를 쓰고 **남은** 길이다(화면이 쓰는 파서 mdast/micromark가 그렇게 센다. commonmark.js는 처음 길이를 센다).
+                if (opener[4] or closer[3]) and (opener[2] + closer[2]) % 3 == 0 and not (opener[2] % 3 == 0 and closer[2] % 3 == 0):
+                    continue
+                found = position
+                break
+            if found is None:
+                break
+            opener = openers[found]
+            use = 2 if opener[2] >= 2 and closer[2] >= 2 else 1
+            # 여는 묶음은 오른쪽 글자부터(이미 오른쪽에서 쓴 만큼 건너뛰고), 닫는 묶음은 왼쪽 글자부터(이미 왼쪽에서 쓴 만큼 건너뛰고) 쓴다.
+            opener_end = opener[0] + opener[1] - opener[6]
+            marks.extend(range(opener_end - use, opener_end))
+            closer_begin = closer[0] + closer[5]
+            marks.extend(range(closer_begin, closer_begin + use))
+            opener[6] += use
+            closer[5] += use
+            opener[2] -= use
+            closer[2] -= use
+            del openers[found + 1 :]
+            if opener[2] == 0:
+                del openers[found]
+        if closer[3] and closer[2] > 0:
+            openers.append(closer)
+    return marks
+
+
 def _search_text(text: str) -> tuple[str, list[int], bytearray]:
     """찾기용 글, 찾기용 위치 → text 위치 대응(길이 + 1개), 보이지 않는 구간 표시를 만든다.
 
     1. 줄 안의 공백 묶음을 공백 하나로 줄인다.
-    2. 보이지 않는 구간(_HIDDEN, _LINK_DESTINATION)을 이스케이프가 남은 글에서 표시한다.
+    2. 보이지 않는 구간(_HIDDEN, _LINK_DESTINATION)과 짝이 맞은 `*` 강조 구분 문자를 이스케이프가 남은 글에서 표시한다.
     3. 코드 밖의 백슬래시 이스케이프를 풀어 화면에 보이는 글자로 맞춘다. 풀린 글자의 위치는 백슬래시 위치로
        대응시켜 용어가 이스케이프된 글자로 시작해도 원문 구간이 백슬래시부터 시작한다.
     """
@@ -287,12 +382,21 @@ def _search_text(text: str) -> tuple[str, list[int], bytearray]:
     for match in _LINK_DESTINATION.finditer(collapsed):
         hidden[match.start(1) : match.end(1)] = b"\x01" * (match.end(1) - match.start(1))
 
+    # 코드 판정은 들여쓰기·줄 끝이 그대로인 원래 글에서 한다.
+    code: bytearray | None = None
+    if "*" in collapsed:
+        code = _code_mask(text)
+        for index in _emphasis_delimiters(
+            collapsed, lambda i: bool(hidden[i]) or bool(code[positions[i]]) or _is_escaped(collapsed, i)
+        ):
+            hidden[index] = 1
+
     # 대부분의 노트에는 백슬래시가 없다. 그때는 이스케이프를 풀 것이 없어 그대로 쓴다.
     if "\\" not in collapsed:
         return collapsed, positions, hidden
 
-    # 코드 판정은 들여쓰기·줄 끝이 그대로인 원래 글에서 한다.
-    code = _code_mask(text)
+    if code is None:
+        code = _code_mask(text)
     out: list[str] = []
     out_positions: list[int] = []
     out_hidden = bytearray()

@@ -18,9 +18,35 @@ def escaped(text: str) -> str:
     return re.sub(r"([\\`*_{}\[\]<>!|~])", r"\\\1", text)
 
 
+def emphasize(text: str, marker: str) -> str:
+    """Keep whitespace outside delimiters, including empty/whitespace-only runs.
+
+    Work per line: E05 deliberately matches emphasis on a single line only.
+    No whitespace is removed or normalized here.
+    """
+    return "".join(
+        part if not part.strip() else
+        part[:len(part) - len(part.lstrip())] + marker + part.strip() + marker
+        + part[len(part.rstrip()):]
+        for part in text.splitlines(keepends=True)
+    )
+
+
 def rich_text(items: list) -> str:
     chunks = []
+    # Notion can split one formatted run (e.g. by color). Joining identical
+    # supported styles avoids adjacent ** delimiters becoming literal stars.
+    runs = []
     for item in items:
+        annotation = item.get("annotations", {})
+        signature = tuple(bool(annotation.get(k)) for k in ("bold", "italic", "strikethrough", "code"))
+        link = item.get("text", {}).get("link") or {}
+        if runs and not signature[-1] and runs[-1][0] == (signature, link):
+            runs[-1][1]["plain_text"] += plain([item])
+        else:
+            runs.append(((signature, link), {"plain_text": plain([item]),
+                         "annotations": annotation, "text": {"link": link}}))
+    for _, item in runs:
         raw = plain([item])
         text = escaped(raw)
         annotation = item.get("annotations", {})
@@ -32,7 +58,7 @@ def rich_text(items: list) -> str:
         else:
             for key, marker in (("bold", "**"), ("italic", "*"), ("strikethrough", "~~")):
                 if annotation.get(key):
-                    text = marker + text + marker
+                    text = emphasize(text, marker)
         link = item.get("text", {}).get("link") or {}
         url = link.get("url", "")
         if urlsplit(url).scheme in {"https", "http"}:

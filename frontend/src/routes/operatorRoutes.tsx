@@ -1,5 +1,7 @@
 import AccountsPage from '../operator/accounts/AccountsPage.tsx'
+import OperatorMyInfoPage from '../operator/OperatorMyInfoPage.tsx'
 import type { RouteObject } from 'react-router'
+import GlossaryPage from '../operator/glossary/GlossaryPage.tsx'
 import Placeholder from '../pages/Placeholder.tsx'
 import CorrectReportPage from '../operator/reports/CorrectReportPage.tsx'
 import ReportsPage from '../operator/reports/ReportsPage.tsx'
@@ -12,10 +14,9 @@ export const operatorRoutes: RouteObject[] = [
     path: operatorPaths.home,
     element: <Placeholder screenId="F5-1a" title="운영자 노트 목록" ticket="운영자 화면 티켓(MEG-78 셸 이후)" />,
   },
-  {
-    path: operatorPaths.glossary,
-    element: <Placeholder screenId="F5-1c" title="용어 사전" ticket="운영자 화면 티켓(MEG-78 셸 이후)" />,
-  },
+  { path: operatorPaths.glossary, element: <GlossaryPage /> },
+  { path: operatorPaths.glossaryNew, element: <GlossaryPage /> },
+  { path: operatorPaths.glossaryTerm, element: <GlossaryPage /> },
   {
     path: operatorPaths.reports,
     element: <ReportsPage />,
@@ -27,5 +28,9 @@ export const operatorRoutes: RouteObject[] = [
   {
     path: operatorPaths.accounts,
     element: <AccountsPage />,
+  },
+  {
+    path: operatorPaths.myInfo,
+    element: <OperatorMyInfoPage />,
   },
 ]
