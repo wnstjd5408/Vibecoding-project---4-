@@ -1,0 +1,50 @@
+name: Staging recovery verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_id:
+        description: Exact existing staging CD deployment ID
+        required: true
+        type: string
+      expected_sha:
+        description: Full 40-character SHA of the recovery candidate
+        required: true
+        type: string
+      check_staging_alias:
+        description: Require the staging alias to point to this deployment (after manual recovery)
+        required: true
+        default: false
+        type: boolean
+
+permissions: {}
+
+jobs:
+  verify:
+    if: github.ref == 'refs/heads/staging' && vars.STAGING_RECOVERY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: staging-cd
+    concurrency:
+      group: staging-cd
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify selected recovery deployment without changing traffic
+        run: python3 .github/scripts/staging_recovery.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_TEAM_ID: ${{ vars.VERCEL_TEAM_ID }}
+          RECOVERY_DEPLOYMENT_ID: ${{ inputs.deployment_id }}
+          RECOVERY_SHA: ${{ inputs.expected_sha }}
+          RECOVERY_CHECK_ALIAS: ${{ inputs.check_staging_alias }}
+          RECOVERY_STAGING_ALIAS: ${{ vars.STAGING_RECOVERY_ALIAS }}
