@@ -17,6 +17,11 @@
 /* 그림을 화면 폭에 맞춰 줄이지 않는다. 넓은 그림은 글자를 읽을 수 있는 크기를 지키고 상자 안에서 가로로 스크롤한다. */
 .diagram img { display: block; max-width: none; height: auto; margin-inline: auto; }
 .diagramPending { margin: 0 0 var(--space-4); padding: var(--space-3); border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); color: var(--ink-muted); font-size: 14px; line-height: 22px; }
+/* Mermaid 보기 방식(라디오 그룹): 과목 칩과 같은 알약 모양, 터치 목표 44px 이상, 선택은 먹색 채움과 aria-checked로 알린다. */
+.modeGroup { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 0 var(--space-2); }
+.modeOption { min-height: 44px; padding: 0 var(--space-4); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: transparent; color: var(--ink); font: inherit; font-size: 14px; line-height: 22px; font-weight: 500; }
+.modeOption[aria-checked="true"] { border-color: var(--ink); background: var(--ink); color: var(--surface-100); font-weight: 600; }
+.modeOption:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .tableScroll { max-width: 100%; overflow-x: auto; margin-bottom: var(--space-4); }
 .body table { width: 100%; border-collapse: collapse; }
 .body th, .body td { min-width: 6rem; padding: var(--space-2) var(--space-3); border: 1px solid var(--surface-300); vertical-align: top; }

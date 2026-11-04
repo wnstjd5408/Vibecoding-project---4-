@@ -2209,10 +2209,11 @@ test('AC-1 한 노트의 mermaid 블록 여러 개가 모두 그려진다', asyn
   await expect(diagram(page).nth(1)).toBeVisible()
 })
 
-test('AC-2 문법이 틀린 mermaid 블록은 노트를 깨지 않고 원래 코드 블록으로 보인다', async ({ page }) => {
+test('AC-2 문법이 틀린 mermaid 블록은 노트를 깨지 않고, 기본(다이어그램만)에서는 오류 안내를 보이고 원문은 숨긴다', async ({ page }) => {
   await openMermaidNote(page, '앞 문단\n\n```mermaid\ngraph TD\n  A[ --> \n```\n\n뒤 문단')
   const body = page.locator('[data-note-body]')
-  await expect(body.locator('pre')).toContainText('graph TD')
+  await expect(body.getByText('Mermaid 문법 오류로 다이어그램을 표시할 수 없어요.')).toBeVisible() // MEG-167
+  await expect(body.locator('pre')).toHaveCount(0)
   await expect(diagram(page)).toHaveCount(0)
   await expect(body.getByText('뒤 문단')).toBeVisible()
   // mermaid가 오류를 그리며 문서에 남기는 요소가 없다
@@ -2223,8 +2224,8 @@ test('AC-3 mermaid 라벨에 넣은 HTML·스크립트는 실행되지 않는다
   const injected = '```mermaid\ngraph TD\n  A["<img src=x onerror=window.__pwned=1>"] --> B["<script>window.__pwned=2</script>"]\n  click A call window.__pwned()\n```'
   await openMermaidNote(page, injected)
   const body = page.locator('[data-note-body]')
-  // 그림으로 그려지거나 코드 블록으로 돌아가거나 어느 쪽이든, 이 둘 중 하나는 보여야 한다
-  await expect(diagram(page).or(body.locator('pre'))).toBeVisible()
+  // 그림으로 그려지거나 오류 안내로 바뀌거나 어느 쪽이든, 이 둘 중 하나는 보여야 한다
+  await expect(diagram(page).or(body.getByText('Mermaid 문법 오류로 다이어그램을 표시할 수 없어요.'))).toBeVisible()
   await page.waitForTimeout(500)
   expect(await page.evaluate(() => (window as unknown as { __pwned?: unknown }).__pwned)).toBeUndefined()
   expect(await page.evaluate(() => document.querySelectorAll('img[src="x"]').length)).toBe(0)
@@ -2791,4 +2792,168 @@ test('MEG-166 같은 계정이라도 로그아웃 후 다시 로그인하면 이
   state.release()
   await page.waitForTimeout(400)
   await expect(favoriteOff(page)).toHaveAttribute('aria-pressed', 'false') // 이전 세션의 응답으로 바뀌지 않는다
+})
+
+// ---- MEG-167 노트의 Mermaid 블록에 코드·다이어그램 보기 모드를 추가한다. 실제 노트 화면과 합성 HTTP 응답으로 시험한다(STG 검증은 별도). ----
+// 기준: 라디오 그룹(다이어그램만·코드만·둘 다), 기본 다이어그램만, 블록별·저장 없음, 오류 상태에서도 선택 유지.
+const BROKEN = '```mermaid\ngraph TD\n  A[ --> \n```'
+const SYNTAX_ERROR = 'Mermaid 문법 오류로 다이어그램을 표시할 수 없어요.'
+const modeRadio = (scope: Page | Locator, name: string) => scope.getByRole('radio', { name })
+const noteBody = (page: Page) => page.locator('[data-note-body]')
+
+test('MEG-167 기본은 다이어그램만이고 라디오 그룹이 세 보기 방식을 보여 준다', async ({ page }) => {
+  await openMermaidNote(page, `앞 문단\n\n${FLOW}`)
+  const group = page.getByRole('radiogroup', { name: 'Mermaid 보기 방식' })
+  await expect(group.getByRole('radio')).toHaveCount(3)
+  await expect(modeRadio(group, '다이어그램만')).toHaveAttribute('aria-checked', 'true')
+  await expect(modeRadio(group, '코드만')).toHaveAttribute('aria-checked', 'false')
+  await expect(modeRadio(group, '둘 다')).toHaveAttribute('aria-checked', 'false')
+  await expect(diagram(page)).toBeVisible()
+  await expect(noteBody(page).locator('pre')).toHaveCount(0)
+})
+
+test('MEG-167 정상 블록: 세 방식에서 그림과 원문이 방식대로 보이고, 둘 다는 그림이 위·원문이 아래다', async ({ page }) => {
+  await openMermaidNote(page, FLOW)
+  const body = noteBody(page)
+  await modeRadio(page, '코드만').click()
+  await expect(modeRadio(page, '코드만')).toHaveAttribute('aria-checked', 'true')
+  await expect(body.locator('pre')).toContainText('graph TD')
+  await expect(diagram(page)).toHaveCount(0)
+  await modeRadio(page, '둘 다').click()
+  await expect(diagram(page)).toBeVisible()
+  await expect(body.locator('pre')).toContainText('A[시작] --> B[끝]')
+  const image = await diagram(page).boundingBox()
+  const code = await body.locator('pre').boundingBox()
+  expect(image!.y).toBeLessThan(code!.y)
+  await modeRadio(page, '다이어그램만').click()
+  await expect(diagram(page)).toBeVisible()
+  await expect(body.locator('pre')).toHaveCount(0)
+})
+
+test('MEG-167 문법 오류 블록: 다이어그램만 → 코드만 → 둘 다 → 다이어그램만 순서로 안내와 원문이 방식대로 보이고 숨는다', async ({ page }) => {
+  await openMermaidNote(page, `앞 문단\n\n${BROKEN}\n\n뒤 문단`)
+  const body = noteBody(page)
+  const notice = body.getByText(SYNTAX_ERROR)
+  const code = body.locator('pre')
+  // 다이어그램만(기본): 안내 O, 원문 숨김. 선택 그룹은 오류 상태에서도 남아 있다.
+  await expect(notice).toBeVisible()
+  await expect(code).toHaveCount(0)
+  await expect(modeRadio(page, '코드만')).toBeVisible()
+  // 코드만: 원문 O, 안내 없음
+  await modeRadio(page, '코드만').click()
+  await expect(code).toContainText('graph TD')
+  await expect(notice).toHaveCount(0)
+  // 둘 다: 안내 O, 원문 O (안내가 위)
+  await modeRadio(page, '둘 다').click()
+  await expect(notice).toBeVisible()
+  await expect(code).toContainText('graph TD')
+  const noticeBox = await notice.boundingBox()
+  const codeBox = await code.boundingBox()
+  expect(noticeBox!.y).toBeLessThan(codeBox!.y)
+  // 다시 다이어그램만: 안내 O, 원문 숨김
+  await modeRadio(page, '다이어그램만').click()
+  await expect(notice).toBeVisible()
+  await expect(code).toHaveCount(0)
+  await expect(body.getByText('뒤 문단')).toBeVisible()
+})
+
+test('MEG-167 오류 안내는 상태 영역으로 알리고, 원문 코드의 용어 위치 조각(data-src)은 그대로다', async ({ page }) => {
+  await openMermaidNote(page, BROKEN)
+  await expect(noteBody(page).getByRole('status').filter({ hasText: SYNTAX_ERROR })).toBeVisible()
+  await modeRadio(page, '코드만').click()
+  // 코드 블록은 기존 조각(원문 위치 속성)을 그대로 재사용한다
+  expect(await noteBody(page).locator('pre [data-src]').count()).toBeGreaterThan(0)
+})
+
+for (const [name, body] of [['정상', FLOW], ['문법 오류', BROKEN]] as const) {
+  test(`MEG-167 키보드 (${name} 블록): Tab은 선택된 항목 하나만 들어가고 방향키로 고르며 포커스가 그룹에 남는다`, async ({ page }) => {
+    await openMermaidNote(page, body)
+    const diagramOnly = modeRadio(page, '다이어그램만')
+    const codeOnly = modeRadio(page, '코드만')
+    const both = modeRadio(page, '둘 다')
+    // roving tabindex: 선택된 항목만 Tab 순서에 있다
+    await expect(diagramOnly).toHaveAttribute('tabindex', '0')
+    await expect(codeOnly).toHaveAttribute('tabindex', '-1')
+    await expect(both).toHaveAttribute('tabindex', '-1')
+    await diagramOnly.focus()
+    await page.keyboard.press('ArrowRight')
+    await expect(codeOnly).toBeFocused()
+    await expect(codeOnly).toHaveAttribute('aria-checked', 'true')
+    await expect(codeOnly).toHaveAttribute('tabindex', '0')
+    await page.keyboard.press('ArrowDown')
+    await expect(both).toBeFocused()
+    await expect(both).toHaveAttribute('aria-checked', 'true')
+    await page.keyboard.press('ArrowRight') // 끝에서 처음으로 돌아간다
+    await expect(diagramOnly).toBeFocused()
+    await page.keyboard.press('ArrowLeft') // 처음에서 끝으로
+    await expect(both).toBeFocused()
+    await page.keyboard.press('Home')
+    await expect(diagramOnly).toBeFocused()
+    await page.keyboard.press('End')
+    await expect(both).toBeFocused()
+    await page.keyboard.press('ArrowUp')
+    await expect(codeOnly).toBeFocused()
+    // 전환 뒤에도 포커스가 그룹에 남고, Tab은 그룹의 다른 항목으로 들어가지 않는다
+    await page.keyboard.press('Tab')
+    await expect(diagramOnly).not.toBeFocused()
+    await expect(both).not.toBeFocused()
+  })
+}
+
+test('MEG-167 한 블록의 선택은 다른 블록에 영향을 주지 않는다', async ({ page }) => {
+  await openMermaidNote(page, `${FLOW}\n\n사이 문단\n\n\`\`\`mermaid\nsequenceDiagram\n  가->>나: 안녕\n\`\`\``)
+  const groups = page.getByRole('radiogroup', { name: 'Mermaid 보기 방식' })
+  await expect(groups).toHaveCount(2)
+  await modeRadio(groups.first(), '둘 다').click()
+  await expect(modeRadio(groups.first(), '둘 다')).toHaveAttribute('aria-checked', 'true')
+  await expect(modeRadio(groups.nth(1), '다이어그램만')).toHaveAttribute('aria-checked', 'true')
+  await expect(noteBody(page).locator('pre')).toHaveCount(1)
+  await expect(diagram(page)).toHaveCount(2)
+})
+
+test('MEG-167 노트를 옮기면 다른 노트의 같은 위치 블록에 이전 선택이 남지 않고, 새로고침하면 기본값이다', async ({ page }) => {
+  await page.route('**/api/me', (route) => route.fulfill({ json: { authenticated: false } }))
+  await page.route('**/api/notes', (route) => route.fulfill({ json: { subjects: [], notes: [] } }))
+  await page.route(/\/api\/notes\/3[12]$/, (route) => {
+    const id = Number(route.request().url().split('/').pop())
+    return route.fulfill({ json: { ...aiNote(FLOW, 5), id } })
+  })
+  await page.goto('/notes/31')
+  await noteBody(page).waitFor()
+  await modeRadio(page, '코드만').click()
+  await expect(noteBody(page).locator('pre')).toBeVisible()
+  await goInAppQuiz(page, '/notes/32') // 같은 위치에 같은 모양의 블록이 있는 다른 노트
+  await expect(modeRadio(page, '다이어그램만')).toHaveAttribute('aria-checked', 'true')
+  await expect(diagram(page)).toBeVisible()
+  await expect(noteBody(page).locator('pre')).toHaveCount(0)
+  await goInAppQuiz(page, '/notes/31') // 돌아와도 이전 선택을 기억하지 않는다
+  await expect(modeRadio(page, '다이어그램만')).toHaveAttribute('aria-checked', 'true')
+  await modeRadio(page, '둘 다').click()
+  await page.reload()
+  await noteBody(page).waitFor()
+  await expect(modeRadio(page, '다이어그램만')).toHaveAttribute('aria-checked', 'true')
+})
+
+test('MEG-167 코드만에서는 그림을 그리지 않고, 다이어그램만으로 바꿀 때 이미 그린 그림은 다시 불러오지 않는다', async ({ page }) => {
+  const requested: string[] = []
+  page.on('request', (request) => { if (/\/node_modules\/\.vite\/deps\/(mermaid|chunk-)/i.test(request.url()) && /mermaid/i.test(request.url())) requested.push(request.url()) })
+  await openMermaidNote(page, FLOW)
+  await expect(diagram(page)).toBeVisible()
+  const afterFirstDraw = requested.length
+  await modeRadio(page, '코드만').click()
+  await expect(diagram(page)).toHaveCount(0)
+  await modeRadio(page, '다이어그램만').click()
+  await expect(diagram(page)).toBeVisible()
+  expect(requested.length).toBe(afterFirstDraw)
+})
+
+test('MEG-167 선택 상태는 색으로 구분되고 터치 목표가 44px 이상이며 키보드 포커스 링이 보인다', async ({ page }) => {
+  await openMermaidNote(page, FLOW)
+  const selected = modeRadio(page, '다이어그램만')
+  const other = modeRadio(page, '코드만')
+  expect(await selected.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe(await other.evaluate((el) => getComputedStyle(el).backgroundColor))
+  expect(await selected.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44)
+  await selected.focus()
+  await page.keyboard.press('ArrowRight')
+  expect(await other.evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe('none')
 })
