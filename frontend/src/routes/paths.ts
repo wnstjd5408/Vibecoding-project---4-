@@ -18,6 +18,8 @@ export const operatorPaths = {
   glossaryNew: '/admin/glossary/new', // F5-1e 새 용어
   glossaryTerm: '/admin/glossary/:termId', // F5-1c 용어 수정
   reports: '/admin/reports', // F5-2 신고
+  noteNew: '/admin/notes/new', // F5-1d 새 노트
+  noteEdit: '/admin/notes/:noteId', // F5-1b 노트 수정 (F5-1f 삭제 확인은 목록·수정 화면 위에 열린다)
   accounts: '/admin/accounts', // F4-3a 계정 발급
   reportCorrect: '/admin/reports/:reportId/correct', // F5-3 사전에 바른 설명 넣기 (신고 목록의 "사전에 바른 설명 넣기"가 여기로 온다)
 } as const

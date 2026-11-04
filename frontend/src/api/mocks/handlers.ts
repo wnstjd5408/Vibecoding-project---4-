@@ -2,6 +2,7 @@
 // 실제 API가 생기면 해당 엔드포인트의 항목만 지우거나 apiSource를 real로 두면 된다.
 import type { ApiErrorBody, FieldError, NoteListResponse } from '../types.ts'
 import { getMockSession, setMockSession } from './session.ts'
+import { adminNoteRoutes, readNoteForMock, readNoteList } from './adminNoteMocks.ts'
 
 import { adminReportRoutes } from './adminReportMocks.ts'
 export type MockRequest = { method: string; path: string; query: URLSearchParams; body: unknown }
@@ -44,13 +45,13 @@ let favoriteTerm7 = false
 // E10 가짜 응답이 같은 대상의 재신고(200)를 흉내 내려고 기억하는 신고 대상. 새로 고치면 비워진다.
 const reportedTargets = new Set<string>()
 
-const SUBJECTS = [
+export const SUBJECTS = [
   { id: 1, name: '네트워크', note_count: 2 },
   { id: 2, name: '운영체제', note_count: 1 },
   { id: 3, name: '데이터베이스', note_count: 1 },
 ]
 
-const NOTES = [
+export const NOTES = [
   { id: 11, title: '예시 노트 · 요청이 서버까지 가는 길', studied_on: '2026-10-14', subjects: [SUBJECTS[0]], parent_note_id: null },
   { id: 12, title: '예시 노트 · 프로세스가 번갈아 실행되는 이유', studied_on: '2026-10-09', subjects: [SUBJECTS[1]], parent_note_id: null },
   { id: 13, title: '예시 노트 · 인덱스가 조회를 빠르게 하는 방식', studied_on: '2026-10-02', subjects: [SUBJECTS[2]], parent_note_id: null },
@@ -120,6 +121,7 @@ const routes: Route[] = [
   ...adminReportRoutes,
   // 백엔드 상태 확인. 개발 서버 프록시가 실제 백엔드의 /health로 이어 주는 경로와 같은 모양이다.
   { method: 'GET', pattern: /^\/api\/health$/, handle: () => ({ status: 200, body: { status: 'ok' } }) },
+  ...adminNoteRoutes,
   // E01 로그인. 맞지 않으면 사유를 구분하지 않고 401 invalid_credentials다.
   {
     method: 'POST',
@@ -159,14 +161,9 @@ const routes: Route[] = [
   {
     method: 'GET',
     pattern: /^\/api\/notes$/,
+    // 운영자 노트 화면(E16~E18 가짜 응답)에서 만들거나 고친 노트가 목록에도 보이도록 그 저장소의 내용을 준다.
     handle: ({ query }) => {
-      const subjectId = query.get('subject_id')
-      const notes = subjectId ? NOTES.filter((note) => note.subjects.some((s) => String(s.id) === subjectId)) : NOTES
-      const operator = getMockSession() === 'operator'
-      const body: NoteListResponse = {
-        subjects: SUBJECTS,
-        notes: operator ? notes.map((note) => ({ ...note, is_published: true, revision: 1, needs_review: false })) : notes,
-      }
+      const body: NoteListResponse = readNoteList(query.get('subject_id'))
       return { status: 200, body }
     },
   },
@@ -175,6 +172,10 @@ const routes: Route[] = [
     method: 'GET',
     pattern: /^\/api\/notes\/(\d+)$/,
     handle: (_request, [noteId]) => {
+      // 운영자가 노트 화면에서 만들거나 고친 노트는 그 저장소의 내용을 준다. 비공개로 바꾸거나 삭제한 노트는 예시 노트라도 404다.
+      const stored = readNoteForMock(Number(noteId))
+      if (stored?.kind === 'hidden') return notFound()
+      if (stored?.kind === 'found') return { status: 200, body: stored.body }
       if (noteId === '12') return { status: 200, body: RICH_NOTE }
       if (noteId !== '11') return notFound()
       return {
