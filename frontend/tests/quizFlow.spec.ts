@@ -50,6 +50,9 @@ for (const width of [390, 1280]) test(`E12→E13→E14 두 차례와 재접속 �
   await expect(page.getByText('후입선출 구조입니다.')).toBeVisible()
   await page.reload()
   await expect(page.getByText('마지막 값', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '정답과 해설' })).toBeVisible()
+  await expect(page.getByText('마지막에 넣은 값', { exact: true })).toBeVisible()
+  await expect(page.getByText('후입선출 구조입니다.', { exact: true })).toBeVisible()
   for (const seq of [1, 2]) {
     await page.getByRole('button', { name: '꼬리 질문 받기' }).click()
     await expect(page.getByText(`합성 꼬리 질문 ${seq}`)).toBeVisible()
@@ -65,6 +68,24 @@ for (const width of [390, 1280]) test(`E12→E13→E14 두 차례와 재접속 �
   await expect(page.getByRole('textbox')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '꼬리 질문 받기' })).toHaveCount(0)
   expect(state.counts()).toEqual({ answers: 1, generations: 2, saves: 2 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
+// MEG-109 AC-3: 답한 문항이 담긴 E11 응답으로 열면 답 입력 없이 내 답·정답·해설이 그대로 보인다.
+for (const width of [390, 1280]) test(`E11 응답에 답한 문항이 있으면 내 답·정답·해설을 복원한다 (${width}px)`, async ({ page }) => {
+  await fixture(page, true)
+  let answers = 0
+  await page.route('**/api/quiz/items/51/answer', route => { answers++; return route.abort() })
+  await page.setViewportSize({ width, height: 900 })
+  await page.goto('/quiz')
+  await expect(page.getByText('답함', { exact: true })).toBeVisible()
+  await expect(page.getByText('마지막 값', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '정답과 해설' })).toBeVisible()
+  await expect(page.getByText('마지막에 넣은 값', { exact: true })).toBeVisible()
+  await expect(page.getByText('후입선출 구조입니다.', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('문항에 대한 답')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '답 제출', exact: true })).toHaveCount(0)
+  expect(answers).toBe(0)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 
