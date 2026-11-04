@@ -18,6 +18,24 @@ def escaped(text: str) -> str:
     return re.sub(r"([\\`*_{}\[\]<>!|])", r"\\\1", text)
 
 
+FENCE_LANGUAGE = re.compile(r"[a-z0-9+#.-]{1,32}")
+
+
+def fence_language(value) -> str:
+    """Return a safe Markdown fence info string for a Notion code `language`, or "".
+
+    Lowercase, runs of spaces become one hyphen. Only [a-z0-9+#.-] up to 32 chars is
+    allowed, so a value can never add a newline or backtick to the opening fence line.
+    Notion's "plain text", a missing value, or anything else keeps the bare fence.
+    """
+    if not isinstance(value, str):
+        return ""
+    name = re.sub(r" +", "-", value.strip().lower())
+    if name == "plain-text" or not FENCE_LANGUAGE.fullmatch(name):
+        return ""
+    return name
+
+
 def emphasize(text: str, marker: str) -> str:
     """Keep whitespace outside delimiters, including empty/whitespace-only runs.
 
@@ -77,11 +95,15 @@ def convert(notion, page_id: str) -> Content:
     count = 0
     visited = set()
 
-    def list_item(body: str) -> str:
+    def list_item(body: str, lead: int = 2) -> str:
+        # `lead` is the marker's indent. Under a "- " item (content column 2) the child lines already sit at
+        # column 4, so a marker with lead 2 lands 4 columns past the content column and CommonMark reads
+        # the toggle list as an indented code block. Items below "- " / to-do use lead 0 (MEG-208).
         first, *rest = body.split("\n")
-        return "  - " + first + "".join("\n    " + line if line else "\n" for line in rest)
+        pad = " " * (lead + 2)
+        return " " * lead + "- " + first + "".join("\n" + pad + line if line else "\n" for line in rest)
 
-    def walk(parent: str, depth: int = 0, as_list: bool = False) -> str:
+    def walk(parent: str, depth: int = 0, as_list: bool = False, lead: int = 2) -> str:
         nonlocal count
         if depth > 32 or parent in visited:
             raise ValueError("block_limit")
@@ -111,7 +133,7 @@ def convert(notion, page_id: str) -> Content:
             elif kind == "code":
                 code = plain(data.get("rich_text", []))
                 fence = "`" * max(3, max((len(x) + 1 for x in re.findall(r"`+", code)), default=3))
-                lines.append(f"{fence}\n{code}\n{fence}")
+                lines.append(f"{fence}{fence_language(data.get('language'))}\n{code}\n{fence}")
             elif kind == "divider":
                 lines.append("---")
             elif kind == "equation":
@@ -131,7 +153,7 @@ def convert(notion, page_id: str) -> Content:
                     if cells:
                         cells.insert(1, ["---"] * width)
                         table = "\n".join("| " + " | ".join(row) + " |" for row in cells)
-                        lines.append(list_item(table) if as_list else table)
+                        lines.append(list_item(table, lead) if as_list else table)
                     continue
                 prefix = {"heading_1": "# ", "heading_2": "## ", "heading_3": "### ",
                           "bulleted_list_item": "- ", "numbered_list_item": "1. ",
@@ -142,16 +164,26 @@ def convert(notion, page_id: str) -> Content:
                     text = f"**{text}**"
                 lines.append(prefix + text)
                 if block.get("has_children"):
-                    child = walk(block_id, depth + 1, as_list=kind == "toggle")
+                    child = walk(block_id, depth + 1, as_list=kind == "toggle",
+                                 lead=0 if kind in {"bulleted_list_item", "to_do"}
+                                 else 2 if kind == "numbered_list_item" else lead)
                     if kind in {"bulleted_list_item", "numbered_list_item", "to_do"}:
-                        child = "\n".join("    " + line for line in child.splitlines())
+                        # Break only where CommonMark does ("\r\n", "\r", "\n"). splitlines() also breaks on
+                        # \x0b, \x1c,  , \x85 and would change code text that contains them, while a plain
+                        # split("\n") would leave a lone "\r" line break unindented and end the item early.
+                        # Like splitlines(), drop the one empty piece after a final break so a trailing empty
+                        # block keeps its old output.
+                        parts = re.split(r"\r\n?|\n", child)
+                        if parts[-1] == "":
+                            parts.pop()
+                        child = "\n".join("    " + line for line in parts)
                     lines.append(child)
             else:
                 result.skipped += 1
             if as_list and len(lines) > block_start:
                 # One list item per Notion block, not per source line. Fences,
                 # multiline paragraphs and nested children keep their structure.
-                lines[block_start:] = [list_item("\n\n".join(lines[block_start:]))]
+                lines[block_start:] = [list_item("\n\n".join(lines[block_start:]), lead)]
         body = "\n\n".join(lines)
         if len(body) > 200000:
             raise ValueError("body_limit")

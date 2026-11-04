@@ -1,7 +1,8 @@
 """Read-only audit: find stored notes whose Notion `mermaid` code blocks lost their language mark.
 
-MEG-170. The Notion importer (notion_content.convert) writes every code block as a bare
-fence, so a block that Notion marks as `mermaid` is stored without the `mermaid` info string.
+MEG-170. Before MEG-149 the Notion importer (notion_content.convert) wrote every code block as a
+bare fence, so a block that Notion marks as `mermaid` is stored without the `mermaid` info string.
+Notes imported after MEG-149 keep the language and show up here as already marked.
 This tool never writes to Supabase or Notion. It reads stored notes (GET only), re-reads the
 Notion originals, and writes a review package to --out-dir:
 
