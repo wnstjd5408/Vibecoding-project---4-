@@ -17,6 +17,26 @@ npx playwright test -c playwright.notes.config.ts -g 'E11|ready의 문항|퀴즈
 
 퀴즈 전용 시험은 실제 브라우저 fetch 경로에 합성 HTTP 응답을 제공한다. 모바일·PC에서 답 제출, 정답·해설 표시, 꼬리 질문 두 차례 생성·답 저장, 재접속 복원, 중복 제출, 입력 경계, 오류별 안내, 화면 이탈·세션 변경을 확인한다. 실제 DB·Bedrock 성공을 증명하는 시험은 아니다.
 
+## 로컬 실제 백엔드 e2e
+
+위 시험은 합성 HTTP 응답을 쓰므로 실제 백엔드·DB·Auth를 거치지 않는다. 이 절의 시험은 로컬 Supabase, 실제 FastAPI, 실제 로그인 쿠키를 거쳐 E11~E14를 확인한다. Bedrock만 시험용 가짜로 바꾸며 실제 AI는 부르지 않는다(MEG-207).
+
+준비는 한 번만 한다. [백엔드 로컬 가이드](backend-local-guide.md)의 `prepare`, `start`, `fixture`를 `backend/`에서 실행한다. 다른 로컬 환경이 포트를 쓰고 있으면 `prepare --base-port 57320`처럼 비어 있는 번호를 고른다.
+
+실행은 `frontend/`에서 한다.
+
+```sh
+npm run test:e2e:quiz-local
+```
+
+시험이 직접 하는 일은 다음과 같다.
+
+1. 시험마다 `scripts.local_quiz_e2e seed`로 member-a의 오늘(KST) 합성 세트와 문항 둘을 다시 만든다. 이 도구가 만든 세트 132100만 지운다.
+2. 백엔드(8187번)와 Vite(4187번)를 띄운다. 백엔드는 AI 클라이언트만 가짜로 바꾸고, 퀴즈 시각을 오늘 12:00 KST로 고정해 08:30 이전에도 돈다. 그래서 `not_open` 응답은 이 시험으로 확인하지 못한다.
+3. 합성 계정으로 로그인해 답 제출, 정답·해설, 꼬리 질문 두 차례와 답 저장, 새로고침 뒤 복원을 확인한다. 다시 제출(409), 남의 문항(404), 답하기 전 꼬리 질문(409)도 확인한다.
+
+이 시험은 `tests-local/`에 있어 기본 `npm run test:e2e`와 CI에 포함되지 않는다. 로컬 Supabase가 없으면 실패한다. 꼬리 질문 답 원문 복원은 E11이 돌려주지 않으므로 확인하지 않고, 실제 Bedrock 성공은 staging 절차에서 확인한다.
+
 ## staging 검증 절차
 
 1. 사람이 staging 대상 PR을 병합한 뒤 배포의 READY와 커밋 SHA를 확인한다.
