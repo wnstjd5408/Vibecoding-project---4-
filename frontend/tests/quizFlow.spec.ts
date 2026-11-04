@@ -131,25 +131,38 @@ test('401은 로그인 안내를 연다', async ({ page }) => {
   await expect(page.getByRole('dialog', { name: '로그인이 필요해요' })).toBeVisible()
 })
 
-test('이탈 후 늦은 401은 로그인 안내를 다시 열지 않는다', async ({ page }) => {
-  await fixture(page)
+for (const action of ['answer', 'followup', 'followup-answer'] as const) test(`${action}: 이탈 후 늦은 401은 로그인 안내를 다시 열지 않는다`, async ({ page }) => {
+  const state = await fixture(page, action !== 'answer')
+  if (action === 'followup-answer') {
+    state.item.followups.push({ seq: 1, question: '기존 꼬리 질문', answered: false })
+    state.item.can_request_followup = false
+  }
   await page.route('**/api/notes', route => route.fulfill({ json: { subjects: [], notes: [] } }))
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
   let called = false
-  let finished = false
-  await page.route('**/api/quiz/items/51/answer', async route => {
+  const endpoint = action === 'answer' ? '/api/quiz/items/51/answer'
+    : action === 'followup' ? '/api/quiz/items/51/followups' : '/api/quiz/items/51/followups/1/answer'
+  await page.route(`**${endpoint}`, async route => {
     called = true; await gate
     await route.fulfill({ status: 401, json: { error: { code: 'login_required', message: 'Login required' } } })
-    finished = true
   })
   await page.goto('/quiz')
-  await page.getByLabel('문항에 대한 답').fill('합성 답변')
-  await page.getByRole('button', { name: '답 제출', exact: true }).click()
+  if (action !== 'followup') await page.getByLabel(action === 'answer' ? '문항에 대한 답' : '꼬리 질문 1에 대한 답').fill('합성 답변')
+  await page.getByRole('button', { name: action === 'answer' ? '답 제출' : action === 'followup' ? '꼬리 질문 받기' : '답 저장', exact: true }).click()
   await expect.poll(() => called).toBe(true)
   await page.getByRole('link', { name: '노트 보러 가기' }).click()
+  // SPA 클릭 완료만으로 React 화면 전환·이탈 처리가 끝났다고 가정하지 않는다.
+  await expect(page).toHaveURL(/\/$/)
+  await expect(page.getByRole('heading', { name: '과목', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '오늘의 퀴즈', exact: true })).toHaveCount(0)
+  const response = page.waitForResponse(`**${endpoint}`)
   release()
-  await expect.poll(() => finished).toBe(true)
+  const received = await response
+  expect(received.status()).toBe(401)
+  await received.finished()
+  // route.fulfill 완료는 앱의 응답 처리 완료가 아니다. 응답 후 렌더 기회를 준 뒤 부재를 검사한다.
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
   await expect(page.getByRole('dialog', { name: '로그인이 필요해요' })).toHaveCount(0)
 })
 
