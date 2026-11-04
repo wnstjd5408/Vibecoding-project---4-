@@ -95,11 +95,15 @@ def convert(notion, page_id: str) -> Content:
     count = 0
     visited = set()
 
-    def list_item(body: str) -> str:
+    def list_item(body: str, lead: int = 2) -> str:
+        # `lead` is the marker's indent. Under a "- " item (content column 2) the child lines already sit at
+        # column 4, so a marker with lead 2 lands 4 columns past the content column and CommonMark reads
+        # the toggle list as an indented code block. Items below "- " / to-do use lead 0 (MEG-208).
         first, *rest = body.split("\n")
-        return "  - " + first + "".join("\n    " + line if line else "\n" for line in rest)
+        pad = " " * (lead + 2)
+        return " " * lead + "- " + first + "".join("\n" + pad + line if line else "\n" for line in rest)
 
-    def walk(parent: str, depth: int = 0, as_list: bool = False) -> str:
+    def walk(parent: str, depth: int = 0, as_list: bool = False, lead: int = 2) -> str:
         nonlocal count
         if depth > 32 or parent in visited:
             raise ValueError("block_limit")
@@ -149,7 +153,7 @@ def convert(notion, page_id: str) -> Content:
                     if cells:
                         cells.insert(1, ["---"] * width)
                         table = "\n".join("| " + " | ".join(row) + " |" for row in cells)
-                        lines.append(list_item(table) if as_list else table)
+                        lines.append(list_item(table, lead) if as_list else table)
                     continue
                 prefix = {"heading_1": "# ", "heading_2": "## ", "heading_3": "### ",
                           "bulleted_list_item": "- ", "numbered_list_item": "1. ",
@@ -160,16 +164,24 @@ def convert(notion, page_id: str) -> Content:
                     text = f"**{text}**"
                 lines.append(prefix + text)
                 if block.get("has_children"):
-                    child = walk(block_id, depth + 1, as_list=kind == "toggle")
+                    child = walk(block_id, depth + 1, as_list=kind == "toggle",
+                                 lead=0 if kind in {"bulleted_list_item", "to_do"}
+                                 else 2 if kind == "numbered_list_item" else lead)
                     if kind in {"bulleted_list_item", "numbered_list_item", "to_do"}:
-                        child = "\n".join("    " + line for line in child.splitlines())
+                        # Split on "\n" only: splitlines() also breaks on \x0b, \x1c,  , \x85 and would
+                        # change code text that contains them. Like splitlines(), drop the one empty piece
+                        # after a final "\n" so a trailing empty block keeps its old output.
+                        parts = child.split("\n")
+                        if parts[-1] == "":
+                            parts.pop()
+                        child = "\n".join("    " + line for line in parts)
                     lines.append(child)
             else:
                 result.skipped += 1
             if as_list and len(lines) > block_start:
                 # One list item per Notion block, not per source line. Fences,
                 # multiline paragraphs and nested children keep their structure.
-                lines[block_start:] = [list_item("\n\n".join(lines[block_start:]))]
+                lines[block_start:] = [list_item("\n\n".join(lines[block_start:]), lead)]
         body = "\n\n".join(lines)
         if len(body) > 200000:
             raise ValueError("body_limit")
