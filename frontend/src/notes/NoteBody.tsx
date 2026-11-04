@@ -114,7 +114,7 @@ function codeBlockOf(node: Extract<Nodes, { type: 'code' }>, context: Context): 
     ? []
     : fenced ? [{ text: node.value, srcStart: contentStart, srcEnd: contentStart + node.value.length, exact: true }] : null
   const code = <pre><code>{segments(node.value, pieces, context)}</code></pre>
-  // 언어 표시가 mermaid인 울타리는 그림으로 보인다. 그릴 수 없으면 원래 코드 블록으로 돌아간다.
+  // 언어 표시가 mermaid인 울타리는 보기 방식(다이어그램만·코드만·둘 다)에 따라 그림과 원래 코드 블록을 보인다.
   if (node.lang?.trim().toLowerCase() === 'mermaid') return <MermaidBlock source={node.value} fallback={code} />
   return code
 }
