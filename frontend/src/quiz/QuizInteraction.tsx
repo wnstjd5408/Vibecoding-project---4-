@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 import type { QuizItem } from '../api/types.ts'
 import { isApiError } from '../api/client.ts'
 import { currentSession } from '../auth/sessionGeneration.ts'
-import { AiBox, Button, TextField } from '../components/index.ts'
+import { AiBadge, AiBox, Button, TextField } from '../components/index.ts'
 import { useLoginPrompt } from '../loginPrompt/useLoginPrompt.ts'
 import { actionError, actionKey, actionWait, generateFollowup, saveFollowupAnswer, submitAnswer } from './quizActions.ts'
 import styles from './QuizInteraction.module.css'
@@ -73,7 +73,7 @@ export function QuizInteraction({ initial, session, reload }: { initial: QuizIte
         <div className={styles.text}><strong>정답</strong><p>{item.correct_answer}</p><strong>해설</strong><p>{item.explanation}</p></div>
       </AiBox>
       {followups.map((followup) => <section key={followup.seq} className={styles.followup} aria-label={`꼬리 질문 ${followup.seq}/2`}>
-        <h3>꼬리 질문 {followup.seq}/2</h3>
+        <div className={styles.followupHead}><AiBadge /><h3 className={styles.followupStep}>꼬리 질문 {followup.seq}/2</h3></div>
         <p className={styles.status}>채점하지 않아요.</p>
         <p className={styles.text}>{followup.question}</p>
         {followup.answered ? <><p role="status">답 저장됨</p>{saved[followup.seq] !== undefined ? <p className={styles.text}>{saved[followup.seq]}</p> : null}</>

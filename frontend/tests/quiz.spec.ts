@@ -26,7 +26,8 @@ test('AC-1 로그인하면 오늘의 퀴즈 문항 목록이 보인다', async (
   await expect(page.getByRole('main').getByRole('listitem')).toHaveCount(2)
   await expect(page.getByText('난이도 중')).toBeVisible()
   await expect(page.getByText('난이도 하')).toBeVisible()
-  await expect(page.getByText('AI 생성')).toHaveCount(2)
+  // 문항 카드 2개에 하나씩, 답한 문항의 꼬리 질문 1개에 하나(MEG-110).
+  await expect(page.getByText('AI 생성')).toHaveCount(3)
   // E12~E14 연결 후 답한 문항은 정답·해설과 꼬리 질문 진행을 복원한다.
   await expect(page.getByText('답함', { exact: true })).toHaveCount(1)
   for (const restored of ['합성 정답', '합성 해설', '합성 답변', '합성 꼬리 질문']) await expect(page.getByText(restored, { exact: true })).toBeVisible()
