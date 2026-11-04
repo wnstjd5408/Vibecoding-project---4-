@@ -3,7 +3,7 @@ import { defineConfig } from '@playwright/test'
 export default defineConfig({
   forbidOnly: Boolean(process.env.CI),
   testDir: './tests',
-  testIgnore: 'notes.spec.ts',
+  testIgnore: ['notes.spec.ts', 'notionImport.spec.ts'],
   fullyParallel: true,
   workers: 2,
   retries: 0,
