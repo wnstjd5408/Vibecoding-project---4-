@@ -116,6 +116,15 @@ def test_empty_child_blocks_keep_their_previous_output(kind, marker, kids, suffi
     assert convert(notion, PAGE).markdown == expected
 
 
-def test_carriage_return_in_nested_code_text_is_kept():
-    # Before MEG-208 splitlines() treated "\r\n" as one break and dropped the "\r" from list-child code.
-    assert body_for(("bulleted_list_item",), "a\r\nb") == "- t\n\n    ```\n    a\r\n    b\n    ```"
+@pytest.mark.parametrize("kind", ["bulleted_list_item", "numbered_list_item", "to_do"])
+@pytest.mark.parametrize("code", ["a\rb", "a\r\nb", "a\n\rb", "a\r\rb"], ids=["CR", "CRLF", "LF-CR", "CR-CR"])
+def test_carriage_returns_in_list_child_code_stay_inside_the_fence(kind, code):
+    # CommonMark treats "\r", "\r\n" and "\n" as line breaks, so every piece must be indented to stay in the item.
+    found = fences(body_for((kind,), code))
+    assert len(found) == 1
+    assert found[0].content == code.replace("\r\n", "\n").replace("\r", "\n") + "\n"
+
+
+def test_crlf_in_list_child_code_keeps_the_output_it_had_before_meg_208():
+    # splitlines() turned "\r\n" into "\n"; keep that so already-correct output does not change.
+    assert body_for(("bulleted_list_item",), "a\r\nb") == "- t\n\n    ```\n    a\n    b\n    ```"

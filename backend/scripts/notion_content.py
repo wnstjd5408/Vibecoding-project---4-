@@ -168,10 +168,12 @@ def convert(notion, page_id: str) -> Content:
                                  lead=0 if kind in {"bulleted_list_item", "to_do"}
                                  else 2 if kind == "numbered_list_item" else lead)
                     if kind in {"bulleted_list_item", "numbered_list_item", "to_do"}:
-                        # Split on "\n" only: splitlines() also breaks on \x0b, \x1c,  , \x85 and would
-                        # change code text that contains them. Like splitlines(), drop the one empty piece
-                        # after a final "\n" so a trailing empty block keeps its old output.
-                        parts = child.split("\n")
+                        # Break only where CommonMark does ("\r\n", "\r", "\n"). splitlines() also breaks on
+                        # \x0b, \x1c,  , \x85 and would change code text that contains them, while a plain
+                        # split("\n") would leave a lone "\r" line break unindented and end the item early.
+                        # Like splitlines(), drop the one empty piece after a final break so a trailing empty
+                        # block keeps its old output.
+                        parts = re.split(r"\r\n?|\n", child)
                         if parts[-1] == "":
                             parts.pop()
                         child = "\n".join("    " + line for line in parts)
