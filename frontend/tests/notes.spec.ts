@@ -2957,3 +2957,85 @@ test('MEG-167 선택 상태는 색으로 구분되고 터치 목표가 44px 이�
   await page.keyboard.press('ArrowRight')
   expect(await other.evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe('none')
 })
+
+// ---- MEG-167 리뷰 반영(Dustin 2026-11-04): 불러오기 실패와 문법 오류 구분·재시도, 진행 중 렌더링 재사용, 실제 Tab 진입 ----
+const LOAD_FAILED = '다이어그램을 불러오지 못했어요. 잠시 뒤 다시 시도해 주세요.'
+const MERMAID_MODULE = /\/node_modules\/\.vite\/deps\/mermaid\.js/
+
+test('MEG-167 모듈을 불러오지 못한 정상 블록은 문법 오류가 아니라 불러오기 실패로 안내하고, 복구 뒤 다시 시도 버튼으로 그린다', async ({ page }) => {
+  await page.route(MERMAID_MODULE, (route) => route.abort())
+  await openMermaidNote(page, FLOW)
+  const body = noteBody(page)
+  await expect(body.getByText(LOAD_FAILED)).toBeVisible()
+  await expect(body.getByText(SYNTAX_ERROR)).toHaveCount(0) // 정상 코드를 문법 오류라고 하지 않는다
+  await expect(diagram(page)).toHaveCount(0)
+  await expect(modeRadio(page, '코드만')).toBeVisible() // 선택 그룹은 실패 상태에서도 남는다
+  await page.unroute(MERMAID_MODULE)
+  await body.getByRole('button', { name: '다시 시도' }).click()
+  await expect(diagram(page)).toBeVisible()
+  await expect(body.getByText(LOAD_FAILED)).toHaveCount(0)
+})
+
+test('MEG-167 불러오기에 실패한 뒤 다른 방식으로 바꿨다가 다이어그램만으로 돌아오면 다시 그린다', async ({ page }) => {
+  await page.route(MERMAID_MODULE, (route) => route.abort())
+  await openMermaidNote(page, FLOW)
+  await expect(noteBody(page).getByText(LOAD_FAILED)).toBeVisible()
+  await page.unroute(MERMAID_MODULE)
+  await modeRadio(page, '코드만').click()
+  await expect(noteBody(page).locator('pre')).toContainText('graph TD')
+  await modeRadio(page, '다이어그램만').click()
+  await expect(diagram(page)).toBeVisible()
+})
+
+test('MEG-167 문법 오류는 모듈이 막혀 있지 않을 때만 문법 오류 안내이고, 다시 방식을 골라도 같은 결과다(불필요한 재시도 없음)', async ({ page }) => {
+  await openMermaidNote(page, BROKEN)
+  await expect(noteBody(page).getByText(SYNTAX_ERROR)).toBeVisible()
+  await expect(noteBody(page).getByRole('button', { name: '다시 시도' })).toHaveCount(0)
+  await modeRadio(page, '코드만').click()
+  await modeRadio(page, '다이어그램만').click()
+  await expect(noteBody(page).getByText(SYNTAX_ERROR)).toBeVisible()
+  await expect(noteBody(page).getByRole('button', { name: '다시 시도' })).toHaveCount(0)
+})
+
+test('MEG-167 그리는 중에 다이어그램만 → 코드만 → 둘 다로 바꿔도 같은 원문은 한 번만 그린다', async ({ page }) => {
+  // 모듈 불러오기를 늦춰 그리는 중인 상태를 만든다
+  await page.route(MERMAID_MODULE, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    await route.continue()
+  })
+  await openMermaidNote(page, FLOW)
+  await expect(noteBody(page).getByText('다이어그램을 그리는 중이에요')).toBeVisible()
+  await modeRadio(page, '코드만').click()
+  await modeRadio(page, '둘 다').click()
+  await expect(diagram(page)).toBeVisible({ timeout: 15000 })
+  // mermaid가 그림마다 붙이는 번호(mermaid-diagram-N)로 렌더 횟수를 센다. 한 번만 그렸다면 이 그림이 첫 번째다.
+  const src = await diagram(page).getAttribute('src')
+  expect(decodeURIComponent(src!)).toContain('mermaid-diagram-1')
+  expect(decodeURIComponent(src!)).not.toContain('mermaid-diagram-2')
+  await expect(noteBody(page).locator('pre')).toContainText('graph TD')
+})
+
+const TAB_BODY = (block: string) => `[앞 링크](https://example.test/before)\n\n${block}\n\n[뒤 링크](https://example.test/after)`
+
+for (const [name, block] of [['정상', FLOW], ['문법 오류', BROKEN]] as const) {
+  test(`MEG-167 실제 Tab (${name} 블록): 그룹 앞 요소에서 Tab으로 선택된 항목에 들어가고, 나갔다 Shift+Tab으로 돌아오면 바꾼 선택 항목으로 복귀한다`, async ({ page }) => {
+    await openMermaidNote(page, TAB_BODY(block))
+    const body = noteBody(page)
+    // 문법 오류 블록은 안내가 보인 뒤에 검사한다
+    if (block === BROKEN) await expect(body.getByText(SYNTAX_ERROR)).toBeVisible()
+    else await expect(diagram(page)).toBeVisible()
+    const before = body.getByRole('link', { name: '앞 링크' })
+    const after = body.getByRole('link', { name: '뒤 링크' })
+    await before.focus()
+    await page.keyboard.press('Tab')
+    await expect(modeRadio(page, '다이어그램만')).toBeFocused() // 선택된 항목으로 들어간다
+    await page.keyboard.press('ArrowRight') // 코드만 선택
+    await expect(modeRadio(page, '코드만')).toBeFocused()
+    await page.keyboard.press('Tab') // 그룹을 나간다. 코드가 보이면 그 안의 포커스 가능한 요소는 없으므로 뒤 링크로 간다.
+    await expect(after).toBeFocused()
+    await page.keyboard.press('Shift+Tab')
+    await expect(modeRadio(page, '코드만')).toBeFocused() // 바꾼 선택 항목으로 돌아온다
+    await page.keyboard.press('Shift+Tab')
+    await expect(before).toBeFocused()
+  })
+}

@@ -22,6 +22,8 @@
 .modeOption { min-height: 44px; padding: 0 var(--space-4); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: transparent; color: var(--ink); font: inherit; font-size: 14px; line-height: 22px; font-weight: 500; }
 .modeOption[aria-checked="true"] { border-color: var(--ink); background: var(--ink); color: var(--surface-100); font-weight: 600; }
 .modeOption:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.retry { display: block; min-height: 44px; margin-top: var(--space-2); padding: 0 var(--space-4); border: 1px solid var(--ink); border-radius: var(--radius-md); background: transparent; color: var(--ink); font: inherit; font-size: 14px; line-height: 22px; font-weight: 600; }
+.retry:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .tableScroll { max-width: 100%; overflow-x: auto; margin-bottom: var(--space-4); }
 .body table { width: 100%; border-collapse: collapse; }
 .body th, .body td { min-width: 6rem; padding: var(--space-2) var(--space-3); border: 1px solid var(--surface-300); vertical-align: top; }
