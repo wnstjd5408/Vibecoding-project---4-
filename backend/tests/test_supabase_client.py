@@ -426,7 +426,122 @@ def test_list_glossary_terms_reads_only_terms_with_a_glossary_entry():
     client_with(handler).list_glossary_terms()
 
     assert seen["path"] == "/rest/v1/terms"
-    assert seen["params"] == {"select": "id,key,label,glossary_entries!inner(term_id)", "order": "id.asc"}
+    assert seen["params"] == {"select": "id,key,label,glossary_entries!inner(term_id)", "order": "id.asc", "limit": "1000"}
+
+
+# ---- MEG-141 E05 사전 용어 조회의 1,000행 제한 해소: id 기준 키셋 페이지네이션 ----
+def postgrest_terms(ids, server_max_rows=1000):
+    """PostgREST처럼 `id=gt.N`·`order=id.asc`·`limit`을 읽고 서버 최대 행(기본 1000)에서 자르는 가짜 서버. 요청 params를 calls에 쌓는다."""
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        calls.append(params)
+        floor = int(params["id"][3:]) if "id" in params else 0
+        limit = min(int(params["limit"]), server_max_rows)
+        page = [{"id": i, "key": f"term{i}", "label": f"T{i}", "glossary_entries": {"term_id": i}} for i in sorted(ids) if i > floor][:limit]
+        return httpx.Response(200, json=page)
+
+    return calls, handler
+
+
+@pytest.mark.parametrize("count", [0, 1, 999, 1000, 1001, 1999, 2000, 2001, 5000])
+def test_list_glossary_terms_reads_every_term_across_page_boundaries(count):
+    calls, handler = postgrest_terms(range(1, count + 1))
+
+    rows = client_with(handler).list_glossary_terms()
+
+    ids = [row["id"] for row in rows]
+    assert ids == list(range(1, count + 1))  # 누락·중복 없이 id 오름차순
+    # 한 쪽이 꽉 찼을 때만 다음 쪽을 읽는다. 1000개 정확히면 빈 쪽을 하나 더 읽어 끝을 확인한다.
+    assert len(calls) == count // 1000 + 1
+
+
+def test_list_glossary_terms_uses_the_last_id_as_the_keyset_cursor():
+    calls, handler = postgrest_terms(range(1, 2501))
+
+    client_with(handler).list_glossary_terms()
+
+    assert "id" not in calls[0]
+    assert [call["id"] for call in calls[1:]] == ["gt.1000", "gt.2000"]
+    assert all(call["order"] == "id.asc" and call["limit"] == "1000" for call in calls)
+
+
+def test_list_glossary_terms_handles_sparse_ids_without_skipping_the_last_page():
+    ids = list(range(5, 4000, 3)) + [2_000_000, 2_000_001]  # 건너뛴 id와 큰 id가 섞여도 마지막 쪽의 용어가 남는다
+    calls, handler = postgrest_terms(ids)
+
+    rows = client_with(handler).list_glossary_terms()
+
+    assert [row["id"] for row in rows] == sorted(ids)
+    assert rows[-1]["id"] == 2_000_001
+
+
+def test_list_glossary_terms_at_exactly_the_page_limit_is_complete_and_not_an_error(monkeypatch, caplog):
+    # 상한(3쪽=3000개)에 정확히 도달했고 뒤에 용어가 없으면 전체 조회가 끝난 것이다. 오류가 아니다.
+    from app import supabase as module
+
+    monkeypatch.setattr(module, "GLOSSARY_MAX_PAGES", 3)
+    calls, handler = postgrest_terms(range(1, 3001))
+
+    with caplog.at_level("ERROR", logger="app.supabase"):
+        rows = client_with(handler).list_glossary_terms()
+
+    assert [row["id"] for row in rows] == list(range(1, 3001))
+    assert len(calls) == 4 and calls[-1]["limit"] == "1" and calls[-1]["id"] == "gt.3000"  # 3쪽 + 남은 용어 확인 1건
+    assert not caplog.records
+
+
+@pytest.mark.parametrize("count", [3001, 10_000])
+def test_list_glossary_terms_refuses_a_partial_list_when_terms_remain_beyond_the_page_limit(monkeypatch, caplog, count):
+    # 상한 뒤에도 용어가 남았다. 일부만 돌려주면 링크가 조용히 빠지므로 오류로 내고 로그를 남긴다.
+    from app import supabase as module
+
+    monkeypatch.setattr(module, "GLOSSARY_MAX_PAGES", 3)
+    calls, handler = postgrest_terms(range(1, count + 1))
+
+    with caplog.at_level("ERROR", logger="app.supabase"), pytest.raises(SupabaseConfigError, match="exceed 3000"):
+        client_with(handler).list_glossary_terms()
+
+    assert len(calls) == 4  # 상한까지 읽고 남은 용어를 한 건 확인한 뒤 멈춘다(무한히 반복하지 않는다)
+    assert any("refusing a partial list" in record.getMessage() for record in caplog.records)
+
+
+def test_list_glossary_terms_limit_probe_counts_only_glossary_terms():
+    # 상한 뒤에 남은 것이 사전 용어가 아닌 용어(AI 용어)뿐이면 정상이다: probe가 사전 용어(!inner)만 센다.
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        params = dict(request.url.params)
+        if params["limit"] == "1":
+            return httpx.Response(200, json=[])  # 서버가 !inner로 거른 결과
+        return httpx.Response(200, json=[{"id": i, "key": f"t{i}", "label": "x"} for i in range(1, 1001)])
+
+    from app import supabase as module
+
+    original = module.GLOSSARY_MAX_PAGES
+    module.GLOSSARY_MAX_PAGES = 1
+    try:
+        rows = client_with(handler).list_glossary_terms()
+    finally:
+        module.GLOSSARY_MAX_PAGES = original
+
+    assert len(rows) == 1000
+    assert seen[-1]["select"] == "id,key,label,glossary_entries!inner(term_id)"
+
+
+def test_list_glossary_terms_propagates_a_database_error_on_a_later_page():
+    state = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        state["n"] += 1
+        if state["n"] == 1:
+            return httpx.Response(200, json=[{"id": i, "key": f"t{i}", "label": "x"} for i in range(1, 1001)])
+        return httpx.Response(403, json={})
+
+    with pytest.raises(SupabaseConfigError):
+        client_with(handler).list_glossary_terms()  # 일부만 읽은 채 조용히 넘기지 않는다
 
 
 def signing_client(handler, bucket: str | None = "note-images") -> SupabaseClient:
@@ -709,3 +824,131 @@ def test_store_ai_explanation_sends_p_arguments_and_strips_the_out_prefix():
     assert result == {"outcome": "stored", "term_id": 5, "explanation_id": 8, "body": "설명", "review_status": "pending"}
     assert seen["path"] == "/rest/v1/rpc/ai_store_explanation"
     assert b'"p_note_id":1' in seen["json"] and b'"p_term_key":"k"' in seen["json"]
+
+
+# --- E10(MEG-88)이 쓰는 대상 확인과 신고 저장 ---
+
+DUP = {"code": "23505", "message": 'duplicate key value violates unique constraint "reports_open_ai_explanation_idx"'}
+FK = {"code": "23503", "message": 'insert or update on table "reports" violates foreign key constraint "reports_ai_explanation_id_fkey"'}
+
+
+def test_report_target_check_for_an_explanation_requires_it_to_be_valid_and_for_a_quiz_item_to_be_mine():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, dict(request.url.params)))
+        return httpx.Response(200, json=[{"id": 1}])
+
+    client = client_with(handler)
+    assert client.report_target_exists("ai_explanation", 31, USER_ID) is True
+    assert client.report_target_exists("quiz_item", 41, USER_ID) is True
+
+    assert seen[0] == ("/rest/v1/ai_explanations", {"id": "eq.31", "invalidated_at": "is.null", "select": "id", "limit": "1"})
+    assert seen[1][0] == "/rest/v1/quiz_items"
+    assert seen[1][1]["id"] == "eq.41" and seen[1][1]["quiz_sets.user_id"] == f"eq.{USER_ID}"
+    assert "quiz_sets!inner(user_id)" in seen[1][1]["select"]
+    assert client_with(lambda r: httpx.Response(200, json=[])).report_target_exists("quiz_item", 41, USER_ID) is False
+    with pytest.raises(ValueError):
+        client.report_target_exists("note", 1, USER_ID)
+
+
+def test_create_report_returns_the_new_row_as_created():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"], seen["path"], seen["params"] = request.method, request.url.path, dict(request.url.params)
+        seen["body"], seen["prefer"] = request.read(), request.headers["prefer"]
+        return httpx.Response(201, json=[{"id": 5, "status": "open"}])
+
+    row, created = client_with(handler).create_report(USER_ID, "quiz_item", 41, "합성")
+
+    assert (row, created) == ({"id": 5, "status": "open"}, True)
+    assert (seen["method"], seen["path"], seen["prefer"]) == ("POST", "/rest/v1/reports", "return=representation")
+    assert seen["params"] == {"select": "id,status"}
+    assert b'"quiz_item_id":41' in seen["body"] and b"ai_explanation_id" not in seen["body"]
+
+
+def test_create_report_reads_the_existing_open_report_when_the_open_unique_index_rejects_the_insert():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, dict(request.url.params)))
+        if request.method == "POST":
+            return httpx.Response(409, json=DUP)
+        return httpx.Response(200, json=[{"id": 5, "status": "open"}])
+
+    row, created = client_with(handler).create_report(USER_ID, "ai_explanation", 31, "x")
+
+    assert (row, created) == ({"id": 5, "status": "open"}, False)
+    assert calls[1][1] == {"user_id": f"eq.{USER_ID}", "ai_explanation_id": "eq.31", "status": "eq.open",
+                           "select": "id,status", "limit": "1"}
+
+
+def test_create_report_retries_once_when_the_conflicting_report_was_resolved_in_between():
+    posts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts.append(1)
+            return httpx.Response(409, json=DUP) if len(posts) == 1 else httpx.Response(201, json=[{"id": 6, "status": "open"}])
+        return httpx.Response(200, json=[])
+
+    row, created = client_with(handler).create_report(USER_ID, "ai_explanation", 31, "x")
+
+    assert (row["id"], created, len(posts)) == (6, True, 2)
+
+
+def test_create_report_without_a_live_target_is_none_and_other_rejections_are_config_errors():
+    assert client_with(lambda r: httpx.Response(409, json=FK)).create_report(USER_ID, "ai_explanation", 31, "x") is None
+    # 사용자 쪽 외래 키나 알 수 없는 제약은 대상 없음이 아니라 설정 오류(500)다
+    user_fk = {"code": "23503", "message": 'violates foreign key constraint "reports_user_id_fkey"'}
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(409, json=user_fk)).create_report(USER_ID, "ai_explanation", 31, "x")
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(400, json={"code": "23514", "message": "check"})).create_report(
+            USER_ID, "ai_explanation", 31, "x")
+    with pytest.raises(SupabaseUnavailable):
+        client_with(lambda r: httpx.Response(503)).create_report(USER_ID, "ai_explanation", 31, "x")
+
+
+QUIZ_DUP = {"code": "23505", "message": 'duplicate key value violates unique constraint "reports_open_quiz_item_idx"'}
+QUIZ_FK = {"code": "23503", "message": 'violates foreign key constraint "reports_quiz_item_id_fkey"'}
+
+
+def test_create_report_for_a_quiz_item_uses_the_quiz_item_column_everywhere():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, dict(request.url.params)))
+        if request.method == "POST":
+            return httpx.Response(409, json=QUIZ_DUP)
+        return httpx.Response(200, json=[{"id": 8, "status": "open"}])
+
+    row, created = client_with(handler).create_report(USER_ID, "quiz_item", 41, "x")
+
+    assert (row["id"], created) == (8, False)
+    assert calls[1][1]["quiz_item_id"] == "eq.41" and "ai_explanation_id" not in calls[1][1]
+    assert client_with(lambda r: httpx.Response(409, json=QUIZ_FK)).create_report(USER_ID, "quiz_item", 41, "x") is None
+
+
+@pytest.mark.parametrize(
+    ("target_type", "error"),
+    [
+        # 열이 엇갈린 제약, 열린 신고가 아닌 유일 제약은 대상 없음·중복이 아니라 설정 오류다
+        ("quiz_item", FK),
+        ("ai_explanation", QUIZ_FK),
+        ("ai_explanation", {"code": "23505", "message": 'duplicate key value violates unique constraint "reports_pkey"'}),
+    ],
+    ids=["fk-of-another-column", "fk-of-the-other-target", "other-unique-constraint"],
+)
+def test_create_report_does_not_misread_other_constraint_violations(target_type, error):
+    with pytest.raises(SupabaseConfigError):
+        client_with(lambda r: httpx.Response(409, json=error)).create_report(USER_ID, target_type, 31, "x")
+
+
+def test_create_report_that_conflicts_twice_without_an_open_report_is_a_503_not_a_config_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json=DUP) if request.method == "POST" else httpx.Response(200, json=[])
+
+    with pytest.raises(SupabaseUnavailable):
+        client_with(handler).create_report(USER_ID, "ai_explanation", 31, "x")

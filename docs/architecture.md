@@ -86,7 +86,10 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 - GET은 상태를 바꾸거나 AI를 부르지 않는다. 열람 기록과 퀴즈 생성은 POST로만 받는다.
 - 로그인 실패는 계정·IP별로 제한한다. 공개 읽기와 서명 URL 발급에도 사용자(비로그인은 IP)별 분당 상한을 두고, 넘으면 429를 돌려준다. 카운터는 DB 표(`rate_limit_counters`)와 SQL 함수(`rate_limit_hit`)로 센다. 키는 secret key로 서명한 해시라 이메일·IP 원문을 남기지 않고, 클라이언트 IP는 소켓 주소를 쓰되 Vercel 위에서만 Vercel이 넣는 헤더를 믿는다. 로그인 실패 제한은 비밀번호를 확인하기 전에 먼저 세고 성공하면 되돌려(`rate_limit_release`) 동시 시도가 한도를 넘어 검증까지 가지 못하게 한다. Vercel Hobby 방화벽은 규칙이 프로젝트당 1개이고 세는 키가 IP·JA4뿐이라 사용자·계정별 제한을 맡지 못한다. (결정, MEG-62; 숫자는 제안, 시험 뒤)
 - 모든 `/api` 응답에 `Cache-Control: private, no-store`를 붙인다. 같은 주소가 역할에 따라 다른 내용을 주기 때문이다. (결정, 2026-10-23)
+- 즐겨찾기(E08, `PUT /api/favorites/{term_id}`, `backend/app/favorites.py`)는 로그인한 사용자만 쓴다(방문자·비활성 계정 401). 본문 `favorited`(불리언만)로 추가·해제를 모두 맡고 응답은 바뀐 뒤의 `term_id`·`is_favorite`이다. 사용자 id는 세션에서만 꺼내고 본문에 다른 키를 넣으면 422다. 추가하면 오늘(KST) `favorite_events` 한 건을 먼저 넣고 `favorites`를 넣으며 둘 다 기본 키 충돌은 무시한다. 해제하면 `favorites`만 지우고 `favorite_events`는 남긴다(해제해도 그날 퀴즈 후보에 남는다, D-043). 둘을 한 트랜잭션으로 묶는 SQL 함수는 없고, 중간에 실패하면 이력만 남은 상태가 되지만 같은 요청을 다시 보내면 이어서 끝난다. 이미 즐겨찾기한 용어에 `true`를, 즐겨찾기가 아닌 용어에 `false`를 보내도 200이다. `terms`에 없거나 경로 id 모양이 틀린 용어는 `true`·`false` 모두 404이고 쓰기 제한(분당 30회)을 용어 확인보다 먼저 센다. (MEG-89)
 - 신고는 그 용어의 현재 유효한 공유 AI 설명과 자기 퀴즈 문항에만 할 수 있다. 저장하지 않는 1회용 설명은 신고 대상이 아니다.
+- 신고 보내기(E10, `POST /api/reports`, `backend/app/reports.py`)는 대상이 없거나 남의 문항이거나 무효화된 설명이면 모두 같은 404다. 같은 사용자·같은 대상의 열린 신고는 하나라서(부분 유일 인덱스 `reports_open_*_idx`) 다시 보내면 새 행 없이 기존 신고를 200으로 돌려주고, 처리(`resolved`)된 뒤에는 새 신고를 받는다. 본문은 비어 있어도 되고 1,000자(코드포인트) 이하다. 사용자당 분당 쓰기 제한(30회)을 대상 확인보다 먼저 센다(E07과 같은 방식). (MEG-88)
+- 운영자 신고 목록·처리(E25 `GET /api/admin/reports`, E26 `PATCH /api/admin/reports/{id}`, `backend/app/admin_reports.py`)는 운영자만 부른다(방문자 401, 일반 사용자 403). 목록은 `status`(`open` 기본, `resolved`)로 거르고 id 내림차순이며 `limit`(1~100, 기본 100)과 `cursor`(앞 쪽의 마지막 id)로 쪽을 나눈다. 각 신고는 `id`·`status`·`body`와 대상 요약 `target`(`type`·`id`와 AI 설명이면 `term_key_snapshot`·`body`, 퀴즈 문항이면 `question`·`answer`)이고 신고자는 내지 않는다. 처리는 `status: resolved`만 받고 `invalidate_explanation`(기본 false)이 true이고 대상이 AI 설명일 때만 그 설명 하나를 기존 SQL 함수 `ai_invalidate_explanations`로 무효화한다(대상이 퀴즈 문항이면 무시). 무효화를 먼저 하고 신고를 처리하므로 중간에 실패해도 같은 요청을 다시 보내면 끝나며, 이미 처리된 신고에 다시 보내도 200이고 처리 시각은 그대로다. 없는 신고나 모양이 틀린 id는 404, 쓰기 제한(분당 30회)은 E26만 맨 앞에서 센다. (MEG-83, D-062)
 - 최초 운영자는 Supabase 대시보드나 SQL로 직접 만든다. 자체 가입은 없다. 마지막 남은 운영자는 회수하거나 일반 사용자로 바꿀 수 없게 한다(회수·역할 변경 엔드포인트를 만들 때 적용). (제안)
 - 계정 회수가 필요하면 운영자가 SQL로 `profiles.is_active`를 끄고 세션을 끊는다. 다음 요청부터 로그인 기능이 거부된다.
 
@@ -122,6 +125,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 - 노트를 수정(`revision` 증가)하거나 비공개로 바꾸거나 삭제하면, 그 노트를 문맥으로 쓴 AI 설명을 같은 트랜잭션에서 무효화한다.
 - 노트 본문의 이미지는 `note-image:{블록 ID}` 토큰으로 저장한다. 노트 읽기 응답은 본문을 바꾸지 않고 서명 URL을 `images` 맵으로 따로 준다. 본문 문자 위치(AI 설명 요청의 선택 범위)가 URL 길이에 흔들리지 않게 하기 위해서다. (결정, 2026-10-26)
 - 노트 읽기 응답은 본문에 나오는 사전 용어와 그 위치(`glossary_terms`·`glossary_spans`)를 따로 준다. 본문에 링크 문법을 끼우지 않는다. (결정, 2026-10-23)
+- 노트 읽기(E05)는 사전 용어 전체를 `id` 기준 키셋 페이지네이션(쪽당 1,000개 = PostgREST `max_rows`, 최대 50쪽)으로 읽어 1,000개를 넘는 사전에서도 뒤쪽 용어가 빠지지 않는다. 쪽당 크기는 서버 최대 행 이하로 두면 안 되므로 `supabase/config.toml`의 `max_rows`를 1,000보다 줄이면 안 된다. 읽기 횟수는 용어 수에 따라 늘어나므로(1,000개마다 1회, 꽉 찬 마지막 쪽 뒤에 끝 확인 1회) 규모가 크게 늘면 캐시를 따로 검토한다. 50쪽(5만 개)을 꽉 채우고도 사전 용어가 더 남아 있으면 일부만 주지 않고 오류 로그와 함께 500으로 낸다(정확히 5만 개에서 끝나면 정상). (MEG-141)
 - 처음 가져온 뒤에는 앱의 노트가 원본이다. 가져오기를 다시 실행해도 이미 있는 노트는 덮어쓰지 않고 건너뛴다. 빠진 이미지만 채우므로 중간에 실패해도 다시 실행하면 이어서 끝난다.
 - 가져오기 스크립트의 이미지 보안(제안): Notion 파일 호스트 허용 목록과 https만 받고, 사설·루프백 주소와 리다이렉트는 거부한다(SSRF 차단). 내려받은 파일은 PNG·WebP로 다시 인코딩하고 SVG와 알 수 없는 형식은 거부한다. 파일 크기와 화소 수에 상한을 둔다.
 - 노트·사전 이미지를 지우면 같은 트랜잭션에서 `storage_delete_jobs`에 삭제 작업을 넣고, Storage 객체 삭제는 그 뒤에 시도한다. 실패한 작업은 다음 운영자 삭제 요청 때 다시 시도한다. (제안)
@@ -158,6 +162,10 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 
 **E11 구현(MEG-91):** `POST /api/quiz/today`는 `backend/app/quiz.py`가 API spec 6절 순서대로 처리한다. 08:30 KST 전에는 DB·AI 없이 `not_open`이다(시계는 `session.now`로 고정할 수 있다). 그 뒤에는 이미 만든 세트(`ready`)를 AI 없이 주고, 없으면 전날 열어 본·즐겨찾기한 용어에서 후보를 고른다(전날 세트에 나온 용어·자료 없는 용어 제외, 한 용어에 문항 하나, 10개 초과 때 즐겨찾기 먼저·용어 id 순). 후보가 없으면 행 없이 `none`이다. 선점과 첫 예약은 SQL 함수 `ai_claim_quiz_set`이 한 트랜잭션으로 하고, 선점에 실패한 요청은 AI 없이 `generating`(`retry_after_seconds` 5)·`failed`를 받는다. 선점한 요청만 `run_ai_call`로 Bedrock을 부르고, 응답 구조를 검증한 뒤 SQL 함수 `quiz_store_items`가 문항·후보 스냅샷 저장과 `ready` 전환을 한 트랜잭션으로 한다(선점 때의 `attempt`와 같을 때만 저장). AI·저장이 실패하면 선점을 풀어 다음 호출이 시도가 남은 만큼 바로 다시 선점한다. 한도 소진은 429가 아니라 200 `ai_limit_reached`다. 사용자별 분당 요청 제한은 `WRITE`(30회/60초)이고 `not_open`은 세지 않는다. 숫자는 제안값이다.
 
+**E12·E14 구현(MEG-92):** `POST /api/quiz/items/{item_id}/answer`(E12)와 `PUT /api/quiz/items/{item_id}/followups/{seq}/answer`(E14)는 `backend/app/quiz_answers.py`가 처리한다. 둘 다 AI와 원장을 쓰지 않고 새 SQL 함수도 없다. 로그인한 사용자가 자기 세트의 문항에만 답하고, 남의 문항·없는 문항·1·2가 아닌 seq·아직 질문이 없는 꼬리 질문 슬롯은 모두 같은 404다. 검사 순서는 본문 형식(422), 경로 형식(404), 사용자별 쓰기 제한(`WRITE`, 대상 확인보다 먼저 센다), 대상 확인(404), 이미 답했는지(409), 저장이다. 답변은 1~1,000자이고 공백뿐이면 빈 값으로 본다. 같은 답을 다시 보내면 같은 응답(200), 다른 답이면 409 `already_answered`다. E12는 기본 키 충돌을 무시하는 삽입, E14는 질문이 있고 아직 답이 없는 슬롯에만 하는 조건부 갱신이라 먼저 저장된 답을 덮어쓰지 않고, 저장된 답을 내 답과 비교해 동시 요청도 같은 규칙으로 판정한다. E12는 정오 필드 없이 정답·해설·난이도와 꼬리 질문 상태(`can_request_followup`, `followups_remaining`)를 준다. 이 상태 규칙(`followup_progress`)은 E11 응답과 같다. E12·E14는 날짜를 검사하지 않아 자정을 넘겨도 이미 낸 문항의 답을 받는다. 재접속하면 E11이 같은 세트의 답·정답·해설·꼬리 질문 진행을 그대로 돌려준다.
+
+**E13 구현(MEG-93):** `POST /api/quiz/items/{item_id}/followups`는 `backend/app/quiz_followups.py`가 API spec 6.5절 순서대로 처리한다. 새 SQL 함수는 없다. 로그인한 사용자가 자기 문항에서만 받고(남의 문항·없는 문항 404), 답하기 전이면 409 `answer_first`이며 이때 AI·원장·슬롯은 0건이다. 슬롯 상태는 이 순서로 가른다: 질문이 비어 있는 슬롯(다른 요청이 만드는 중)이 있으면 409 `in_progress`(`Retry-After` 60초), 직전 질문에 답하지 않았으면 둘째 질문도 새로 만들지 않고 같은 질문을 돌려준다(AI 0건, 응답이 유실된 사용자가 재요청으로 되찾게 한다. E11은 자정~08:30에 `not_open`이라 그쪽으로는 되찾을 수 없다), 질문 둘을 받고 모두 답했으면 409 `followup_limit_reached`. 새 질문은 설정·배포 환경 검사를 먼저 하고(실패하면 슬롯 없이 500), `(item_id, seq)` 슬롯을 비워 둔 채 넣어 번호를 예약한 뒤에만 `run_ai_call`로 Bedrock을 부른다. 같은 seq를 동시에 요청하면 기본 키 충돌로 한 요청만 예약하고 나머지는 AI 없이 409 `in_progress`다. AI 호출이 실패하거나 한도가 소진되면(502·429) 슬롯을 지워 번호를 돌려주고, 응답이 비었거나 1,000자를 넘으면 불완전 응답과 같게 502다. 정산 뒤의 저장 실패는 503이 아니라 500이다. 질문이 비어 있는 슬롯이 5분(`STALE_SLOT_SECONDS`) 넘게 남으면(AI 호출 중 함수가 죽음) 다음 요청이 `created_at` 기준으로 지우고 번호를 다시 쓴다(S4). 원장 키는 서버가 만든 요청 id로 `{user_id}:followup:{요청 id}:{attempt_no}`이고 출력 토큰 상한은 400이다. 응답은 `seq`, `question`, `followups_remaining`이며 정오 필드가 없다. 사용자별 AI 요청 제한은 `AI_FOLLOWUP`(10회/60초, E09와 같은 이유)이고 대상 확인보다 먼저 센다. 숫자는 제안값이다.
+
 **공유 캐시**
 
 - 같은 용어의 AI 설명은 저장해 모든 사용자가 다시 쓴다. 캐시 응답은 AI를 부르지 않고 한도에도 세지 않는다.
@@ -183,13 +191,13 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 
 ## 7. 배포 · 복구 원칙
 
-- **환경·자동화 가이드:** Production(`main`)과 Staging(`staging` 브랜치의 Preview), 환경변수 분리와 헬스체크 절차는 [배포 가이드](deployment-guide.md)를 따른다. 현재 자동 검사·인프라 CD와 아직 구현하지 않은 제품 테스트 CI는 [GitHub Actions 가이드](github-actions.md)에서 구분한다. 문서에 적힌 목표 절차를 실제 설정 완료로 해석하지 않는다.
+- **환경·자동화 가이드:** Production(`main`)과 Staging(`staging` 브랜치의 Preview), 환경변수 분리와 헬스체크 절차는 [배포 가이드](deployment-guide.md)를 따른다. 제품 테스트 CI·인프라 CD와 원격 필수 검사 연결 절차는 [GitHub Actions 가이드](github-actions.md)에서 구분한다. 문서에 적힌 목표 절차를 실제 설정 완료로 해석하지 않는다.
 - **배포 대상:** Vercel 한 프로젝트에 React 화면과 FastAPI(`/api` 함수)를 함께 둔다. 함수 지역은 도쿄(hnd1)다. 비밀값은 Vercel 환경변수에 둔다. (결정, D-033)
 - **배포 구성:** 루트 `vercel.json`의 Services(Beta)로 `frontend/`(Vite)와 `backend/`(FastAPI, `app.main:app`)를 함께 빌드한다. `/api` 요청은 경로를 보존해 백엔드로 보내고 나머지는 프론트로 보낸다. 프론트의 깊은 경로는 `index.html`로 연결한다. 프로젝트 생성·미리보기 검증은 MEG-111에서 추적한다.
 - **헬스체크:** 인증 없이 `GET /api/health`가 `200 {"status":"ok"}`와 `Cache-Control: private, no-store`를 반환한다. API 서버 응답 여부만 확인하며 DB·Auth·AI를 호출하거나 연결 상태를 보장하지 않는다. 이 경로는 해당 서비스의 비밀값 없이 동작한다. 기존 `/health`는 호환용이며 새 호출은 `/api/health`를 쓴다. 로컬 Vite 프록시도 경로를 바꾸지 않는다. (결정, MEG-112)
 - **연결 확인 화면:** `/dev/foundation`에서 실제 백엔드 응답을 확인한다(`VITE_API_MOCK` 미설정 또는 `false`). 가짜 응답 모드의 `ok`는 서버 연결 증거가 아니다. 미구현 제품 API의 오류는 헬스체크 결과와 별개다. 화면에서 `/api`를 부르는 방법(`apiFetch`, 오류 구분, 가짜·실제 응답 전환, 로그인 상태)은 [README의 "프런트에서 API 부르기"](../README.md)를 따른다.
 - **무료 한도:** 넘으면 해당 기능이 멈출 수 있다. 운영자가 주기적으로 사용량을 확인하고 공개 읽기에도 IP별 상한을 둔다. (제안)
-- **배포 전 검증:** CI에서 통합 테스트를 통과해야 배포한다. 운영 비밀값은 `main` 전용 환경에 두고 PR 브랜치에서는 접근하지 못하게 한다. (결정) 제품 테스트 CI와 배포 차단 연결은 아직 미구현이며, 현재 PR 형식 검사 통과나 Vercel 빌드 성공으로 이 조건을 충족했다고 보지 않는다. 테스트 환경에는 별도 테스트 자격증명을 사용한다.
+- **배포 전 검증:** CI에서 통합 테스트를 통과해야 배포한다. 운영 비밀값은 `main` 전용 환경에 두고 PR 브랜치에서는 접근하지 못하게 한다. (결정) MEG-168의 제품 CI는 비밀값 없이 단위·격리 SQL·합성 화면을 검사한다. 운영 배포 차단 연결과 실환경 검증은 별도이며, PR 형식 검사 통과나 Vercel 빌드 성공으로 이 조건을 충족했다고 보지 않는다. 실환경 테스트에는 별도 테스트 자격증명을 사용한다.
 - **버킷 설정 대조:** 버킷의 공개 여부·파일 크기 제한·허용 형식은 마이그레이션 SQL로 만든다. 배포 전에 운영자가 원격 설정을 읽기 전용으로 조회해 마이그레이션과 대조한다. AI는 원격 Supabase에 쓰지 않는다. (제안)
 - **배포 증거:** 환경·버전·URL·동작 확인·복구 근거·사람의 출시 수락은 릴리스 티켓(MEG-21)에 남긴다.
 - **AI 장애:** AI 기능만 안내로 바꾸고 노트·사전 읽기는 계속 동작한다.
