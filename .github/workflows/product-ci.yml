@@ -171,6 +171,53 @@ jobs:
             fi
           done
 
+  negative-drill-proof:
+    name: Negative CI controller proof (do not merge)
+    if: always()
+    needs: product-ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Require real failed CI result and zero API calls
+        env:
+          OBSERVED_CI_RESULT: ${{ needs.product-ci.result }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, '.github/scripts')
+          import staging_cd as cd
+          result = os.environ['OBSERVED_CI_RESULT']
+          assert result == 'failure', 'Expected actual Product CI failure'
+          class NoAPI:
+              calls = 0
+              def github(self, *args, **kwargs):
+                  self.calls += 1
+                  raise AssertionError('Unexpected GitHub API call')
+              def vercel(self, *args, **kwargs):
+                  self.calls += 1
+                  raise AssertionError('Unexpected Vercel API call')
+          api = NoAPI()
+          # Synthetic event/ref exercise the controller gate, not GitHub push dispatch.
+          context = {'GITHUB_EVENT_NAME': 'push', 'GITHUB_REF': 'refs/heads/staging',
+                     'PRODUCT_CI_RESULT': result}
+          with open('vercel.json') as handle:
+              config = json.load(handle)
+          try:
+              cd.deploy(context, config, api)
+          except cd.Stop as exc:
+              assert str(exc) == 'Product CI must succeed.', 'Unexpected rejection'
+          else:
+              raise AssertionError('Failed CI was accepted')
+          assert api.calls == 0
+          print('NEGATIVE_PROOF_PASSED: actual CI failure; controller rejected; API calls=0')
+          print('LIMIT: synthetic push/ref; not an end-to-end staging push failure')
+          PY
+
   staging-cd:
     name: Staging CD
     needs: product-ci
