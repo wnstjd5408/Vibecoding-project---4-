@@ -82,6 +82,57 @@ def test_plan_excludes_answers_and_maps_citations(cases):
         assert set(plan["sources"][slot]) == {"1", "2"}
 
 
+def test_fewshot_examples_are_valid_and_current_payload_is_last(cases):
+    from evals.wiki_examples import EXAMPLES, example_messages
+    from evals.live_output import validate_output
+    assert len(EXAMPLES) == 1
+    for payload, answer in EXAMPLES:
+        validate_output(json.dumps(answer, ensure_ascii=False), payload["sources"])
+        for heading in ("정의", "작동 원리", "활용 예시", "주의사항"):
+            assert f"**{heading}**\n" in answer["explanation"]
+        assert payload["term"] not in [c["term"] for c in cases]
+    messages = make_plan(cases)["requests"]["WDEV01:U"]["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+    current = json.loads(messages[-1]["content"][0]["text"])
+    assert current["term"] == cases[0]["term"]
+    assert current["sources"]["1"] == cases[0]["internal_evidence"][0]["text"]
+    messages[0]["content"][0]["text"] = "mutated"
+    assert example_messages()[0]["content"][0]["text"] != "mutated"
+
+
+def test_example_change_invalidates_approval_before_call(cases, tmp_path, monkeypatch):
+    import evals.wiki_live as wiki
+    approval, _ = prepared(cases, tmp_path)
+    original = wiki.example_messages
+    def changed():
+        messages = original()
+        messages[0]["content"][0]["text"] += " "
+        return messages
+    monkeypatch.setattr(wiki, "example_messages", changed)
+    transport = Scripted()
+    with pytest.raises(DatasetError, match="approval_mismatch"):
+        run(cases, manifest(cases), approval, transport, phase="canary", mode="mock")
+    assert transport.calls == []
+
+
+def test_fewshot_bytes_count_toward_request_limit(cases, monkeypatch):
+    import evals.wiki_live as wiki
+    monkeypatch.setattr(wiki, "example_messages", lambda: [
+        {"role": "user", "content": [{"text": "x" * 16000}]}])
+    with pytest.raises(DatasetError, match="request_byte_limit"):
+        make_plan(cases)
+
+
+def test_example_citations_do_not_expand_current_allowlist(cases):
+    from evals.live_output import validate_output
+    cases[0]["internal_evidence"] = []
+    plan = make_plan(cases)
+    assert set(plan["sources"]["WDEV01:U"]) == {"1"}
+    with pytest.raises(DatasetError, match="unknown_source"):
+        validate_output(response()["output"]["message"]["content"][0]["text"],
+                        plan["sources"]["WDEV01:U"])
+
+
 def test_canary_then_remaining_and_resume_are_idempotent(cases, tmp_path):
     approval, ledger = prepared(cases, tmp_path)
     transport = Scripted()
@@ -314,3 +365,96 @@ def test_directory_lock_also_blocks_alternate_approval_initialization(cases, tmp
                    approval_id='alternate', run_id='alternate', budget='2.00', mode='mock')
     assert not alternate.exists()
     assert lock.exists()
+
+
+def test_structured_output_request_matches_sdk(cases):
+    import botocore.session
+    from botocore.validate import validate_parameters
+    from evals.wiki_live import OUTPUT_SCHEMA
+    request = make_plan(cases)["requests"]["WDEV01:U"]
+    shape = botocore.session.get_session().get_service_model("bedrock-runtime").operation_model("Converse").input_shape
+    validate_parameters(request, shape)
+    config = request["outputConfig"]["textFormat"]
+    assert config["type"] == "json_schema"
+    assert json.loads(config["structure"]["jsonSchema"]["schema"]) == OUTPUT_SCHEMA
+    assert request["additionalModelRequestFields"]["text"]["format"]["strict"] is True
+    assert OUTPUT_SCHEMA["additionalProperties"] is False
+
+
+def test_empty_evidence_blocks_before_provider(cases):
+    for c in cases:
+        c["internal_evidence"] = []
+        c["evidence"] = []
+    with pytest.raises(DatasetError, match="public_evidence_required"):
+        make_plan(cases)
+
+
+def test_partial_evidence_is_not_repaired_with_rubric(cases):
+    cases[0]["original"] = "A learner asks about retries."
+    cases[0]["internal_evidence"] = []
+    cases[0]["evidence"] = [{"id": "partial", "kind": "web", "text": "Retry repeats a failed operation.", "public": True, "revision": 1, "url": "https://example.org/retry"}]
+    request = make_plan(cases)["requests"]["WDEV01:U"]
+    payload = json.loads(request["messages"][-1]["content"][0]["text"])
+    assert payload["context"] != payload["sources"]["1"]
+    assert payload["sources"] == {"1": "Retry repeats a failed operation."}
+    assert "required condition" not in json.dumps(payload)
+
+
+def test_unrelated_evidence_abstention_continues_and_preserves_denominator(cases, tmp_path):
+    from evals.wiki_live import INSUFFICIENT_EVIDENCE
+    cases[0]["term"] = "스택"
+    for evidence in cases[0]["internal_evidence"] + cases[0]["evidence"]:
+        evidence["text"] = "합성 행사 안내: 도서관은 월요일에 문을 닫습니다."
+    approval, ledger = prepared(cases, tmp_path)
+    transport = Scripted([response(body=json.dumps(INSUFFICIENT_EVIDENCE))])
+    state = run(cases, manifest(cases), approval, transport, mode="mock")
+    row = state["slots"]["WDEV01:U"]
+    assert row["status"] == "ok"  # Mechanical completion, not quality approval.
+    assert row["structured_output"]["response_kind"] == "insufficient_evidence"
+    assert row["structured_output"]["references"] == []
+    state = run(cases, manifest(cases), approval, transport, phase="remaining", mode="mock")
+    assert len(transport.calls) == state["attempts"] == len(state["slots"]) == 6
+    assert all(row["status"] == "ok" for row in state["slots"].values())
+    assert state["slots"]["WDEV02:U"]["structured_output"]["response_kind"] == "answer"
+    assert read(ledger) == state
+    run(cases, manifest(cases), approval, transport, phase="remaining", mode="mock")
+    assert len(transport.calls) == 6
+
+
+@pytest.mark.parametrize("field", ["summary", "explanation"])
+def test_abstention_cannot_smuggle_uncited_claims(cases, tmp_path, field):
+    from evals.wiki_live import INSUFFICIENT_EVIDENCE
+    obj = copy.deepcopy(INSUFFICIENT_EVIDENCE)
+    claim = " 스택은 항상 작업을 자동으로 복구합니다."
+    if field == "summary":
+        obj[field][0] += claim
+    else:
+        obj[field] += claim
+    approval, _ = prepared(cases, tmp_path)
+    transport = Scripted([response(body=json.dumps(obj))])
+    state = run(cases, manifest(cases), approval, transport, mode="mock")
+    assert state["slots"]["WDEV01:U"]["status"] == "error"
+    with pytest.raises(DatasetError, match="halted_manual_recovery_required"):
+        run(cases, manifest(cases), approval, transport, phase="remaining", mode="mock")
+    assert len(transport.calls) == 1
+
+
+def test_uncited_normal_answer_still_rejected():
+    from evals.wiki_live import _validate_wiki
+    obj = json.loads(response()["output"]["message"]["content"][0]["text"])
+    obj["source_ids"] = []
+    obj["explanation"] = obj["explanation"].replace("[1]", "").replace("[2]", "")
+    with pytest.raises(DatasetError, match="citation_required"):
+        _validate_wiki(json.dumps(obj), {"1": "synthetic"})
+
+
+def test_pre_abstention_approval_rejected_before_call(cases, tmp_path, monkeypatch):
+    import evals.wiki_live as wiki
+    with monkeypatch.context() as old:
+        old.setattr(wiki, "VERSION", "wiki-live-v7-evidence")
+        old.setattr(wiki, "PROMPT", "Previous approved system prompt")
+        approval, _ = prepared(cases, tmp_path)
+    transport = Scripted()
+    with pytest.raises(DatasetError, match="approval_mismatch"):
+        run(cases, manifest(cases), approval, transport, mode="mock")
+    assert transport.calls == []
