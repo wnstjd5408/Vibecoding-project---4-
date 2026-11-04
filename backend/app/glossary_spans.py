@@ -9,6 +9,7 @@
   한글은 조사가 붙어도 일치한다.
 - note-image: 토큰 안은 찾지 않는다. (2026-10-30 김준성 확인) 화면에 글자로 보이지 않는 링크 주소(](...))와 맨 URL
   안도 찾지 않는다. 링크가 아닌 `](...)` 모양 글자 안의 용어는 놓친다.
+- 코드 블록 여는 줄의 언어 이름(```python의 python)은 화면에 글자로 보이지 않아 찾지 않는다(MEG-149). 코드 본문은 그대로 찾는다.
 - 겹치면 긴 쪽을 남긴다. 길이가 같으면 앞에 나온 쪽, 그다음 term_id가 작은 쪽이다.
 - 마크다운 백슬래시 이스케이프(백슬래시 + ASCII 문장부호)는 풀어서 비교한다. Notion 가져오기가 특수문자를
   이스케이프해 저장하므로 용어 `A*`는 본문의 `A` + 백슬래시 + `*`와 일치한다. 위치는 이스케이프 백슬래시를 포함한
@@ -200,7 +201,15 @@ def _code_mask(text: str) -> bytearray:
     return mask
 
 
-def _mask_fenced_blocks(text: str, mask: bytearray) -> None:
+def _fence_info_ranges(text: str) -> list[tuple[int, int]]:
+    """코드 블록 여는 줄의 info(언어 이름 등) 구간 (시작, 끝). 화면에 글자로 보이지 않는다(MEG-149)."""
+    ranges: list[tuple[int, int]] = []
+    if "```" in text or "~~~" in text:
+        _mask_fenced_blocks(text, bytearray(len(text)), ranges)
+    return ranges
+
+
+def _mask_fenced_blocks(text: str, mask: bytearray, info_ranges: list[tuple[int, int]] | None = None) -> None:
     lines: list[tuple[int, int]] = []
     start = 0
     while start <= len(text):
@@ -218,6 +227,8 @@ def _mask_fenced_blocks(text: str, mask: bytearray) -> None:
             continue
         char, width = fence.group(2)[0], len(fence.group(2))
         prefix = fence.group(1)
+        if info_ranges is not None and fence.group(3).strip():
+            info_ranges.append((fence.start(3), line_end))
         # 목록 항목 안의 코드 블록은 항목이 끝나면 함께 끝난다. 맨 앞(0~3칸)의 코드 블록은 들여쓰기로 끝나지 않는다.
         # 한계: 항목 내용 칸 대신 펜스 글자 칸을 기준으로 삼고 탭을 1칸으로 센다. 가져오기는 한 항목의 모든 줄을
         # 같은 칸 수의 공백으로 들여쓰므로 차이가 나지 않는다.
@@ -381,6 +392,10 @@ def _search_text(text: str) -> tuple[str, list[int], bytearray]:
         hidden[match.start() : match.end()] = b"\x01" * (match.end() - match.start())
     for match in _LINK_DESTINATION.finditer(collapsed):
         hidden[match.start(1) : match.end(1)] = b"\x01" * (match.end(1) - match.start(1))
+    # 코드 블록 여는 줄의 언어 이름(```python)은 화면에 보이지 않으므로 용어로 찾지 않는다.
+    for start, end in _fence_info_ranges(text):
+        low, high = bisect.bisect_left(positions, start), bisect.bisect_left(positions, end)
+        hidden[low:high] = b"\x01" * (high - low)
 
     # 코드 판정은 들여쓰기·줄 끝이 그대로인 원래 글에서 한다.
     code: bytearray | None = None

@@ -18,6 +18,24 @@ def escaped(text: str) -> str:
     return re.sub(r"([\\`*_{}\[\]<>!|])", r"\\\1", text)
 
 
+FENCE_LANGUAGE = re.compile(r"[a-z0-9+#.-]{1,32}")
+
+
+def fence_language(value) -> str:
+    """Return a safe Markdown fence info string for a Notion code `language`, or "".
+
+    Lowercase, runs of spaces become one hyphen. Only [a-z0-9+#.-] up to 32 chars is
+    allowed, so a value can never add a newline or backtick to the opening fence line.
+    Notion's "plain text", a missing value, or anything else keeps the bare fence.
+    """
+    if not isinstance(value, str):
+        return ""
+    name = re.sub(r" +", "-", value.strip().lower())
+    if name == "plain-text" or not FENCE_LANGUAGE.fullmatch(name):
+        return ""
+    return name
+
+
 def emphasize(text: str, marker: str) -> str:
     """Keep whitespace outside delimiters, including empty/whitespace-only runs.
 
@@ -111,7 +129,7 @@ def convert(notion, page_id: str) -> Content:
             elif kind == "code":
                 code = plain(data.get("rich_text", []))
                 fence = "`" * max(3, max((len(x) + 1 for x in re.findall(r"`+", code)), default=3))
-                lines.append(f"{fence}\n{code}\n{fence}")
+                lines.append(f"{fence}{fence_language(data.get('language'))}\n{code}\n{fence}")
             elif kind == "divider":
                 lines.append("---")
             elif kind == "equation":
