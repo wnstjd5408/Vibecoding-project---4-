@@ -1,19 +1,20 @@
 """공통 계층 시험용 앱과 가짜 Supabase. 네트워크·DB 없이 돈다."""
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 
 from fastapi import Depends, FastAPI, Header
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import accounts, notes
+from app import accounts, glossary, notes
 from app.auth import SessionUser, get_session_user, require_login, require_operator
 from app.common import install_common_layer
 from app.config import SESSION_COOKIE
 from app.errors import ApiError
 from app.rate_limit import RateRule, rate_limited
-from app.supabase import AuthSession, Profile, SupabaseUnavailable, get_supabase
+from app.supabase import AuthSession, Profile, SupabaseConfigError, SupabaseUnavailable, get_supabase
 
 ALLOWED_ORIGIN = "http://localhost:5173"
 LIMITED_RULE = RateRule("test_limit", 2, 60)
@@ -46,6 +47,26 @@ class FakeSupabase:
     notes: list[dict] = field(default_factory=list)
     # list_notes를 부를 때마다 넘긴 include_unpublished 값
     note_queries: list[bool] = field(default_factory=list)
+    # E05: 사전 용어(terms + glossary_entries) 행, Storage 노트 이미지 버킷에 있는 경로, 서명 요청 기록
+    glossary: list[dict] = field(default_factory=list)
+    stored_images: set[str] = field(default_factory=set)
+    storage_down: bool = False
+    # False면 NOTE_IMAGE_BUCKET이 없는 것처럼 서명이 설정 오류를 낸다.
+    bucket_configured: bool = True
+    glossary_reads: int = 0
+    sign_calls: list[tuple[list[str], int]] = field(default_factory=list)
+    # get_note를 부를 때마다 넘긴 (note_id, include_unpublished)
+    note_reads: list[tuple[int, bool]] = field(default_factory=list)
+    # E06·E07: 용어별 사전 설명·이미지 행, AI로만 설명된 용어 id, 즐겨찾기·열람 기록 행
+    glossary_details: dict[int, dict] = field(default_factory=dict)
+    ai_terms: set[int] = field(default_factory=set)
+    favorites: set[tuple[str, int]] = field(default_factory=set)
+    term_views: set[tuple[str, int, str]] = field(default_factory=set)
+    # False면 GLOSSARY_IMAGE_BUCKET이 없는 것처럼 공개 주소 만들기가 설정 오류를 낸다.
+    glossary_bucket_configured: bool = True
+    # get_glossary_entry를 부를 때마다 넘긴 user_id(방문자는 None), record_term_view 호출(넣기 시도)
+    term_reads: list[str | None] = field(default_factory=list)
+    view_inserts: list[tuple[str, int, str]] = field(default_factory=list)
 
     def add_user(
         self, token: str, user_id: str, role: str = "member", is_active: bool = True, display_name: str | None = None
@@ -147,6 +168,9 @@ class FakeSupabase:
         parent_note_id: int | None = None,
         revision: int = 1,
         needs_review: bool = False,
+        body_markdown: str = "",
+        sources: list[dict] | None = None,
+        images: list[dict] | None = None,
     ) -> None:
         self.notes.append(
             {
@@ -158,8 +182,55 @@ class FakeSupabase:
                 "revision": revision,
                 "needs_review": needs_review,
                 "subject_ids": subject_ids,
+                "body_markdown": body_markdown,
+                # note_sources 행(id, url, label)과 note_images 행(notion_block_id, storage_path, alt)
+                "sources": sources or [],
+                "images": images or [],
             }
         )
+
+    def add_glossary_term(
+        self, term_id: int, key: str, label: str, body_markdown: str = "", images: list[dict] | None = None
+    ) -> None:
+        self.glossary.append({"id": term_id, "key": key, "label": label})
+        # glossary_images 행(id, storage_path, alt)
+        self.glossary_details[term_id] = {"body_markdown": body_markdown, "images": images or []}
+
+    def get_glossary_entry(self, term_id: int, user_id: str | None = None) -> dict | None:
+        """SupabaseClient.get_glossary_entry와 같은 모양: 사전 설명은 객체 하나, 이미지는 id 오름차순.
+
+        user_id를 주면 그 사용자의 즐겨찾기 행만 favorites 배열로 붙인다(내장 필터 favorites.user_id).
+        """
+        if self.down:
+            raise SupabaseUnavailable("down")
+        self.term_reads.append(user_id)
+        for term in self.glossary:
+            if term["id"] == term_id:
+                detail = self.glossary_details[term_id]
+                row = {
+                    **term,
+                    "glossary_entries": {"body_markdown": detail["body_markdown"]},
+                    "glossary_images": sorted(detail["images"], key=lambda image: image["id"]),
+                }
+                if user_id is not None:
+                    row["favorites"] = [{"term_id": term_id}] if (user_id, term_id) in self.favorites else []
+                return row
+        return None
+
+    def record_term_view(self, user_id: str, term_id: int, study_date: str) -> bool:
+        """기본 키(user_id, term_id, study_date) 충돌은 무시한다. terms에 없는 용어는 외래 키에 걸려 False다."""
+        if self.down:
+            raise SupabaseUnavailable("down")
+        self.view_inserts.append((user_id, term_id, study_date))
+        if term_id not in self.ai_terms and not any(term["id"] == term_id for term in self.glossary):
+            return False
+        self.term_views.add((user_id, term_id, study_date))
+        return True
+
+    def glossary_image_url(self, storage_path: str) -> str:
+        if not self.glossary_bucket_configured:
+            raise SupabaseConfigError("GLOSSARY_IMAGE_BUCKET is not set or invalid")
+        return f"https://storage.example.test/public/glossary/{storage_path}"
 
     def list_subjects(self) -> list[dict]:
         if self.down:
@@ -181,6 +252,37 @@ class FakeSupabase:
             {**{c: n[c] for c in columns}, "note_subjects": [{"subject_id": sid} for sid in n["subject_ids"]]}
             for n in rows
         ]
+
+    def get_note(self, note_id: int, include_unpublished: bool) -> dict | None:
+        """SupabaseClient.get_note와 같은 거르기와 내장 열(note_subjects·note_sources·note_images)."""
+        if self.down:
+            raise SupabaseUnavailable("down")
+        self.note_reads.append((note_id, include_unpublished))
+        names = {s["id"]: s["name"] for s in self.subjects}
+        for n in self.notes:
+            if n["id"] == note_id and (include_unpublished or n["is_published"]):
+                return {
+                    **{c: n[c] for c in ("id", "revision", "title", "studied_on", "body_markdown")},
+                    "note_subjects": [{"subjects": {"id": sid, "name": names[sid]}} for sid in n["subject_ids"]],
+                    "note_sources": list(n["sources"]),
+                    "note_images": list(n["images"]),
+                }
+        return None
+
+    def list_glossary_terms(self) -> list[dict]:
+        if self.down:
+            raise SupabaseUnavailable("down")
+        self.glossary_reads += 1
+        return sorted(self.glossary, key=lambda t: t["id"])
+
+    def sign_note_images(self, paths: list[str], expires_in: int) -> dict[str, str]:
+        """Storage 흉내: 버킷에 없는 경로는 결과에서 빠진다."""
+        if not self.bucket_configured:
+            raise SupabaseConfigError("NOTE_IMAGE_BUCKET is not set or invalid")
+        if self.down or self.storage_down:
+            raise SupabaseUnavailable("down")
+        self.sign_calls.append((paths, expires_in))
+        return {p: f"https://storage.example.test/signed/{p}?token=EXAMPLE_ONLY" for p in paths if p in self.stored_images}
 
     def keyed_hash(self, value: str) -> str:
         return hashlib.sha256(f"fake-secret:{value}".encode()).hexdigest()[:32]
@@ -330,11 +432,20 @@ def build_accounts_app(fake: FakeSupabase) -> FastAPI:
 
 
 def build_notes_app(fake: FakeSupabase) -> FastAPI:
-    """E04 라우터를 붙인 시험 앱."""
+    """E04·E05 라우터를 붙인 시험 앱."""
     app = FastAPI()
     install_common_layer(app)
     app.dependency_overrides[get_supabase] = lambda: fake
     app.include_router(notes.router)
+    return app
+
+
+def build_glossary_app(fake: FakeSupabase) -> FastAPI:
+    """E06·E07 라우터를 붙인 시험 앱."""
+    app = FastAPI()
+    install_common_layer(app)
+    app.dependency_overrides[get_supabase] = lambda: fake
+    app.include_router(glossary.router)
     return app
 
 
@@ -345,3 +456,8 @@ def cookie(token: str) -> dict[str, str]:
 
 def origin(value: str = ALLOWED_ORIGIN) -> dict[str, str]:
     return {"Origin": value}
+
+
+def unescape_markdown(text: str) -> str:
+    """마크다운 백슬래시 이스케이프를 푼다. 시험이 앱 코드(app/glossary_spans.py)와 따로 쓰는 기준 구현이다."""
+    return re.sub(r"\\([!-/:-@\[-`{-~])", r"\1", text)

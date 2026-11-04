@@ -1,5 +1,10 @@
+import AccountsPage from '../operator/accounts/AccountsPage.tsx'
+import OperatorMyInfoPage from '../operator/OperatorMyInfoPage.tsx'
 import type { RouteObject } from 'react-router'
+import GlossaryPage from '../operator/glossary/GlossaryPage.tsx'
 import Placeholder from '../pages/Placeholder.tsx'
+import CorrectReportPage from '../operator/reports/CorrectReportPage.tsx'
+import ReportsPage from '../operator/reports/ReportsPage.tsx'
 import { operatorPaths } from './paths.ts'
 import NoteEditPage from '../operator/notes/NoteEditPage.tsx'
 import NotesPage from '../operator/notes/NotesPage.tsx'
@@ -11,17 +16,24 @@ export const operatorRoutes: RouteObject[] = [
     path: operatorPaths.home,
     element: <NotesPage />,
   },
-  {
-    path: operatorPaths.glossary,
-    element: <Placeholder screenId="F5-1c" title="용어 사전" ticket="운영자 화면 티켓(MEG-78 셸 이후)" />,
-  },
+  { path: operatorPaths.glossary, element: <GlossaryPage /> },
+  { path: operatorPaths.glossaryNew, element: <GlossaryPage /> },
+  { path: operatorPaths.glossaryTerm, element: <GlossaryPage /> },
   {
     path: operatorPaths.reports,
-    element: <Placeholder screenId="F5-2" title="신고" ticket="운영자 화면 티켓(MEG-78 셸 이후)" />,
+    element: <ReportsPage />,
+  },
+  {
+    path: operatorPaths.reportCorrect,
+    element: <CorrectReportPage />,
   },
   {
     path: operatorPaths.accounts,
-    element: <Placeholder screenId="F4-3a" title="계정 발급" ticket="운영자 화면 티켓(MEG-78 셸 이후)" />,
+    element: <AccountsPage />,
+  },
+  {
+    path: operatorPaths.myInfo,
+    element: <OperatorMyInfoPage />,
   },
   { path: operatorPaths.noteNew, element: <NoteEditPage /> },
   { path: operatorPaths.noteEdit, element: <NoteEditPage /> },

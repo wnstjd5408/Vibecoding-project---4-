@@ -6,3 +6,16 @@
 .notes { border-top: 1px solid var(--surface-300); }
 .message { padding: var(--space-4); }
 .linkButton { display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 14px; line-height: 22px; font-weight: 600; cursor: pointer; text-decoration: underline; }
+
+/* 과목 칩과 "오늘의 퀴즈": 모바일은 위아래, PC는 한 줄 */
+.toolbar { display: block; }
+
+/* PC 폭(1024px 이상): 헤더는 화면 전체 폭이고 본문 열은 720px로 가운데에 둔다. 과목 칩과 "오늘의 퀴즈"는 한 줄이다 */
+@media (min-width: 1024px) {
+  .page { max-width: none; }
+  .main { max-width: 720px; margin-inline: auto; }
+  .heading { padding-inline: 0; }
+  .toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding-bottom: var(--space-4); }
+  .toolbar .filters, .toolbar .quiz { padding: 0; }
+  .quiz { flex-shrink: 0; }
+}

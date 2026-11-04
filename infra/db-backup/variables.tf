@@ -58,3 +58,13 @@ variable "backup_environment" {
   type        = string
   default     = "db-backup"
 }
+
+variable "backup_oidc_subject" {
+  description = "private 운영 저장소 전환 시 main 브랜치의 정확한 sub. null이면 기존 Environment 신뢰를 유지한다."
+  type        = string
+  default     = null
+  validation {
+    condition     = var.backup_oidc_subject == null ? true : can(regex("^repo:[A-Za-z0-9_.@-]+/[A-Za-z0-9_.@-]+:ref:refs/heads/main$", var.backup_oidc_subject))
+    error_message = "와일드카드 없는 main 브랜치 sub만 허용한다."
+  }
+}

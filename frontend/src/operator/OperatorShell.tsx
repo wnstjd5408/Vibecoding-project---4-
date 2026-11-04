@@ -31,7 +31,7 @@ function Shell() {
           <span className={styles.title}>CS 학습 노트</span>
           <Badge>운영자</Badge>
         </div>
-        <AccountMenu />
+        <AccountMenu myInfoPath={operatorPaths.myInfo} />
       </header>
       <div className={styles.body}>
         <nav className={styles.sidebar} aria-label="운영자 메뉴">

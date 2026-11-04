@@ -1,0 +1,6 @@
+.notice { margin: var(--space-3) 0 0; color: var(--ink-muted); font-size: 14px; line-height: 22px; font-weight: 600; }
+.notice:empty { margin: 0; }
+.form { display: grid; gap: var(--space-3); }
+.alert { margin: 0; color: var(--ink); font-size: 14px; line-height: 22px; font-weight: 600; }
+.actions { display: flex; }
+.actions > button { flex: 1; }

@@ -41,7 +41,7 @@ export function isApiError(error: unknown, code?: string, detail?: string): erro
 
 export type ApiRequestInit = {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
-  // 있으면 JSON으로 보낸다.
+  // 있으면 JSON으로 보낸다. FormData면 그대로 보낸다(멀티파트 경계가 붙은 Content-Type은 브라우저가 정한다).
   body?: unknown
   query?: Record<string, string | number | undefined>
   // Idempotency-Key 같은 추가 헤더
@@ -69,10 +69,10 @@ async function realTransport(url: string, init: ApiRequestInit): Promise<Transpo
       credentials: 'include',
       headers: {
         Accept: 'application/json',
-        ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...(init.body !== undefined && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
         ...init.headers,
       },
-      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+      body: init.body === undefined ? undefined : init.body instanceof FormData ? init.body : JSON.stringify(init.body),
       signal: init.signal,
     })
   } catch (cause) {
@@ -110,6 +110,11 @@ function isErrorBody(body: unknown): body is ApiErrorBody {
 // path는 '/api/me'처럼 spec의 경로를 그대로 쓴다. 성공하면 본문을 돌려주고(204는 undefined), 실패하면 ApiError를 던진다.
 // 응답을 가짜로 받을지 실제 백엔드에서 받을지는 호출하는 쪽이 아니라 환경변수 VITE_API_MOCK 한 곳이 정한다(api/source.ts).
 export async function apiFetch<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
+  return (await apiFetchWithStatus<T>(path, init)).body
+}
+
+// 성공 응답의 HTTP 상태까지 필요할 때 쓴다(예: E10은 새 신고 201과 기존 신고 200을 같은 본문으로 돌려준다). 오류 처리는 apiFetch와 같다.
+export async function apiFetchWithStatus<T>(path: string, init: ApiRequestInit = {}): Promise<{ status: number; body: T }> {
   const url = buildUrl(path, init.query)
   const { status, body, malformed } = getApiSource() === 'mock' ? mockTransport(url, init) : await realTransport(url, init)
 
@@ -117,7 +122,7 @@ export async function apiFetch<T>(path: string, init: ApiRequestInit = {}): Prom
     // 204만 본문이 없어도 성공이다. 그 밖의 성공 응답은 JSON 본문이 있어야 한다.
     // 깨진 JSON이나 빈 본문을 성공(undefined)으로 넘기면 호출한 쪽이 엉뚱한 곳에서 터지므로 여기서 오류로 알린다.
     if (malformed || (status !== 204 && body === undefined)) throw unexpectedResponse(status)
-    return body as T
+    return { status, body: body as T }
   }
   if (isErrorBody(body)) throw new ApiError(status, body.error)
   // 1.4 형식이 아닌 오류 응답(프록시 오류 등)

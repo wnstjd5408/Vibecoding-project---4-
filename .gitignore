@@ -12,6 +12,7 @@ coverage/
 .venv/
 __pycache__/
 .pytest_cache/
+.local-backend/
 
 # 학습 노트 원본·DB 덤프 (노트 본문은 Supabase에만 둔다)
 notion-export/
