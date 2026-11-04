@@ -56,6 +56,19 @@ for (const width of [390, 1280]) test(`E12→E13→E14 두 차례와 재접속 �
   for (const seq of [1, 2]) {
     await page.getByRole('button', { name: '꼬리 질문 받기' }).click()
     await expect(page.getByText(`합성 꼬리 질문 ${seq}`)).toBeVisible()
+    // MEG-110 AC-1: 꼬리 질문마다 "꼬리 질문 n/2" 제목과 "AI 생성" 표시가 보인다.
+    const followup = page.getByRole('region', { name: `꼬리 질문 ${seq}/2` })
+    await expect(followup.getByRole('heading', { name: `꼬리 질문 ${seq}/2` })).toBeVisible()
+    await expect(followup.getByText('AI 생성', { exact: true })).toBeVisible()
+    // 배치: 같은 줄에서 "AI 생성"은 왼쪽, "꼬리 질문 n/2"는 오른쪽 끝이다(목업 F3-5).
+    const box = await followup.boundingBox()
+    const badge = await followup.getByText('AI 생성', { exact: true }).boundingBox()
+    const step = await followup.getByRole('heading', { name: `꼬리 질문 ${seq}/2` }).boundingBox()
+    expect(box && badge && step).toBeTruthy()
+    expect(badge!.x).toBeLessThan(step!.x)
+    expect(Math.abs(badge!.y + badge!.height / 2 - (step!.y + step!.height / 2))).toBeLessThan(4)
+    expect(badge!.x - box!.x).toBeLessThan(4)
+    expect(box!.x + box!.width - (step!.x + step!.width)).toBeLessThan(4)
     await expect(page.getByRole('button', { name: '꼬리 질문 받기' })).toHaveCount(0)
     await page.reload()
     await page.getByLabel(`꼬리 질문 ${seq}에 대한 답`).fill(`합성 답변 ${seq}`)
