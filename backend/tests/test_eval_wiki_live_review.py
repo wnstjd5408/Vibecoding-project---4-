@@ -44,3 +44,27 @@ def test_review_binding_and_mode(cases):
     s["integrity_hash"] = _digest({k: v for k, v in s.items() if k != "integrity_hash"})
     with pytest.raises(DatasetError, match="live_dataset"):
         templates(cases, s)
+
+
+def test_abstention_is_not_quality_approval_or_removed_from_denominator(cases):
+    import json
+    from evals.wiki_live import INSUFFICIENT_EVIDENCE, _seal, _validate_wiki
+    s = fixture(cases)
+    checked = _validate_wiki(json.dumps(INSUFFICIENT_EVIDENCE), {"1": "unrelated"})
+    s["slots"]["WDEV01:U"].update(text=checked["text"], structured_output=checked)
+    s = _seal(s)
+    pending = aggregate(cases, s, [])
+    assert pending["counts"] == {"O": 0, "X": 0, "pending": 6}
+    assert pending["metrics"]["responses"] == 6
+    reviews = templates(cases, s)
+    # Existing six-case contract expects an answer. An honest human review of a
+    # refusal cannot turn format acceptance into an answered-concept quality pass.
+    reviews[0].update(reviewer="Synthetic human fixture", evidence="No concept explained",
+                      claims=[], concepts=[False], conditions=[False], critical=0,
+                      completeness=False, expected=False, adjudicated=True,
+                      human_approved=True,
+                      rubric={"facts": "O", "concepts": "X", "conditions": "X",
+                              "clarity": "O", "complete": "X"})
+    reviewed = aggregate(cases, s, reviews)
+    assert reviewed["counts"] == {"O": 0, "X": 1, "pending": 5}
+    assert reviewed["metrics"]["responses"] == 6
