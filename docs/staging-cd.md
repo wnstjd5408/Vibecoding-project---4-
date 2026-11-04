@@ -30,6 +30,8 @@ GitHub 토큰 권한은 `contents: read`뿐이며 배포 제어 외의 PR 코드
 
 ## 전환 및 실제 검증 순서
 
+최초 실행은 [최초 staging CD 검증 체크리스트](staging-cd-first-check.md)에 따라 사람 reviewer 지정·관리자 우회 차단, 승인 대기, 배포 생성, Ready와 health를 구분해 확인한다.
+
 1. 위 설정을 마친 뒤 사람이 PR을 검토하고 **staging에** 병합한다. 병합 직후 루트 `vercel.json`의 staging 자동 배포 비활성화를 확인한다. main으로 나중에 반영하더라도 이 설정은 staging에만 적용된다.
 2. 그 staging push 실행에서 네 검사 및 `Product CI`가 성공하고 `Staging CD`는 disabled로 생략되는지 확인한다. 같은 SHA로 Git 자동 배포가 만들어지지 않았는지 Vercel에서도 확인한다. webhook 지연/기존 대기 배포가 남아 있다면 끝날 때까지 전환을 진행하지 않는다.
 3. 승인된 staging 버전과 환경을 작업 기록에 남긴 뒤 Repository variable을 `STAGING_CD_ENABLED=true`로 바꾼다. 새 승인된 staging 변경의 push가 최초 CD 실행을 시작하게 한다. 설정 전 실행을 재실행해 새 배포를 만드는 방법은 지원하지 않는다. 재실행은 이미 생성된 배포를 추적할 때만 쓴다.
