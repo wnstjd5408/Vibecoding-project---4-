@@ -6,7 +6,7 @@
 
 | 실행 주체 | 실행 조건 | 확인하거나 수행하는 것 | 보장하지 않는 것 |
 |---|---|---|---|
-| GitHub Actions: Product tests | main·staging 대상 PR 및 두 브랜치 push. 문서도 실행 | 단위·격리 SQL·lint/build·합성 화면 시험, 미실행/skip 차단 | 실환경 DB·로그인·AI, 배포 차단, 사람의 출시 승인 |
+| GitHub Actions: Product tests | main·staging·기능 통합 브랜치(`meg-<번호>-integration`) 대상 PR, main·staging push. 문서도 실행 | 단위·격리 SQL·lint/build·합성 화면 시험, 미실행/skip 차단 | 실환경 DB·로그인·AI, 배포 차단, 사람의 출시 승인 |
 | GitHub Actions: PR metadata | PR 생성·수정·재오픈·새 커밋·리뷰 준비 전환 | 제목·소스 브랜치·본문 형식 | 제품 테스트, AC 충족, 배포 정상 동작 |
 | GitHub Actions: Infra CD | `main`의 지정된 Terraform 파일 변경 push 또는 수동 실행 | Terraform plan, 변경이 있으면 승인 절차 후 저장된 plan 적용 | 프론트·백엔드 배포 및 API 정상 동작 |
 | GitHub Actions: DB Backup | 매주 월요일 03:00 KST 예약 실행 또는 수동 실행 | 운영 DB 덤프와 이미지 파일을 비공개 S3 버킷에 업로드, 이미지 파일·표 행 대조 | 백업 내용의 복원 가능성(복원 시험은 사람이 따로 한다) |
@@ -56,7 +56,7 @@ Environment 비밀값 이름은 `AWS_ROLE_ARN`, `BACKUP_BUCKET`, `SUPABASE_DB_UR
 
 ## 제품 테스트 CI (MEG-168)
 
-`Product tests`는 `pull_request`의 병합 결과와 main·staging push 커밋을 검사한다. checkout의 기본 ref를 사용하고 자격증명을 저장하지 않는다. 경로 필터가 없어 문서 PR도 결과가 보고된다. 동일 PR/브랜치의 이전 실행은 취소하며, 네 job 중 실패·취소·skip이 하나라도 있으면 최종 **Product CI**는 성공하지 않는다. CI 자체에는 배포 명령이 없고 Vercel Git 연동은 별도로 동작한다.
+`Product tests`는 `pull_request`의 병합 결과와 main·staging push 커밋을 검사한다. PR 대상에는 main·staging과 함께 기능 통합 브랜치(`meg-*-integration`)가 들어간다. 통합 브랜치 보호(ruleset)는 사람이 따로 설정한다(MEG-219). checkout의 기본 ref를 사용하고 자격증명을 저장하지 않는다. 경로 필터가 없어 문서 PR도 결과가 보고된다. 동일 PR/브랜치의 이전 실행은 취소하며, 네 job 중 실패·취소·skip이 하나라도 있으면 최종 **Product CI**는 성공하지 않는다. CI 자체에는 배포 명령이 없고 Vercel Git 연동은 별도로 동작한다.
 
 | check 이름 | 실행 범위 |
 |---|---|
