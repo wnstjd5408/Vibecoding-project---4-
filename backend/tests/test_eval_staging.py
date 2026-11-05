@@ -74,8 +74,8 @@ def rig(monkeypatch):
         calls.append(request)
         return response()
     client = SimpleNamespace(meta=SimpleNamespace(config=SDK_CONFIG), converse=converse, close=lambda: None)
-    def transport():
-        exchanges.append(1)
+    def transport(token=None):
+        exchanges.append(token)
         return BedrockTransport(client)
     monkeypatch.setattr(eval_staging, "oidc_transport", transport)
     fake = FakeSupabase()
@@ -121,7 +121,7 @@ def test_preflight_no_reservation_or_model_call(rig):
 
 
 def test_auth_exchange_failure_no_reservation(rig, monkeypatch):
-    def fail():
+    def fail(token=None):
         raise DatasetError("private credential details")
     monkeypatch.setattr(eval_staging, "oidc_transport", fail)
     r = rig.post("run/D01")
@@ -217,3 +217,13 @@ def test_oversized_body_rejected_before_exchange(rig):
     r = rig.http.post("/api/internal/evals/preflight", content=" " * 2_000_001,
         headers={"Origin":ALLOWED_ORIGIN, **cookie("operator")})
     assert r.status_code == 413 and not rig.exchanges
+
+
+def test_request_token_forwarded_without_cross_request_reuse(rig):
+    for token in ("request-a", "request-b", None):
+        headers = {"Origin": ALLOWED_ORIGIN, **cookie("operator")}
+        if token:
+            headers["x-vercel-oidc-token"] = token
+        assert rig.http.post("/api/internal/evals/preflight", json=rig.payload, headers=headers).status_code == 200
+    assert rig.exchanges == ["request-a", "request-b", None]
+    assert not rig.calls and not rig.attempts
