@@ -176,7 +176,7 @@ function NoteRead({ noteId }: { noteId: string }) {
   const panelReserved = wide && (term !== undefined || openAi !== null || loginPanelOpen)
 
   return <div className={panelReserved ? `${styles.page} ${styles.panelOpen}` : styles.page}>
-    <AppHeader title="CS 학습 노트" backTo={userPaths.noteList} backLabel="목록" wide stickyOnWide actions={
+    <AppHeader title="CS 학습 노트" titleTo={userPaths.noteList} backTo={userPaths.noteList} backLabel="목록" wide stickyOnWide actions={
       auth.status === 'loading' ? null
         : auth.role === 'visitor' ? <LinkButton to={userPaths.login}>로그인</LinkButton> : <AccountMenu />
     } />
