@@ -7,19 +7,24 @@ accepted; a tag ruleset keeps everyone else (including the AI account) from
 creating it.
 
 Standard library only. Reads the GitHub API; never checks out or runs PR code
-and never prints API bodies.
+and never prints API bodies. Every failure, including unexpected ones, ends in
+RELEASE_TREE_BLOCKED (fail closed).
 """
 
 import json
 import os
 import re
 import sys
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 RELEASE_BRANCH = re.compile(r"^meg-([0-9]+)-release$")
 TAG_PREFIX = "stg-accepted/meg-"
+SHA = re.compile(r"[0-9a-f]{40}")
+# GET /commits/{sha}/pulls can be empty for a few seconds after a merge.
+PULL_LOOKUP_DELAYS = (0, 5, 10, 20)
 
 
 class Stop(RuntimeError):
@@ -81,55 +86,81 @@ def accepted_tree(api, tag):
     raise Stop(f"Tag {tag} is nested too deeply.")
 
 
-def check_pull_request(api, env):
-    repo = env["GITHUB_REPOSITORY"]
-    require(env.get("PR_HEAD_REPO") == repo, "Release candidates must come from this repository.")
-    head_sha = env.get("PR_HEAD_SHA", "")
-    require(re.fullmatch(r"[0-9a-f]{40}", head_sha), "Missing pull request head SHA.")
-    tag = tag_name(env.get("PR_HEAD_REF"))
-    behind = api.get("/compare/main..." + head_sha).get("behind_by")
-    require(behind == 0, "The candidate does not include the latest main. Rebuild it on the "
-                         "current main and verify it on STG again.")
-    tag_sha, expected = accepted_tree(api, tag)
-    actual = commit_tree(api, head_sha)
-    require(actual == expected, f"Candidate tree {actual[:12]} differs from {tag} tree "
-                                f"{expected[:12]}. Only the STG-accepted tree may reach main.")
-    return f"{tag} ({tag_sha[:12]}) tree {expected[:12]} matches candidate {head_sha[:12]}."
-
-
-def check_push(api, env):
-    sha = env.get("GITHUB_SHA", "")
-    require(re.fullmatch(r"[0-9a-f]{40}", sha), "Missing pushed commit SHA.")
-    pulls = [pr for pr in api.get("/commits/" + sha + "/pulls")
-             if pr.get("merged_at") and pr.get("merge_commit_sha") == sha
-             and pr.get("base", {}).get("ref") == "main"]
-    require(len(pulls) == 1, f"Expected exactly one merged main PR for {sha[:12]}, "
-                             f"found {len(pulls)}. Direct pushes to main are not accepted.")
-    tag = tag_name(pulls[0].get("head", {}).get("ref"))
+def compare_to_tag(api, branch, sha, label):
+    """Shared rule for both events: the tree of `sha` must equal the tag's tree."""
+    tag = tag_name(branch)
     tag_sha, expected = accepted_tree(api, tag)
     actual = commit_tree(api, sha)
-    require(actual == expected, f"main tree {actual[:12]} differs from {tag} tree "
-                                f"{expected[:12]}. Do not assign the production domain.")
-    return f"{tag} ({tag_sha[:12]}) tree {expected[:12]} matches main {sha[:12]}."
+    require(actual == expected, f"{label} tree {actual[:12]} differs from {tag} tree "
+                                f"{expected[:12]}. Only the STG-accepted tree may reach main; "
+                                "do not assign the production domain.")
+    return f"{tag} ({tag_sha[:12]}) tree {expected[:12]} matches {label} {sha[:12]}."
 
 
-def run(env, api):
+def check_pull_request(api, env):
+    require(env.get("PR_HEAD_REPO") == env.get("GITHUB_REPOSITORY"),
+            "Release candidates must come from this repository.")
+    head_sha = env.get("PR_HEAD_SHA", "")
+    require(SHA.fullmatch(head_sha), "Missing pull request head SHA.")
+    branch = env.get("PR_HEAD_REF")
+    tag_name(branch)  # reject non-release branches before any API call
+    # With main-protection's strict policy a stale PR cannot merge; this keeps the
+    # check itself honest when it runs. Resolve heads/main first so a tag named
+    # "main" cannot stand in for the branch.
+    main_sha = api.get("/git/ref/heads/main")["object"]["sha"]
+    require(SHA.fullmatch(main_sha), "Could not resolve the main branch.")
+    behind = api.get("/compare/" + main_sha + "..." + head_sha).get("behind_by")
+    require(behind == 0, "The candidate does not include the latest main. Rebuild it on the "
+                         "current main and verify it on STG again.")
+    return compare_to_tag(api, branch, head_sha, "candidate")
+
+
+def merged_main_pulls(api, sha, sleep):
+    pulls = []
+    for delay in PULL_LOOKUP_DELAYS:
+        sleep(delay)
+        pulls = [pr for pr in api.get("/commits/" + sha + "/pulls")
+                 if pr.get("merged_at") and pr.get("merge_commit_sha") == sha
+                 and pr.get("base", {}).get("ref") == "main"]
+        if pulls:
+            break
+    return pulls
+
+
+def check_push(api, env, sleep=time.sleep):
+    sha = env.get("GITHUB_SHA", "")
+    require(SHA.fullmatch(sha), "Missing pushed commit SHA.")
+    pulls = merged_main_pulls(api, sha, sleep)
+    require(len(pulls) == 1, f"Expected exactly one merged main PR for {sha[:12]}, "
+                             f"found {len(pulls)}. Direct pushes to main are not accepted.")
+    head = pulls[0].get("head") or {}
+    require((head.get("repo") or {}).get("full_name") == env.get("GITHUB_REPOSITORY"),
+            "Release candidates must come from this repository.")
+    return compare_to_tag(api, head.get("ref"), sha, "main")
+
+
+def run(env, api, sleep=time.sleep):
     event = env.get("GITHUB_EVENT_NAME")
     if event == "pull_request_target":
         return check_pull_request(api, env)
     if event == "push":
         require(env.get("GITHUB_REF") == "refs/heads/main", "Only main pushes are checked.")
-        return check_push(api, env)
+        return check_push(api, env, sleep)
     raise Stop(f"Unsupported event {event!r}.")
 
 
-def main():
-    env = os.environ
+def main(env=None, api=None, sleep=time.sleep):
+    env = os.environ if env is None else env
     try:
-        message = "RELEASE_TREE_OK: " + run(env, API(env["GH_TOKEN"], env["GITHUB_REPOSITORY"]))
-        code = 0
+        if api is None:
+            api = API(env["GH_TOKEN"], env["GITHUB_REPOSITORY"])
+        message, code = "RELEASE_TREE_OK: " + run(env, api, sleep), 0
     except Stop as exc:
         message, code = "RELEASE_TREE_BLOCKED: " + str(exc), 1
+    except NotFound:
+        message, code = "RELEASE_TREE_BLOCKED: a commit or ref was not found through the GitHub API.", 1
+    except Exception as exc:  # fail closed with a readable reason, never a raw API body
+        message, code = f"RELEASE_TREE_BLOCKED: unexpected {type(exc).__name__}.", 1
     print(message)
     summary = env.get("GITHUB_STEP_SUMMARY")
     if summary:

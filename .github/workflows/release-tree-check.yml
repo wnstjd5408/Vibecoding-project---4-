@@ -7,7 +7,8 @@ name: Release tree check
 on:
   pull_request_target:
     branches: [main]
-    types: [opened, reopened, synchronize, ready_for_review]
+    # edited: a PR retargeted to main must be checked too.
+    types: [opened, reopened, synchronize, ready_for_review, edited]
   push:
     branches: [main]
 
@@ -27,8 +28,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # PR events: trusted base commit. Push events: the merged main commit.
-          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.base.sha }}
+          # Always run the checker from main as it was BEFORE this change: the PR's
+          # base commit, or the previous main commit on push. A candidate can never
+          # replace the script that judges it.
+          ref: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
           persist-credentials: false
           sparse-checkout: .github/scripts
       - name: Compare the tree with the STG-accepted tag
