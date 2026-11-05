@@ -1,0 +1,40 @@
+name: Release tree check
+
+# Release flow v3 (MEG-216/218): only the tree accepted on STG may reach main.
+# pull_request_target runs this file and the checked-out script from main, not
+# from the PR. The PR head and tags are read through the API only; PR code is
+# never checked out or executed.
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: release-tree-check-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  tree:
+    name: Release tree check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # PR events: trusted base commit. Push events: the merged main commit.
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.pull_request.base.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Compare the tree with the STG-accepted tag
+        run: python3 .github/scripts/release_tree_check.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}

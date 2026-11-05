@@ -43,6 +43,8 @@ jobs:
           python-version: "3.12"
           enable-cache: false
       - run: uv sync --locked
+      - name: Release tree check tests (no remote credentials)
+        run: python3 -m unittest discover -s ../.github/scripts -p 'test_release_*.py' -v
       - name: Unit tests (no remote credentials)
         run: uv run --no-sync pytest tests --ignore=tests/integration --ignore=tests/test_account_issuance_local.py --junitxml=unit-results.xml -q
       - name: Require executed tests without skips

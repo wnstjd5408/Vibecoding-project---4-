@@ -8,6 +8,7 @@
 |---|---|---|---|
 | GitHub Actions: Product tests | main·staging·기능 통합 브랜치(`meg-<번호>-integration`) 대상 PR, main·staging push. 문서도 실행 | 단위·격리 SQL·lint/build·합성 화면 시험, 미실행/skip 차단 | 실환경 DB·로그인·AI, 배포 차단, 사람의 출시 승인 |
 | GitHub Actions: PR metadata | PR 생성·수정·재오픈·새 커밋·리뷰 준비 전환 | 제목·소스 브랜치·본문 형식 | 제품 테스트, AC 충족, 배포 정상 동작 |
+| GitHub Actions: Release tree check | main 대상 PR(`pull_request_target`)과 main push | 후보 브랜치·STG 수락 태그·전체 트리 일치 | STG E2E의 실제 내용, 필수 검사·Deployment Checks 연결(사람 설정) |
 | GitHub Actions: Infra CD | `main`의 지정된 Terraform 파일 변경 push 또는 수동 실행 | Terraform plan, 변경이 있으면 승인 절차 후 저장된 plan 적용 | 프론트·백엔드 배포 및 API 정상 동작 |
 | GitHub Actions: DB Backup | 매주 월요일 03:00 KST 예약 실행 또는 수동 실행 | 운영 DB 덤프와 이미지 파일을 비공개 S3 버킷에 업로드, 이미지 파일·표 행 대조 | 백업 내용의 복원 가능성(복원 시험은 사람이 따로 한다) |
 | Vercel Git integration | 연결된 브랜치의 배포 이벤트와 프로젝트 설정 | Vercel 빌드·배포 | GitHub Actions 제품 테스트 실행, 런타임 헬스체크 성공 |
@@ -32,6 +33,19 @@ Vercel의 PR 배포 상태나 봇 댓글은 Vercel 연동에서 제공한다. �
 **`staging`을 소스 브랜치로 하는 `staging → main` PR은 현재 브랜치명 검사에 실패한다.** 대상 브랜치에 따른 예외가 없으므로 `meg-<번호>-<설명>` 규칙을 만족해야 한다. Vercel의 Staging 배포가 성공해도 이 제한은 사라지지 않는다.
 
 운영 반영은 이슈별 브랜치에서 `main`으로 PR을 열어 필수 검사와 사람 Code Owner 승인을 받고 사람이 병합하는 기존 절차를 따른다. Staging에서 검증한 변경과 운영 PR의 커밋·차이를 확인하고 검증 근거를 PR에 남긴다. Staging 전체를 한 번에 승격하는 절차는 현재 자동화되어 있지 않다. 출시 후보 선정과 승인 기록은 [출시 절차](release.md)를 따른다. 필수 검사를 우회하거나 이 문서 작업에서 워크플로를 변경하지 않는다.
+
+## Release tree check
+
+릴리스 흐름 v3(MEG-216)에서는 STG에서 수락한 전체 트리만 main에 들어간다. [Release tree check](../.github/workflows/release-tree-check.yml)는 모든 main PR과 main push에서 다음을 확인하고, 하나라도 어긋나면 실패한다.
+
+1. PR의 출발 브랜치가 이 저장소의 `meg-<번호>-release`다.
+2. 태그 `stg-accepted/meg-<번호>`가 있다. 태그는 묶음 E2E를 수락한 뒤 관리자가 STG 병합 커밋에 만든다.
+3. PR이 최신 main을 포함한다(`behind_by == 0`).
+4. PR head(또는 main 병합 커밋)의 트리가 태그 커밋의 트리와 같다.
+
+`pull_request_target`이라 기본 브랜치의 workflow와 스크립트(`.github/scripts/release_tree_check.py`)만 실행하고 PR 코드는 받지 않는다. 권한은 `contents: read`, `pull-requests: read`뿐이며 비밀값을 쓰지 않는다. 태그를 PR을 연 뒤에 만들었다면 해당 PR의 Release tree check를 다시 실행한다. 검사는 실행 시점의 태그를 읽는다.
+
+이 검사만으로는 막지 못한다. 사람이 main ruleset의 필수 검사와 Vercel Deployment Checks에 `Release tree check`를 등록하고, tag ruleset으로 `stg-accepted/*` 생성을 관리자로 제한해야 한다(MEG-218). 같은 이름의 검사를 다른 workflow가 보고할 수 있다는 기존 지적이 있으므로 `.github/workflows/` 변경은 Code Owner가 검토한다.
 
 ## Infra CD
 
