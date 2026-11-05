@@ -1,5 +1,8 @@
 # 골든 셋 형식·검증기
 
+현재 내부 위키 설명 프롬프트와 무과금 요청 준비는 [WIKI_V044.md](WIKI_V044.md)를 사용한다.
+기존 live 실행기는 과거 계약 재현용으로 유지한다.
+
 ## 사람 채점 집계
 
 `python -m evals review-template --dataset CASES --state PRIVATE_STATE --output PRIVATE_REVIEW`
