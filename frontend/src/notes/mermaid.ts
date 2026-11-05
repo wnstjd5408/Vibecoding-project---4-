@@ -167,7 +167,10 @@ function toDataUrl(svg: string): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(root))}`
 }
 
-// 문법이 틀리거나 그릴 수 없으면 거부한다. 부르는 쪽이 원래 코드 블록으로 돌아간다.
+// 문법이 틀려서 그릴 수 없을 때의 거부 사유. 모듈을 불러오지 못했거나 그리다 실패한 경우(다시 시도하면 될 수 있는 실패)와 구분한다.
+export class DiagramSyntaxError extends Error {}
+
+// 문법이 틀리거나 그릴 수 없으면 거부한다. 문법 오류는 DiagramSyntaxError로, 그 밖의 실패(불러오기·그리기)는 원래 오류로 거부한다.
 export function renderDiagram(source: string, colors: DiagramColors): Promise<string> {
   const run = async () => {
     // 불러오기가 한 번 실패해도(네트워크 순단 등) 그 실패를 붙들어 두지 않고 다음 블록이 다시 시도하게 한다.
@@ -194,7 +197,11 @@ export function renderDiagram(source: string, colors: DiagramColors): Promise<st
       flowchart: { htmlLabels: false, look: 'classic' },
     })
     const text = withoutStyle(source)
-    await mermaid.parse(text)
+    try {
+      await mermaid.parse(text)
+    } catch (error) {
+      throw new DiagramSyntaxError(error instanceof Error ? error.message : 'syntax error')
+    }
     const id = `mermaid-diagram-${++counter}`
     const { svg } = await mermaid.render(id, text)
     // mermaid가 그리는 동안 문서에 만들어 두는 임시 요소가 남지 않게 한다.

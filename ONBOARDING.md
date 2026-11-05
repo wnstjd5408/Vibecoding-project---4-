@@ -1,8 +1,12 @@
 # 개발 가이드 (팀원용)
 
+실제 로컬 DB와 앱 실행은 [Docker Compose 공통 안내](docs/local-compose-guide.md)를 따른다. 기존 Supabase·합성 데이터를 재사용하며 앱 종료와 데이터 초기화를 구분한다.
+
 Claude Code로 바이브코딩하는 팀원을 위한 안내다. 사람과 Claude가 같이 읽는다. Claude에게 작업을 맡길 때는 이 파일과 [AGENTS.md](AGENTS.md)를 따르게 한다. 두 문서가 다르면 AGENTS.md가 우선하고 아래 "계정" 절의 예외만 이 파일을 따른다.
 
 ## 처음 한 번 (약 30분)
+
+앱과 실제 DB까지 실행할 때는 [프런트·백엔드 공통 로컬 가이드](docs/backend-local-guide.md)를 따른다. Docker 기반 로컬 Supabase, 합성 데이터, FastAPI·React 연결과 계정 발급 검증을 안내한다. `/api/health`나 mock 응답만 확인한 것은 DB/Auth 검증 완료가 아니다. 각자 전용 폴더에서 진행하고 실행 환경·기준 커밋·통과/미검증 결과를 담당 티켓에 남긴다.
 
 1. [README.md](README.md)의 "필요한 도구"와 "설정" 1~3단계를 끝낸다. 커밋 이메일은 GitHub noreply 주소를 쓴다(공개 저장소).
 2. 저장소 초대를 받는다. 권한은 Write다. 관리자(Admin) 권한이 보이면 리뷰어(저장소 관리자)에게 Write로 낮춰 달라고 한다. Claude가 이 계정으로 커밋하므로 관리자 권한은 두지 않는다.
@@ -30,6 +34,23 @@ Claude Code로 바이브코딩하는 팀원을 위한 안내다. 사람과 Claud
 | 8 | 병합되면 티켓은 자동으로 Done이 된다. PR을 열면 자동으로 In Review가 된다 | 자동 |
 
 PR 하나에는 티켓 하나만 담는다. 브랜치 이름, PR 제목, 본문 형식이 틀리면 `Check PR metadata` 검사가 실패한다. 이 검사가 통과했다고 기능이 맞는 것은 아니다.
+
+## 로컬 DB로 검증하기
+
+기본 환경은 Supabase local(Docker)이다. 직접 설치한 로컬 PostgreSQL 17로도 검증할 수 있다. 다만 확인할 수 있는 범위가 다르므로 작업에 맞게 고른다.
+
+| 검증할 것 | Supabase local | 로컬 PostgreSQL 17 |
+|---|---|---|
+| 마이그레이션 적용 | 가능 | 가능. 역할 3개(`anon`·`authenticated`·`service_role`)와 `auth.users` 빈 표가 필요하다 |
+| SQL 함수, 동시성, 테이블 권한 | 가능 | 가능 |
+| 로그인, 계정 발급(Auth), REST 호출 | 가능 | 불가 |
+| FastAPI를 실제 DB에 연결해 API 호출 | 가능 | 불가 |
+
+- FastAPI는 Supabase Auth·REST 주소로 DB에 접근한다(`backend/app/supabase.py`). 로그인과 API 호출 확인은 Supabase local에서만 할 수 있다.
+- 로컬 PostgreSQL을 준비하는 방법은 [백엔드 로컬 가이드](docs/backend-local-guide.md) 6절의 "로컬 PostgreSQL로 SQL만 확인할 때"를 따른다. Supabase local 설정은 같은 문서 1~5절이다.
+- PR의 "AC별 검증 결과"에 사용한 환경을 적는다. 예: `검증: 로컬 PostgreSQL 17에서 마이그레이션 적용과 SQL 시험 통과`.
+- 로컬 PostgreSQL만 쓴 AC에는 "Auth·REST·API 호출 미검증"을 함께 적는다. 이 부분을 통과로 쓰지 않는다.
+- AI의 `test-verifier`는 Supabase local이 떠 있는지만 확인하고 직접 띄우지 않는다. 꺼져 있으면 통합 시험은 미검증으로 보고된다.
 
 ## Claude에게 줄 시작 문장
 
@@ -89,6 +110,7 @@ Linear 티켓 MEG-<번호>를 읽고 작업해 줘.
 |---|---|
 | [README.md](README.md) | 설치·실행·프런트 API 호출 사용법·기여 규칙 |
 | [AGENTS.md](AGENTS.md) | Claude가 지킬 공통 규칙 |
+| [docs/backend-local-guide.md](docs/backend-local-guide.md) | 백엔드 로컬 환경(Supabase local, 로컬 PostgreSQL) 설정과 합성 테스트 데이터 |
 | [docs/decisions.md](docs/decisions.md) | 지금까지의 제품·기술 결정 |
 | [docs/architecture.md](docs/architecture.md) | 기술 구조 공개 요약 |
 | Linear MEG-27 첨부 문서 | API spec v0.2, 사용자 흐름 |

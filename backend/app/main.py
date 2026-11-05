@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from app import (
     accounts,
     admin_glossary,
+    admin_notes,
     admin_reports,
     ai_explain,
     eval_staging,
@@ -25,6 +26,7 @@ app.include_router(notes.router)
 app.include_router(glossary.router)
 app.include_router(ai_explain.router)
 app.include_router(admin_glossary.router)
+app.include_router(admin_notes.router)
 app.include_router(admin_reports.router)
 app.include_router(quiz.router)
 app.include_router(quiz_answers.router)

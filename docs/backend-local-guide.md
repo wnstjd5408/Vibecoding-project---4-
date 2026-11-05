@@ -1,4 +1,6 @@
-# 백엔드 로컬 개발 환경 설정
+# 프런트·백엔드 공통 로컬 개발 환경 설정
+
+프런트와 백엔드 담당자 모두 같은 설치·합성 데이터를 사용합니다. 특정 사람에게만 배정된 환경이 아닙니다. PostgreSQL을 따로 설치하지 않고 Docker의 Supabase(Auth·REST·Postgres)를 함께 사용합니다. 처음에는 1~7절, 계정 발급 화면은 [계정 발급 검증](#계정-발급-화면과-실제-db-검증), 즐겨찾기·신고 API는 8절을 따르세요. 담당 기능과 검증 범위는 각자의 승인된 티켓에서 확인합니다.
 
 이 가이드를 따라 하면 운영 계정이나 클라우드 관리자 권한 없이 즐겨찾기 API(MEG-89)와 신고 관리 API(MEG-83)를 개발할 수 있습니다. 내 PC에 테스트용 Supabase를 띄우고, 합성 계정과 데이터를 넣은 뒤 FastAPI에서 로그인과 DB 접근을 확인합니다.
 
@@ -31,7 +33,7 @@ cd backend
 uv sync --frozen --python 3.12
 ```
 
-신고 관리 담당자는 브랜치 이름을 `meg-83-report-admin-api`로 바꿉니다. 아래 명령은 모두 **backend 폴더**에서 실행합니다. `--frozen`은 저장소의 `uv.lock`에 있는 버전을 그대로 설치합니다.
+브랜치 이름은 본인에게 승인된 티켓 ID로 바꿉니다. 위는 즐겨찾기 API 예시이며 신고 관리의 예는 `meg-83-report-admin-api`입니다. 화면 검증만 할 때도 대상 커밋의 별도 작업 폴더를 사용합니다. 아래 명령은 모두 **backend 폴더**에서 실행합니다. `--frozen`은 저장소의 `uv.lock`에 있는 버전을 그대로 설치합니다.
 
 ## 3. 내 작업 폴더 전용 DB 설정 만들기
 
@@ -112,14 +114,73 @@ Secure 쿠키를 그대로 시험하려고 `check`의 앱 주소는 `https://loc
 
 행 수가 다르다는 오류가 나오면 API 시험으로 데이터가 바뀌었을 수 있습니다. fixture로 기준 상태를 복원하고 check를 다시 실행하세요. 이 점검은 초기 상태 확인용이며, 이미 작성한 제품 API의 기능 시험을 대신하지 않습니다.
 
-AI 원장 SQL 함수(한도 예약·정산, 퀴즈 선점, 설명 무효화) 시험은 로컬 Supabase가 아니라 네트워크를 끈 일회용 PostgreSQL 컨테이너에서 돕니다. 운영 DB 주소는 받지 않습니다. 컨테이너 이름을 넣지 않으면 건너뜁니다.
+### 로컬 PostgreSQL로 SQL만 확인할 때
+
+마이그레이션과 SQL 함수는 Supabase local 없이 일반 PostgreSQL 17에서도 확인할 수 있습니다. 저장소의 SQL 시험(`backend/tests/integration/*_sql.py`)이 이 방식입니다. 한도 예약·정산, 퀴즈 선점, 설명 무효화, 용어 관리, 노트 저장 같은 SQL 함수가 여기에 들어갑니다.
+
+다만 일반 PostgreSQL에는 Supabase Auth와 REST가 없습니다. 로그인, 계정 발급, API 호출은 확인할 수 없으므로 위의 `check`를 대신하지 못합니다. 두 환경의 확인 범위는 [ONBOARDING.md](../ONBOARDING.md)의 "로컬 DB로 검증하기" 표에 있습니다.
+
+SQL 시험은 운영 DB 주소를 받지 않습니다. 환경변수에 컨테이너 이름을 넣지 않으면 건너뜁니다.
+
+**방법 1. 일회용 컨테이너 (저장소의 SQL 시험을 그대로 실행)**
+
+시험은 컨테이너가 `--network none`이 아니면 시작하지 않습니다.
 
 ```powershell
-docker run -d --rm --name meg86-sql-test --network none -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17
-$env:AI_LEDGER_TEST_CONTAINER = "meg86-sql-test"
-uv run pytest tests/integration/test_ai_ledger_sql.py -q
-docker stop meg86-sql-test
+docker run -d --rm --name sql-test --network none -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17
+$env:AI_LEDGER_TEST_CONTAINER = "sql-test"
+$env:GLOSSARY_SQL_TEST_CONTAINER = "sql-test"
+$env:NOTION_IMPORT_TEST_CONTAINER = "sql-test"
+$env:EMPHASIS_TEST_CONTAINER = "sql-test"
+$env:NOTE_WRITE_TEST_CONTAINER = "sql-test"
+uv run pytest tests/integration -q
+docker stop sql-test
 ```
+
+시험 하나만 돌리려면 해당 파일의 환경변수 하나만 설정하면 됩니다. 예를 들어 AI 원장 시험은 `AI_LEDGER_TEST_CONTAINER`만 설정하고 `tests/integration/test_ai_ledger_sql.py`를 실행합니다.
+
+**방법 2. 직접 설치한 PostgreSQL 17 (psql로 직접 확인)**
+
+저장소의 SQL 시험은 `docker exec`로 컨테이너에 접속하므로 직접 설치한 PostgreSQL에서는 그대로 돌지 않습니다. 대신 같은 준비를 psql로 해서 마이그레이션 적용과 권한을 확인합니다. 이 절차의 SQL은 방법 1의 시험이 쓰는 것과 같지만, 직접 설치본에서는 아직 시험하지 않았습니다. 개인 PC의 로컬 서버에만 실행하고 원격 주소에는 실행하지 마세요.
+
+1. 시험 전용 DB를 만듭니다.
+
+   ```powershell
+   psql -U postgres -c "create database meg_sql_check"
+   ```
+
+2. Supabase가 기본으로 제공하는 역할 3개를 만듭니다. 서버 전체에 만들어지며, 이미 있으면 `already exists` 오류가 나므로 건너뜁니다.
+
+   ```powershell
+   psql -U postgres -c "create role anon" -c "create role authenticated" -c "create role service_role bypassrls"
+   ```
+
+3. 마이그레이션이 참조하는 `auth.users`를 빈 표로 만듭니다. `id` 열만 있는 단순한 표라서 Supabase Auth의 실제 열·트리거와 다릅니다.
+
+   ```powershell
+   psql -U postgres -d meg_sql_check -c "create schema auth" -c "create table auth.users (id uuid primary key)" -c "grant usage on schema public to service_role"
+   ```
+
+4. 저장소 루트에서 마이그레이션을 파일명 순서대로 적용합니다. 오류가 나면 거기서 멈춥니다.
+
+   ```powershell
+   Get-ChildItem supabase\migrations\*.sql | Sort-Object Name | ForEach-Object { psql -U postgres -d meg_sql_check -v ON_ERROR_STOP=1 -q -f $_.FullName }
+   ```
+
+5. 권한을 확인합니다. `anon`은 `permission denied for table profiles`로 거부되고, `service_role`은 `0`을 반환하면 정상입니다.
+
+   ```powershell
+   psql -U postgres -d meg_sql_check -c "set role anon; select count(*) from public.profiles"
+   psql -U postgres -d meg_sql_check -c "set role service_role; select count(*) from public.profiles"
+   ```
+
+6. 끝나면 시험 DB를 지웁니다.
+
+   ```powershell
+   psql -U postgres -c "drop database meg_sql_check"
+   ```
+
+일반 PostgreSQL로 확인한 결과는 PR에 "로컬 PostgreSQL 17" 환경으로 적고, Auth·REST·API 호출은 미검증이라고 함께 남기세요.
 
 ## 7. 서버와 화면 실행
 
@@ -154,10 +215,41 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 ```powershell
 npm ci
 $env:VITE_API_MOCK = 'false'
-npm run dev
+npm run dev -- --host localhost --port 5173 --strictPort
 ```
 
 브라우저는 **`http://localhost:5173`**으로 여세요. Vite가 `/api`를 백엔드로 전달합니다. 브라우저별 localhost Secure 쿠키 처리와 화면의 실제 API 연결은 별도 확인이 필요합니다. 쿠키 문제를 피하려고 제품의 Secure 속성을 끄지는 마세요. 가짜 응답 모드의 성공은 실제 서버 연결 증거가 아닙니다.
+
+`--strictPort`는 5173이 사용 중일 때 다른 포트로 몰래 바뀌는 것을 막습니다. 다른 세션의 서버를 종료하지 말고 소유자와 사용 시간을 조정하세요. 기본 프록시는 `127.0.0.1:8000`입니다. 주소를 `127.0.0.1:5173`으로 바꾸면 허용 Origin과 달라집니다. 환경변수를 바꾸면 Vite를 재시작합니다. `/api/me` 응답과 백엔드 요청 로그가 함께 보이는지 확인하되 쿠키나 요청 비밀번호를 복사하지 않습니다.
+
+### 계정 발급 화면과 실제 DB 검증
+
+화면 코드가 포함된 커밋에서 실행해야 합니다. main에 아직 병합되지 않았다면 검토 대상 PR을 **별도 검증 폴더**에서 실행하고, 화면과 백엔드 각각의 SHA를 기록하세요. 임시 화면이나 mock 성공으로 대신하지 않습니다. 2026-11-03 검증 조합은 [검증 기록](local-onboarding-verification.md)에 있습니다.
+
+1. `/login`에서 `operator@example.test`와 로컬 환경 파일의 `LOCAL_TEST_PASSWORD`로 로그인합니다. `/api/me`가 authenticated=true, role=operator인지 확인합니다. 다음으로 `/admin/accounts`를 엽니다.
+2. 신규 이메일은 `onboarding-e24@example.com`, 표시 이름은 `합성 온보딩 사용자`로 정합니다. 기존 fixture의 `.test` 주소는 로그인용이며, E24 이메일 검증에서는 거부됩니다. 신규 발급에 재사용하지 마세요. 실제 수신자 이메일은 사용하지 않습니다.
+3. 초기 비밀번호에는 로컬 `LOCAL_TEST_PASSWORD`를 사용합니다. 발급 시 실제 POST `/api/admin/users`가 **201**이고 결과에 이메일·이름·일반 사용자 역할이 보이는지 확인합니다. 응답의 `id`(UUID)만 별도로 기록합니다. 결과 화면에 비밀번호가 없고, “다른 계정 발급하기”에서 비밀번호 칸이 비었는지 확인합니다.
+4. 같은 이메일·이름·비밀번호로 다시 제출합니다. **409**와 이메일 칸의 중복 안내를 확인하고 입력 세 칸이 유지되는지 확인합니다.
+5. 비밀번호를 로컬 `LOCAL_TEST_PASSWORD` 세 번을 이어 붙인 값으로 바꿉니다(기본 생성값은 32 ASCII 문자이므로 96바이트). **422**, fields의 initial_password, 비밀번호 칸의 “너무 길어요” 안내와 입력 유지를 확인합니다. 이 값도 로그·스크린샷에 남기지 않습니다. 422 요청은 계정을 만들지 않아야 합니다.
+6. 별도 비공개 브라우저 창에서 발급한 계정으로 로그인합니다. `/api/me`가 authenticated=true, role=member인지 확인합니다. backend 폴더에서 아래 명령으로 실제 Auth와 profiles의 ID·역할·활성 여부·표시 이름을 확인합니다. `발급응답UUID`는 201 응답의 실제 UUID로 바꾸세요.
+
+```powershell
+uv run python -m scripts.local_account inspect --id 발급응답UUID
+```
+
+**정리와 반복:** 발급 계정에서 로그아웃하고 비공개 창을 닫습니다. 아래 cleanup은 이 worktree의 로컬 프로젝트에서 지정한 UUID가 위 합성 이메일·이름·활성 member와 모두 일치할 때만 삭제합니다. 계정과 profiles 및 FK cascade로 연결된 사용자 데이터가 삭제되므로 이 계정으로 다른 개발 데이터를 만들지 마세요. 네 기본 fixture 계정이나 임의 이메일은 삭제하지 않습니다. 삭제 후 같은 UUID를 다시 정리하면 '없음' 오류로 멈추는 것이 정상입니다.
+
+```powershell
+uv run python -m scripts.local_account cleanup --id 발급응답UUID
+uv run python -m scripts.local_backend fixture
+uv run python -m scripts.local_backend check
+```
+
+**fixture만 다시 실행해도 E24로 만든 추가 계정은 삭제되지 않습니다.** check는 profiles가 정확히 네 개인 초기 상태를 검사하므로 추가 계정을 먼저 정리해야 합니다. 이후 1~6단계를 반복하고 새 UUID로 정리합니다. UUID를 잃었거나 대상이 불일치하면 추측으로 삭제하지 말고 9절의 새 폴더·새 프로젝트 재생성 절차를 사용하세요.
+
+### 로컬과 Vercel Preview의 차이
+
+이 절차는 내 PC의 React → FastAPI → 로컬 Supabase를 검증합니다. Vercel Preview는 내 PC DB에 자동 연결되지 않습니다. Preview 실연동에는 별도로 승인된 원격 테스트 DB/Auth, 해당 배포의 백엔드 환경변수·Origin·쿠키 설정과 합성 데이터가 필요합니다. 이 가이드는 원격 환경을 구성하거나 쓰지 않습니다. Preview에서 mock 화면만 확인했다면 실제 DB 검증은 미검증으로 남깁니다.
 
 ## 8. 두 티켓에서 사용할 데이터와 시험 순서
 
@@ -216,7 +308,9 @@ uv run python -m scripts.local_backend stop
 | 로컬 .env 불일치 | 다른 worktree의 파일을 복사했거나 로컬 키가 바뀌었을 수 있습니다. 새 worktree에서 환경을 다시 만듭니다. 키를 출력해 비교하지 않습니다. |
 | 로그인 429 | 짧은 시간에 check나 로그인 실패를 반복했는지 확인하고 제한 창이 지난 뒤 다시 실행합니다. 제품의 제한을 끄지 않습니다. |
 | Origin 403 | 상태 변경 요청에 `Origin: http://localhost:5173`이 있는지 확인합니다. 역할 거부 403과 구분합니다. |
-| fixture 행 수 오류 | 제품 시험으로 바뀐 결과를 기록한 뒤 fixture → check를 실행합니다. |
+| fixture 행 수 오류 | 제품 시험으로 바뀐 결과를 기록합니다. E24 추가 계정은 7절 cleanup으로 먼저 정리한 뒤 fixture → check를 실행합니다. fixture는 추가 계정을 지우지 않습니다. |
+| 로그인 200 뒤 비로그인 상태 | localhost:5173으로 접속했는지, `/api/me`에 세션 쿠키가 전달되는지 확인합니다. 쿠키 값을 기록하거나 Secure 속성을 끄지 않습니다. 다른 브라우저는 별도 검증합니다. |
+| E24 이메일 422 | 신규 발급은 위 example.com 합성 주소를 사용합니다. 기본 fixture의 .test 주소는 E24 입력 예시가 아닙니다. |
 | SQL 초기화 실패 | 최신 마이그레이션과 도구가 같은 커밋인지 확인합니다. 예약 ID 132001~132099를 다른 데이터에 사용하지 않습니다. SQL은 트랜잭션으로 적용되므로 실패한 데이터 변경은 롤백됩니다. Auth 계정은 남을 수 있으며 같은 fixture 명령으로 재시도할 수 있습니다. |
 
 ## 11. 인계할 때 남길 기록

@@ -2,11 +2,12 @@ name: Product tests
 
 on:
   pull_request:
-    branches: [main, staging]
+    # Feature integration branches (meg-<n>-integration) collect sub-PRs before a release candidate.
+    branches: [main, staging, 'meg-*-integration']
   push:
     branches: [main, staging]
 
-# PR jobs have no environment, deployment credentials or write access.
+# No environment, secrets, deployment or write access in PR code execution.
 permissions:
   contents: read
 
@@ -43,10 +44,12 @@ jobs:
           python-version: "3.12"
           enable-cache: false
       - run: uv sync --locked
+      - name: Release tree check tests (no remote credentials)
+        run: python3 -m unittest discover -s ../.github/scripts -p 'test_release_*.py' -v
       - name: Staging CD guard tests (no remote credentials)
         run: python3 -m unittest discover -s ../.github/scripts -p 'test_staging_*.py' -v
       - name: Unit tests (no remote credentials)
-        run: uv run --no-sync pytest tests --ignore=tests/integration --ignore=tests/test_account_issuance_local.py --junitxml=unit-results.xml -q
+        run: uv run --no-sync pytest tests --ignore=tests/integration --ignore=tests/test_account_issuance_local.py --ignore=tests/test_account_flow_local.py --junitxml=unit-results.xml -q
       - name: Require executed tests without skips
         run: uv run --no-sync python scripts/check_test_report.py unit-results.xml
 
@@ -61,6 +64,8 @@ jobs:
       AI_LEDGER_TEST_CONTAINER: product-ci-postgres
       GLOSSARY_SQL_TEST_CONTAINER: product-ci-postgres
       NOTION_IMPORT_TEST_CONTAINER: product-ci-postgres
+      EMPHASIS_TEST_CONTAINER: product-ci-postgres
+      NOTE_WRITE_TEST_CONTAINER: product-ci-postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
