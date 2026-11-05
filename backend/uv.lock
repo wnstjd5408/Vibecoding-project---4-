@@ -61,6 +61,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "defusedxml" },
+    { name = "markdown-it-py" },
     { name = "pillow" },
     { name = "pytest" },
     { name = "resvg-py" },
@@ -68,6 +69,7 @@ dev = [
 ]
 importer = [
     { name = "defusedxml" },
+    { name = "markdown-it-py" },
     { name = "pillow" },
     { name = "resvg-py" },
     { name = "tinycss2" },
@@ -84,6 +86,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "defusedxml", specifier = "==0.7.1" },
+    { name = "markdown-it-py", specifier = "==4.2.0" },
     { name = "pillow", specifier = ">=13.0.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "resvg-py", specifier = "==0.5.0" },
@@ -91,6 +94,7 @@ dev = [
 ]
 importer = [
     { name = "defusedxml", specifier = "==0.7.1" },
+    { name = "markdown-it-py", specifier = "==4.2.0" },
     { name = "pillow", specifier = ">=13.0.0" },
     { name = "resvg-py", specifier = "==0.5.0" },
     { name = "tinycss2", specifier = "==1.4.0" },

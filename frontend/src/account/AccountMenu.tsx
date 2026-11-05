@@ -25,7 +25,8 @@ const MESSAGES = {
 // failed: 로그아웃이 안 됨, unconfirmed: 로그아웃했는지 확인하지 못함
 type Failure = 'failed' | 'unconfirmed'
 
-export function AccountMenu() {
+// myInfoPath: "내 정보"가 여는 화면. 기본은 사용자 내 정보(F4-5)이고, 운영자 셸은 셸 안의 운영자 내 정보(F4-3d)를 넘긴다.
+export function AccountMenu({ myInfoPath = userPaths.myInfo }: { myInfoPath?: string } = {}) {
   const navigate = useNavigate()
   const location = useLocation()
   const { apply } = useAuth()
@@ -131,7 +132,7 @@ export function AccountMenu() {
       {open ? (
         <div ref={menuRef} role="menu" aria-label="내 계정" className={styles.menu} onKeyDown={handleKeyDown}>
           {/* 어디서 열었는지 넘겨, 내 정보의 "돌아가기"가 그 화면으로 돌아가게 한다 */}
-          <Link role="menuitem" tabIndex={-1} to={userPaths.myInfo} state={{ from: location.pathname }} className={styles.item} onClick={() => setOpen(false)}>
+          <Link role="menuitem" tabIndex={-1} to={myInfoPath} state={{ from: location.pathname }} className={styles.item} onClick={() => setOpen(false)}>
             내 정보
           </Link>
           <button

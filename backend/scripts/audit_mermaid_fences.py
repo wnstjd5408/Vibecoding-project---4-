@@ -1,7 +1,8 @@
 """Read-only audit: find stored notes whose Notion `mermaid` code blocks lost their language mark.
 
-MEG-170. The Notion importer (notion_content.convert) writes every code block as a bare
-fence, so a block that Notion marks as `mermaid` is stored without the `mermaid` info string.
+MEG-170. Before MEG-149 the Notion importer (notion_content.convert) wrote every code block as a
+bare fence, so a block that Notion marks as `mermaid` is stored without the `mermaid` info string.
+Notes imported after MEG-149 keep the language and show up here as already marked.
 This tool never writes to Supabase or Notion. It reads stored notes (GET only), re-reads the
 Notion originals, and writes a review package to --out-dir:
 
@@ -254,6 +255,10 @@ def audit(source, notion):
         body = row["body_markdown"]
         fences, _ = stored_fences(body)
         if fences and all(f["info"].lower() == "mermaid" for f in fences):
+            # Count stored marks even when no Notion lookup is needed. This is a
+            # stored-state count, not evidence that Notion was revalidated.
+            counts["notes_with_mermaid"] += 1
+            counts["blocks_already_marked"] += len(fences)
             continue  # every stored fence is already marked mermaid; nothing to recover
         # Anything else is checked against Notion, even without a bare fence: a stored fence with another
         # language or a note that lost its code blocks must show up in the report, not vanish.

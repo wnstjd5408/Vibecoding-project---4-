@@ -3,7 +3,7 @@
 import json
 import logging
 import re
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
@@ -32,9 +32,15 @@ def tree_notion(tree):
     return notion
 
 
+def convert_legacy(notion, page_id):
+    """Body as stored before MEG-149: old imports wrote bare fences (convert now keeps the language)."""
+    with patch("scripts.notion_content.fence_language", return_value=""):
+        return convert(notion, page_id).markdown
+
+
 def stored_and_blocks(tree):
     notion = tree_notion(tree)
-    return convert(notion, PAGE).markdown, audit.notion_code_blocks(notion, PAGE)
+    return convert_legacy(notion, PAGE), audit.notion_code_blocks(notion, PAGE)
 
 
 MERMAID = "graph TD\n  A-->B"
@@ -153,7 +159,7 @@ def test_audit_end_to_end_and_package(tmp_path):
         "c": {ids["c"]: [code(2, MERMAID, "mermaid")]},
         "d": {ids["d"]: [code(2, MERMAID, "mermaid")]},
     }
-    bodies = {k: convert(tree_notion(t), ids[k]).markdown for k, t in trees.items()}
+    bodies = {k: convert_legacy(tree_notion(t), ids[k]) for k, t in trees.items()}
     bodies["c"] = bodies["c"].replace("A-->B", "A-->Z")  # edited after import
     rows = [{"id": n, "notion_page_id": ids[k], "revision": 1, "updated_at": "2026-11-01T00:00:00Z",
              "body_markdown": bodies[k]} for n, k in enumerate("abcd", start=1)]
@@ -284,3 +290,23 @@ def test_note_whose_fences_are_all_marked_needs_no_notion_call():
     tree = {PAGE: [code(2, MERMAID, "mermaid")]}
     (counts, report, changed), notion = run_audit("```mermaid\n" + MERMAID + "\n```", tree)
     assert not notion.children.called and report == [] and changed == []
+    assert counts['blocks_already_marked'] == 1
+    assert counts['notes_with_mermaid'] == 1
+
+
+def test_post_apply_counts_include_all_marked_and_mixed_language_notes():
+    tree = {PAGE: [code(2, MERMAID, 'mermaid'), code(3, 'x = 1', 'python')]}
+    body, blocks = stored_and_blocks(tree)
+    updated = audit.audit_note(body, blocks)['new_body']
+    rows = [
+        {'id': 1, 'notion_page_id': PAGE, 'revision': 2, 'updated_at': 'x',
+         'body_markdown': '```mermaid\n' + MERMAID + '\n```'},
+        {'id': 2, 'notion_page_id': PAGE, 'revision': 2, 'updated_at': 'x',
+         'body_markdown': updated},
+    ]
+    counts, report, changed = audit.audit(make_source(rows), tree_notion(tree))
+    assert counts['notes_to_change'] == 0
+    assert counts['blocks_already_marked'] == 2
+    assert counts['notes_with_mermaid'] == 2
+    assert counts['notes_checked_against_notion'] == 1
+    assert changed == []
