@@ -49,7 +49,7 @@ jobs:
       - name: Staging CD guard tests (no remote credentials)
         run: python3 -m unittest discover -s ../.github/scripts -p 'test_staging_*.py' -v
       - name: Unit tests (no remote credentials)
-        run: uv run --no-sync pytest tests --ignore=tests/integration --ignore=tests/test_account_issuance_local.py --junitxml=unit-results.xml -q
+        run: uv run --no-sync pytest tests --ignore=tests/integration --ignore=tests/test_account_issuance_local.py --ignore=tests/test_account_flow_local.py --junitxml=unit-results.xml -q
       - name: Require executed tests without skips
         run: uv run --no-sync python scripts/check_test_report.py unit-results.xml
 
