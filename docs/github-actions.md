@@ -54,7 +54,9 @@ PR 검사는 `pull_request_target`이라 PR의 기준(base) 커밋에 있는 wor
 
 남은 위험도 있다. 같은 이름의 검사를 다른 workflow가 보고할 수 있다는 기존 지적(실제 재현은 안 함)이 있으므로 `.github/workflows/` 변경은 Code Owner가 검토한다. "최신 main 포함"은 이력만 확인하므로, 후보가 main 변경을 되돌린 내용이라도 STG에서 수락한 트리라면 통과한다. 이런 되돌림은 STG 반영 PR과 main PR의 Code Owner 리뷰에서 걸러야 한다.
 
-처음 이 검사를 main에 넣는 병합(MEG-218)과 그 뒤 첫 v3 출시 전의 main push는 후보 브랜치가 아니므로 검사가 실패로 표시된다. Deployment Checks에 등록하기 전이라 배포에는 영향이 없다.
+이 검사를 처음 main에 넣은 병합(MEG-218, PR #161)의 push 검사는 스크립트를 찾지 못해 실패했다. push 검사는 병합 직전 main의 스크립트를 쓰는데, 그 커밋에는 스크립트가 아직 없었기 때문이다. 이 실패는 첫 병합에서만 생기고 이후 push에서는 반복되지 않는다.
+
+그 뒤 첫 v3 출시 전의 main push는 후보 브랜치가 아니므로 검사가 실패한다. Vercel Deployment Checks에 `Release tree check`를 Blocking으로 등록해 두었다면 이 push의 Production 배포는 운영 도메인을 할당받지 못한다. 출시 전에 main에 병합하는 변경이 있으면 이 점을 고려한다.
 
 ## Infra CD
 
