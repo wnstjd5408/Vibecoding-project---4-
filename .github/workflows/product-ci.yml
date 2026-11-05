@@ -2,7 +2,8 @@ name: Product tests
 
 on:
   pull_request:
-    branches: [main, staging]
+    # Feature integration branches (meg-<n>-integration) collect sub-PRs before a release candidate.
+    branches: [main, staging, 'meg-*-integration']
   push:
     branches: [main, staging]
 
