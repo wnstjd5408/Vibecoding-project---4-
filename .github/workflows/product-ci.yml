@@ -13,7 +13,8 @@ permissions:
 
 concurrency:
   group: product-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Do not cancel a runner while its external staging deployment is building.
+  cancel-in-progress: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/staging') }}
 
 env:
   CI: "true"
@@ -43,6 +44,10 @@ jobs:
           python-version: "3.12"
           enable-cache: false
       - run: uv sync --locked
+      - name: Release tree check tests (no remote credentials)
+        run: python3 -m unittest discover -s ../.github/scripts -p 'test_release_*.py' -v
+      - name: Staging CD guard tests (no remote credentials)
+        run: python3 -m unittest discover -s ../.github/scripts -p 'test_staging_*.py' -v
       - name: Unit tests (no remote credentials)
         run: uv run --no-sync pytest tests --ignore=tests/integration --ignore=tests/test_account_issuance_local.py --junitxml=unit-results.xml -q
       - name: Require executed tests without skips
@@ -170,3 +175,46 @@ jobs:
               exit 1
             fi
           done
+
+  staging-cd:
+    name: Staging CD
+    needs: product-ci
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/staging' &&
+      needs.product-ci.result == 'success' && vars.STAGING_CD_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write # Short-lived identity for Preview-only Trusted Sources smoke
+    environment: staging-cd
+    concurrency:
+      group: staging-cd
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Deploy the tested staging SHA and wait for Ready
+        id: deploy
+        run: python3 .github/scripts/staging_cd.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_TEAM_ID: ${{ vars.VERCEL_TEAM_ID }}
+          PRODUCT_CI_RESULT: ${{ needs.product-ci.result }}
+      - name: Verify the Ready deployment health contract
+        if: steps.deploy.outputs.deployment_id != '' && vars.STAGING_SMOKE_ENABLED == 'true'
+        run: python3 .github/scripts/staging_smoke.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_TEAM_ID: ${{ vars.VERCEL_TEAM_ID }}
+          PRODUCT_CI_RESULT: ${{ needs.product-ci.result }}
+          STAGING_DEPLOYMENT_ID: ${{ steps.deploy.outputs.deployment_id }}
+      - name: Record smoke not enabled
+        if: steps.deploy.outputs.deployment_id != '' && vars.STAGING_SMOKE_ENABLED != 'true'
+        run: echo 'SMOKE_NOT_RUN — enable only after Preview Trusted Sources is configured; Ready is not smoke success.' >> "$GITHUB_STEP_SUMMARY"

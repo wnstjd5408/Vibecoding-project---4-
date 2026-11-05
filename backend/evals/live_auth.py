@@ -1,5 +1,6 @@
 """Explicit OIDC authentication for an approved evaluation environment."""
 import os
+import logging
 
 import boto3
 from botocore import UNSIGNED
@@ -10,10 +11,17 @@ from .live import BedrockTransport, SDK_CONFIG
 from .schema import DatasetError
 
 
-def oidc_transport():
+logger = logging.getLogger("evals.auth")
+
+
+def oidc_transport(oidc_token=None):
     role = os.environ.get("AWS_ROLE_ARN")
-    token = os.environ.get("VERCEL_OIDC_TOKEN")
+    token = oidc_token
+    # Runtime must use this request's token; never reuse a build-time token.
+    if token is None and not os.environ.get("VERCEL_ENV"):
+        token = os.environ.get("VERCEL_OIDC_TOKEN")
     if not role or not token:
+        logger.warning("eval_auth code=%s", "role_missing" if not role else "token_missing")
         raise DatasetError("live: oidc_credentials_missing")
     try:
         sts = boto3.client("sts", region_name="ap-northeast-1",
@@ -27,5 +35,8 @@ def oidc_transport():
                               aws_session_token=credentials["SessionToken"],
                               config=SDK_CONFIG.merge(Config(signature_version="v4")))
         return BedrockTransport(client)
-    except (ClientError, BotoCoreError):
+    except (ClientError, BotoCoreError) as error:
+        code = error.response.get("Error", {}).get("Code") if isinstance(error, ClientError) else None
+        safe_code = code if code in {"AccessDenied", "InvalidIdentityToken", "ExpiredToken", "IDPRejectedClaim", "IDPCommunicationError"} else "sts_failed"
+        logger.warning("eval_auth code=%s", safe_code)
         raise DatasetError("live: authentication_failed") from None
