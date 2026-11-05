@@ -63,6 +63,8 @@ DB 조회 엔드포인트가 아직 없으면 실제 연결 검증은 미완료�
 
 ## 배포와 운영 반영
 
+staging의 CI 이후 배포 구성·활성화 설정·전환/실패 절차는 [staging CD](staging-cd.md)를 따른다. 해당 구성은 `staging`의 Git 자동 배포를 끄며, 활성화 변수와 Environment를 준비하기 전에는 새 staging 배포를 만들지 않는다. Production 및 PR Preview와 구분한다.
+
 루트 [`vercel.json`](../vercel.json)은 Services(Beta)로 `frontend/`의 Vite와 `backend/`의 FastAPI를 함께 배포한다. 함수 지역 설정값은 `hnd1`이며 실제 실행 지역은 배포·런타임 정보로 별도 확인한다. `/api/*` 경로는 그대로 백엔드에 전달한다. `/health`도 백엔드로, 나머지는 프론트로 연결한다. 프론트의 깊은 경로는 `index.html`로 연결한다.
 
 ### 함수 최대 실행 시간 (MEG-153, 2026-11-02 확인)
