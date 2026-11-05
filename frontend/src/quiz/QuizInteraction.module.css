@@ -1,0 +1,10 @@
+.flow { display: grid; gap: 16px; margin-top: 16px; }
+.form { display: grid; gap: 12px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.followup { border-top: 1px solid var(--color-border, #dce0e5); padding-top: 16px; }
+.error { color: var(--color-danger, #a33232); }
+.aiTitle { margin: 0 0 8px; font-size: 16px; }
+.followupHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.followupStep { margin: 0; font-size: 13px; line-height: 18px; font-weight: 500; color: var(--color-text-secondary, #566474); }
+.status { color: var(--color-text-secondary, #566474); font-size: 14px; }
