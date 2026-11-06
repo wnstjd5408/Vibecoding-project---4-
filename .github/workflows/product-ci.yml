@@ -23,6 +23,54 @@ env:
   NODE_VERSION: "24.19.0"
 
 jobs:
+  # Docs-only PRs (every changed path under docs/ or a root *.md) skip the frontend E2E job.
+  # Pushes always run every job.
+  changes:
+    name: Product changed files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - name: Classify the PR as docs-only or not
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        run: |
+          if [ "$EVENT_NAME" != pull_request ]; then
+            echo 'docs_only=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # One line per file: new path, then the old path for renames (moving code into docs/ is not docs-only).
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+            --jq '.[] | [.filename, (.previous_filename // "")] | @tsv' > files.tsv
+          listed=$(wc -l < files.tsv)
+          docs_only=true
+          # The files API stops at 3,000 entries; an incomplete list is never docs-only.
+          if [ "$listed" -eq 0 ] || [ "$listed" -ne "$CHANGED_FILES" ]; then
+            docs_only=false
+          fi
+          while IFS=$'\t' read -r path previous; do
+            for p in "$path" "$previous"; do
+              [ -n "$p" ] || continue
+              case "$p" in
+                docs/*) ;;
+                */*) docs_only=false ;;
+                *.md) ;;
+                *) docs_only=false ;;
+              esac
+            done
+          done < files.tsv
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "Changed files: $listed, docs_only=$docs_only" >> "$GITHUB_STEP_SUMMARY"
+
   backend-unit:
     name: Product backend unit
     runs-on: ubuntu-24.04
@@ -119,6 +167,8 @@ jobs:
 
   frontend-e2e:
     name: Product frontend E2E
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
@@ -157,19 +207,25 @@ jobs:
   product-ci:
     name: Product CI
     if: always()
-    needs: [backend-unit, backend-sql, frontend, frontend-e2e]
+    needs: [changes, backend-unit, backend-sql, frontend, frontend-e2e]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions: {}
     steps:
-      - name: Require all four jobs to succeed
+      - name: Require all jobs to succeed (E2E may skip only on docs-only PRs)
         env:
+          CHANGES: ${{ needs.changes.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           UNIT: ${{ needs.backend-unit.result }}
           SQL: ${{ needs.backend-sql.result }}
           BUILD: ${{ needs.frontend.result }}
           E2E: ${{ needs.frontend-e2e.result }}
         run: |
-          for result in "$UNIT" "$SQL" "$BUILD" "$E2E"; do
+          if [ "$E2E" = skipped ] && [ "$CHANGES" = success ] && [ "$DOCS_ONLY" = true ]; then
+            echo 'Docs-only PR: frontend E2E skipped by design.'
+            E2E=success
+          fi
+          for result in "$CHANGES" "$UNIT" "$SQL" "$BUILD" "$E2E"; do
             if [ "$result" != success ]; then
               echo 'A required product job failed, was skipped or was cancelled.' >&2
               exit 1
