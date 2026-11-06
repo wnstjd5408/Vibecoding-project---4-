@@ -166,3 +166,5 @@ PR job은 `contents: read`만 사용한다. 운영 비밀값·GitHub Environment
 5. 수정 후 필요한 검사를 다시 실행하고 AC별 결과와 남은 미검증 항목을 PR에 기록한다. 사람 Code Owner가 승인하고 병합한다. 에이전트는 병합·auto-merge·우회 병합을 하지 않는다.
 
 GitHub Actions의 기존 실행을 재실행하면 원래 이벤트의 `GITHUB_SHA`와 `GITHUB_REF`를 재사용한다. 수정 내용을 검증할 때는 새 이벤트·수정 커밋에 해당하는 실행 결과를 확인한다. [GitHub 공식 문서: 워크플로 및 작업 재실행](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)
+
+<!-- MEG-224 probe: docs-only PR. Not for merge. -->
