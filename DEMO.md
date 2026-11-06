@@ -3,12 +3,14 @@
 > 작성일 2026-11-06. 근거: Linear PRD v0.6(MEG-27 문서), MEG-21·59·76·90·160·207 이슈, GitHub `main`(83b775e), 운영 주소에서 직접 확인한 결과(2026-11-06).
 > 기호: ○ 운영 주소에서 직접 확인했다 / △ 구현됐지만 운영 주소에서 일부만 확인했거나 확인하지 못했다 / ✗ 아직 안 된다.
 > `<운영 주소>`는 공개 저장소에 적지 않는다(docs/deployment-guide.md). 발표 직전에 채운다.
-> 운영 확인은 비로그인 방문자, 운영자 계정 1개, 운영자 화면에서 새로 발급한 일반 사용자 시험 계정 1개로 했다. 시험 계정은 발표 전에 사람이 지워야 한다(아래 "운영 데이터 주의").
+> 운영 확인은 비로그인 방문자, 운영자 계정 1개, 운영자 화면에서 새로 발급한 일반 사용자 시험 계정 1개로 했다.
+
+**한눈에:** Must 10개 중 ○ 4개(R-1·3·4·6), 읽기만 ○ 1개(R-2), △ 4개(R-5·7·8·10), ✗ 1개(R-9). 비기능 AC-10은 ✗. 시연은 장면 9개이고, 문제 저장·재풀이는 아직 없어 뺀다.
 
 ## 1. 문제 한 줄 (PRD 1절)
 
 - **누가:** 수업을 듣는 주니어 개발자·PM·SA 중 수업 외에 CS를 따로 공부하는 사람. 첫 사용자는 운영자가 계정을 발급한 3~4명.
-- **어떤 불편:** 노트를 읽다 모르는 용어가 나오면 다른 곳에서 찾아야 하고, 헷갈린 용어를 다시 복습할 계기가 없다. `[가설]` 고객 근거 없는 내부 아이디어이고 PMF 실험은 생략했다(2026-10-20 결정).
+- **어떤 불편:** 노트를 읽다 모르는 용어가 나오면 다른 곳에서 찾아야 하고 헷갈린 용어를 다시 복습할 계기가 없다. `[가설]` 고객 근거 없는 내부 아이디어이고 PMF 실험은 생략했다(2026-10-20 결정).
 - **그래서 만든 것:** 노트 안에서 용어를 눌러 바로 풀어 보고, 헷갈린 용어를 즐겨찾기하면 다음 날 08:30부터 퀴즈로 복습하게 하는 학습 도구.
 
 ## 2. Must 목록
@@ -17,14 +19,14 @@
 
 | R-번호 | 기능 | AC | 상태 | 근거 |
 |---|---|---|---|---|
-| R-1 | 계정·권한(운영자 / 일반 사용자 / 방문자) | AC-1, 2 | ○ (AC-1 중 작성·수정·삭제는 △) | 운영자 화면에서 일반 사용자 계정 발급(`POST /api/admin/users` 201) → 그 계정으로 로그인(역할 `member`, "운영자 메뉴" 없음) → 로그아웃 후 `/api/me` 비인증 확인. 일반 사용자의 운영자 API는 403, `/admin` 접근 시 목록으로 되돌아감, 비로그인은 401. 운영자의 노트·사전 작성·수정·삭제는 누르지 않음 |
-| R-2 | 노트 목록·읽기, Notion 가져오기, 운영자 노트 작성·수정 | AC-3 | ○ 읽기 / △ 작성·가져오기 | 비로그인으로 목록 39개 노트, 과목 칩 필터(보안 → 9개), 노트 열기 확인. 운영자 노트 목록 화면 열림. 작성·수정·가져오기는 눌러 보지 않음 |
+| R-1 | 계정·권한(운영자 / 일반 사용자 / 방문자) | AC-1, 2 | ○ (AC-1 중 작성·수정·삭제는 △) | 운영자 화면에서 일반 사용자 계정 발급(`POST /api/admin/users` 201) → 그 계정으로 로그인(역할 `member`, "운영자 메뉴" 없음) → 로그아웃 후 `/api/me` 비인증 확인<br>권한: 일반 사용자의 운영자 API는 403, `/admin` 접근 시 목록으로 되돌아감, 비로그인은 401<br>미확인: 운영자의 노트·사전 작성·수정·삭제는 누르지 않음 |
+| R-2 | 노트 목록·읽기, Notion 가져오기, 운영자 노트 작성·수정 | AC-3 | ○ 읽기 / △ 작성·가져오기 | 비로그인으로 목록 39개 노트, 과목 칩 필터(보안 → 9개), 노트 열기 확인. 운영자 노트 목록 화면 열림<br>미확인: 작성·수정·가져오기는 눌러 보지 않음 |
 | R-3 | 용어 사전과 위키형 바텀시트 | AC-4 | ○ | 방문자·운영자·일반 사용자 모두 용어 링크(CORS)를 누르면 시트가 열리고 사전 설명 표시. 모바일(390px)·PC(1280px) 폭에서 열림. 운영 사전에는 용어가 1개뿐이다 |
-| R-4 | 사전에 없는 용어의 AI 설명("AI 생성" 표시, 로그인 필요) | AC-5 | ○ | 로그인 상태에서 사전에 없는 단어를 선택해 "AI 설명"을 누르자 `POST /api/ai/explanations` 200, 시트에 "AI 생성·검수 전" 표시와 "오류 신고" 버튼. 운영자와 일반 사용자 계정에서 각각 1회 호출. 비로그인 시 로그인 안내는 시트의 로그인 문구로 확인했으나 AI 미호출 확인은 못 함. 실제 502 장애는 미검증(MEG-184) |
+| R-4 | 사전에 없는 용어의 AI 설명("AI 생성" 표시, 로그인 필요) | AC-5 | ○ | 로그인 상태에서 사전에 없는 단어를 선택해 "AI 설명"을 누르자 `POST /api/ai/explanations` 200. 시트에 "AI 생성·검수 전" 표시와 "오류 신고" 버튼이 나옴. 운영자와 일반 사용자 계정에서 각각 1회 호출<br>미확인: 비로그인 시 로그인 안내 문구는 봤지만 AI를 호출하지 않는지는 확인하지 못함. 실제 502 장애도 미검증(MEG-184) |
 | R-5 | 틀림 신고와 운영자 처리 | AC-6 | △ | AI 설명 시트와 퀴즈 문항에 "오류 신고" 버튼 표시. 운영자 신고 목록 화면 열림(열린 신고 0건). 신고 제출과 처리는 운영 지표(신고 수)를 바꾸므로 누르지 않음 |
 | R-6 | 용어 즐겨찾기 | AC-7 | ○ (본인 계정) | 운영자와 일반 사용자 계정 각각 즐겨찾기 켜기 → "즐겨찾기함" 표시 → 새로고침 후에도 유지 → 원래대로 해제. 다른 사용자에게 안 보이는지는 확인하지 못함 |
-| R-7 | 다음 날 08:30 퀴즈와 꼬리 질문(최대 2개) | AC-8 | △ | 새로 만든 일반 사용자 계정은 "오늘 풀 퀴즈가 없어요 — 노트에서 용어를 열어 보면 다음 날 퀴즈가 만들어져요"가 표시됨(대상 용어 없음 안내 확인). 운영자 계정의 퀴즈 화면에 "어제 열어 본·즐겨찾기한 용어로 만들었어요", "AI 생성", 난이도(상·중·하), 답 입력(1,000자), "답 제출"·"오류 신고"가 표시됨. 답 제출은 지표를 바꾸므로 누르지 않아 꼬리 질문과 08:30 경계는 확인하지 못함 |
-| R-8 | 웹 배포 | AC-9 | △ | 운영 `/api/health` 200, 화면 접속 확인. 첫 v3 출시 PR(#169, MEG-220)은 2026-11-05 병합됐다. 운영 smoke 결과와 사람의 결과 수락은 MEG-21에 남아 있고, 배포 URL에서 AC-1~8 전체 시연 기록은 MEG-59(In Progress) 미완료 |
+| R-7 | 다음 날 08:30 퀴즈와 꼬리 질문(최대 2개) | AC-8 | △ | 새로 만든 일반 사용자 계정: "오늘 풀 퀴즈가 없어요 — 노트에서 용어를 열어 보면 다음 날 퀴즈가 만들어져요"가 표시됨(대상 용어 없음 안내 확인)<br>운영자 계정: 퀴즈 화면에 "어제 열어 본·즐겨찾기한 용어로 만들었어요", "AI 생성", 난이도(상·중·하), 답 입력(1,000자), "답 제출"·"오류 신고"가 표시됨<br>미확인: 답 제출은 지표를 바꾸므로 누르지 않아 꼬리 질문과 08:30 경계는 확인하지 못함 |
+| R-8 | 웹 배포 | AC-9 | △ | 운영 `/api/health` 200, 화면 접속 확인. 첫 v3 출시 PR(#169, MEG-220)은 2026-11-05 병합됐다. 운영 smoke 결과와 사람의 결과 수락은 아직 없다(MEG-21 Backlog). 배포 URL에서 AC-1~8 전체를 시연한 기록도 아직 없다(MEG-59 In Progress) |
 | R-9 | 퀴즈 한 문제씩·선택 저장·재풀이(v0.6) | AC-11~14 | ✗ | 운영 퀴즈 화면은 여러 문항이 한 화면에 함께 보이고 저장 기능이 없음(직접 확인). MEG-160 In Review, MEG-207 In Progress |
 | R-10 | PC 화면(1024px 이상) | AC-15~17 | △ | 1280px 폭에서 노트·용어 시트가 열림. 퀴즈·저장·재풀이의 PC 화면은 미구현. Windows Edge·Chrome 확인과 키보드만 사용 확인은 하지 못함 |
 
@@ -32,25 +34,25 @@
 
 ## 3. 장면 (운영 주소 기준, 발표 순서)
 
-> 아래 장면은 모두 2026-11-06에 운영 주소에서 직접 눌러 확인한 것이다(장면 8·9의 처리 동작 제외). 확인 계정은 운영자 1개와 방문자다.
+> 아래 장면은 모두 2026-11-06에 운영 주소에서 직접 눌러 확인했다. 단, 장면 7은 퀴즈 화면 표시까지, 장면 8·9는 버튼과 목록 표시까지만 확인했다(답 제출·신고 제출·운영자 처리는 누르지 않음). 확인 계정은 방문자, 운영자 계정 1개, 일반 사용자 시험 계정 1개다.
+> 화면 파일 열에는 API를 실제로 호출하는 파일을 먼저 적었다.
 
 | # | 누가 · 무엇을 · 말할 것 | 백엔드 | 화면 파일 | 운영 확인 |
 |---|---|---|---|---|
 | 1 | **방문자**가 과목을 고르고 노트를 연다. "로그인 없이 읽는다" | `GET /api/notes`(E04), `GET /api/notes/{id}`(E05) — `backend/app/notes.py` | `frontend/src/pages/NoteListPage.tsx`, `NoteReadPage.tsx`, `src/notes/NoteBody.tsx` | ○ |
-| 2 | **방문자**가 링크된 용어를 눌러 바텀시트로 설명을 본다. "형광펜 = 사전 용어" | `GET /api/glossary/{id}`(E06), `POST /api/term-views`(E07) — `backend/app/glossary.py` | `src/components/TermLink.tsx`, `BottomSheet.tsx`, `ResponsiveSheet.tsx` | ○ |
+| 2 | **방문자**가 링크된 용어를 눌러 바텀시트로 설명을 본다. "형광펜 = 사전 용어" | `GET /api/glossary/{id}`(E06), `POST /api/term-views`(E07) — `backend/app/glossary.py` | `src/glossary/TermSheet.tsx`(E06·E07 호출), `src/components/TermLink.tsx`, `BottomSheet.tsx`, `ResponsiveSheet.tsx` | ○ |
 | 3 | **Mermaid가 있는 노트**에서 보기 방식을 바꾼다. "다이어그램만 / 코드만 / 둘 다" | (프론트 렌더링) | `src/notes/MermaidBlock.tsx`, `src/notes/mermaid.ts` | ○ (다이어그램 표시, "코드만" 전환) |
-| 4 | **사용자**가 로그인한다 | `POST /api/auth/login`(E01), `GET /api/me`(E03) — `backend/app/auth.py`, `session.py` | `src/pages/LoginPage.tsx`, `src/auth/AuthProvider.tsx` | ○ (운영자·일반 사용자 계정, 로그아웃까지) |
-| 5 | **로그인 사용자**가 사전에 없는 단어를 골라 AI 설명을 본다. "연필 = AI 내용" | `POST /api/ai/explanations`(E09) — `backend/app/ai_explain.py`, `bedrock.py`, `ai_ledger.py` | `src/components/AiBox.tsx`, `AiBadge.tsx` | ○ |
-| 6 | **로그인 사용자**가 용어를 즐겨찾기한다 | `PUT /api/favorites/{term_id}`(E08) — `backend/app/favorites.py` | `src/components/FavoriteToggle.tsx` | ○ |
-| 7 | **로그인 사용자**가 오늘의 퀴즈를 연다. "다음 날 08:30부터" | `POST /api/quiz/today`(E11), `/quiz/items/{id}/answer`(E12), `/followups`(E13), `PUT .../followups/{seq}/answer`(E14) — `backend/app/quiz.py`, `quiz_answers.py`, `quiz_followups.py`, `ai_quiz.py` | `src/pages/QuizPage.tsx`, `src/components/QuizCard.tsx` | △ (화면 표시까지, 답 제출·꼬리 질문은 안 누름) |
-| 8 | **사용자**가 AI 설명·퀴즈를 "오류 신고"한다. "빨간펜 = 틀림 신고" | `POST /api/reports`(E10) — `backend/app/reports.py` | `src/components/AiBox.tsx`, `QuizCard.tsx` | △ (버튼 표시까지, 제출 안 함) |
+| 4 | **사용자**가 로그인한다 | `POST /api/auth/login`(E01), `GET /api/me`(E03) — `backend/app/accounts.py`(라우트), `auth.py`·`session.py`(세션·권한 확인) | `src/pages/LoginPage.tsx`, `src/auth/AuthProvider.tsx` | ○ (운영자·일반 사용자 계정, 로그아웃까지) |
+| 5 | **로그인 사용자**가 사전에 없는 단어를 골라 AI 설명을 본다. "연필 = AI 내용" | `POST /api/ai/explanations`(E09) — `backend/app/ai_explain.py`, `bedrock.py`, `ai_ledger.py` | `src/ai/explain.ts`(E09 호출), `src/ai/AiExplainSheet.tsx`, `src/components/SelectionAction.tsx`, `AiBox.tsx`, `AiBadge.tsx` | ○ |
+| 6 | **로그인 사용자**가 용어를 즐겨찾기한다 | `PUT /api/favorites/{term_id}`(E08) — `backend/app/favorites.py` | `src/glossary/TermSheet.tsx`(E08 호출), `src/components/FavoriteToggle.tsx` | ○ |
+| 7 | **로그인 사용자**가 오늘의 퀴즈를 연다. "다음 날 08:30부터" | `POST /api/quiz/today`(E11), `POST /api/quiz/items/{item_id}/answer`(E12), `POST /api/quiz/items/{item_id}/followups`(E13), `PUT /api/quiz/items/{item_id}/followups/{seq}/answer`(E14) — `backend/app/quiz.py`, `quiz_answers.py`, `quiz_followups.py`, `ai_quiz.py` | `src/quiz/quizToday.ts`(E11 호출), `quizActions.ts`(E12~14 호출), `QuizInteraction.tsx`, `src/pages/QuizPage.tsx`, `src/components/QuizCard.tsx` | △ (화면 표시까지, 답 제출·꼬리 질문은 안 누름) |
+| 8 | **사용자**가 AI 설명·퀴즈를 "오류 신고"한다. "빨간펜 = 틀림 신고" | `POST /api/reports`(E10) — `backend/app/reports.py` | `src/reports/report.ts`(E10 호출), `ReportControl.tsx`(신고 버튼). 버튼은 `src/ai/AiExplainSheet.tsx`와 `src/pages/QuizPage.tsx`에 붙어 있다 | △ (버튼 표시까지, 제출 안 함) |
 | 9 | **운영자**가 신고 목록을 보고 사전에 바른 설명을 넣는다 | `GET /api/admin/reports`(E25), `PATCH /api/admin/reports/{id}`(E26), `POST /api/admin/glossary`(E20) — `backend/app/admin_reports.py`, `admin_glossary.py` | `src/operator/reports/ReportsPage.tsx`, `CorrectReportPage.tsx` | △ (신고 목록·용어 사전·계정 발급·노트 화면 열림, 처리 동작은 안 함) |
 
-**장면 순서의 이유:** 1~3은 비로그인(AC-4), 4~8은 로그인(AC-5~8), 9는 운영자(AC-6).
+**장면 순서의 이유:** 1~3은 비로그인으로 읽기(장면 1 AC-3, 장면 2 AC-4, 장면 3 Mermaid 보기), 4는 로그인(AC-1·2), 5~8은 로그인 기능(AC-5~8), 9는 운영자(AC-6).
 **시연에서 뺀 것:** 문제 저장·재풀이(R-9, ✗). 장면 7~9의 처리 동작은 운영 지표(답·신고 수)에 영향을 주므로 STG나 로컬로 시연하고 그렇게 밝힌다.
 
 **운영 데이터 주의:**
-- 확인을 위해 운영에 일반 사용자 시험 계정 1개("시연 계정")를 발급했다. 계정 삭제 기능이 앱에 없어 Supabase 대시보드에서 사람이 지워야 한다. 지우기 전까지 이 계정의 용어 열람·즐겨찾기(켰다 끔)·AI 설명 1회 기록이 남는다.
 - 운영 용어 사전에는 용어가 1개(CORS)뿐이다. 장면 2를 시연하면 모든 용어 링크가 같은 설명을 연다.
 - 일부 노트 본문에 작성 안내 문구가 남아 있다. 시연에 쓸 노트는 미리 열어 보고 고른다.
 - 열린 신고가 0건이라 장면 9의 목록은 비어 있다.
