@@ -6,7 +6,8 @@ E28~E32와 E29 재생·스트림은 모두 이 모듈로 권한을 확인하고 
   지금 읽을 수 있는가. 노트 읽기는 E05와 같다: 공개 노트는 누구나, 비공개 노트는 운영자만. 위키 문맥은 T4(MEG-163) 전에는
   확인할 방법이 없어 읽을 수 없는 것으로 본다. 하나라도 아니면 404다(없음·남의 것·회수를 구분하지 않는다).
 - 가림 함수(hidden_marks): 지금 볼 수 없는 출처를 인용한 첫 턴부터 그 대화의 뒤쪽 턴을 모두 가린다. 첫 턴만 다시 묻기를
-  허용한다(디자인 결정 7·11·15). 가림은 저장하지 않고 읽을 때마다 계산한다.
+  허용한다(디자인 결정 7·11·15). 그 첫 턴을 대상으로 한 다시 묻기 턴에서 가림이 끝나고, 그 턴부터는 각자의 출처로 다시
+  판정한다(2026-11-18 결정). 가림은 저장하지 않고 읽을 때마다 계산한다.
 - 노트 출처(source_kind note, D1 임시 근거)는 역할과 상관없이 지금 공개이고 존재해야 보인다(기술 검토 5.1). 운영자도 비공개
   노트는 근거로 쓰지 않으므로 같은 기준이다. 위키 출처는 T4 전에는 확인할 수 없어 보이지 않는 것으로 본다.
 - 실행 만료(spec 3.1): 읽을 때 lease_expires_at이 지난 running 턴을 failed(interrupted)로 바꾼다(expire_running_turns).
@@ -188,19 +189,39 @@ def source_checker(notes: dict[int, dict[str, Any]]) -> Callable[[dict[str, Any]
 def hidden_marks(
     turns: list[dict[str, Any]], source_visible: Callable[[dict[str, Any]], bool]
 ) -> dict[str, Hidden | None]:
-    """턴 id → 가림 표시. turns는 같은 대화의 턴을 seq 오름차순으로, 각 턴의 ai_turn_sources와 함께 받는다.
+    """턴 id → 가림 표시. turns는 같은 대화의 턴을 각 턴의 status·retry_of_turn_id·ai_turn_sources와 함께 받는다.
 
-    볼 수 없는 출처를 인용한 첫 턴부터 뒤의 턴을 모두 가린다. 다시 묻기(retry_allowed)는 그 첫 턴만 true다.
+    seq 순서로 본다. 볼 수 없는 출처를 인용한 첫 턴(X)부터 뒤의 턴을 가린다(가림 연쇄). 다시 묻기(retry_allowed)는 X만
+    true다. 2026-11-18 결정에 따라 다시 묻기 턴은 연쇄에서 빠진다.
+
+    - X를 대상으로 한 첫 다시 묻기 턴(retry_of_turn_id = X)에서 연쇄가 끝난다. 그 턴과 뒤의 턴은 각자의 출처로 판정하고,
+      볼 수 없는 출처를 인용한 턴이 또 나오면 그 턴이 새 X가 되어 같은 규칙을 다시 적용한다. 다시 묻기 턴 자신이 볼 수
+      없는 출처를 인용하면 그 턴이 새 X다.
+    - X와 그 다시 묻기 턴 사이의 턴은 가린다. X도 계속 가린다.
+    - 다시 묻기는 한 번만이다. X를 대상으로 한 completed 다시 묻기 턴이 있으면 X의 retry_allowed는 false다.
+    - 끝나지 않은 다시 묻기 턴(failed·cancelled·running)도 연쇄를 끝낸다(그 턴은 각자 판정해 보인다). 다만 다시 묻기를
+      쓴 것으로 보지 않아 X의 retry_allowed는 true로 남는다. running 중의 겹친 다시 묻기는 E29가 turn_in_progress로 막는다.
+    - X가 아닌 턴(연쇄 중간의 턴, 지금 보이는 턴)을 대상으로 한 다시 묻기 턴은 일반 턴과 같다. 연쇄를 끝내지 않는다.
+    - retry_of_turn_id가 없는 행은 다시 묻기 턴이 아닌 것으로 본다.
     """
+    ordered = sorted(turns, key=lambda row: row["seq"])
+    retried = {
+        turn["retry_of_turn_id"]
+        for turn in ordered
+        if turn.get("retry_of_turn_id") is not None and turn.get("status") == "completed"
+    }
     marks: dict[str, Hidden | None] = {}
     first_hidden = None
-    for turn in sorted(turns, key=lambda row: row["seq"]):
+    for turn in ordered:
+        if first_hidden is not None and turn.get("retry_of_turn_id") == first_hidden:
+            first_hidden = None
         if first_hidden is None and not all(source_visible(s) for s in turn.get("ai_turn_sources") or []):
             first_hidden = turn["id"]
-        if first_hidden is None:
+            marks[turn["id"]] = Hidden("source_revoked", retry_allowed=turn["id"] not in retried)
+        elif first_hidden is None:
             marks[turn["id"]] = None
         else:
-            marks[turn["id"]] = Hidden("source_revoked", retry_allowed=turn["id"] == first_hidden)
+            marks[turn["id"]] = Hidden("source_revoked", retry_allowed=False)
     return marks
 
 

@@ -1254,12 +1254,12 @@ class SupabaseClient:
         """E28·E30: 대화의 턴과 각 턴의 인용 출처를 seq 오름차순으로 준다. max_seq를 주면 그 seq까지만 읽는다.
 
         가림 판정은 앞 턴의 출처를 봐야 하므로 E30도 앞 턴을 함께 읽는다. 한 대화의 턴 수는 7일 보관 안에서 작다고 보고 쪽을
-        나누지 않는다(API 최대 행 1,000을 넘으면 잘린다).
+        나누지 않는다(API 최대 행 1,000을 넘으면 잘린다). 가림 함수가 다시 묻기 턴을 알아보도록 retry_of_turn_id도 읽는다.
         """
         params = {
             "conversation_id": f"eq.{uuid.UUID(conversation_id)}",
             "user_id": f"eq.{uuid.UUID(user_id)}",
-            "select": self._AGENT_TURN_COLUMNS,
+            "select": f"{self._AGENT_TURN_COLUMNS},retry_of_turn_id",
             "order": "seq.asc",
             "ai_turn_sources.order": "ref.asc",
         }
