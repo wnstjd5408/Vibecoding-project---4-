@@ -6,6 +6,8 @@ import { cx } from './cx.ts'
 type AppHeaderProps = {
   // 제목형 헤더의 앱 이름. backTo와 함께 주면 PC 폭(1024px 이상)에서만 "앱 이름 + 뒤로 가기"로 함께 보인다.
   title?: string
+  // 앱 이름을 눌렀을 때 이동할 경로. 주면 앱 이름이 링크가 된다(주지 않으면 지금처럼 글자만). 앱 이름이 보이는 PC 폭에서만 쓰인다.
+  titleTo?: string
   // 뒤로 가기형 헤더: 이동할 경로와 글자(기본 "목록")
   backTo?: string
   backLabel?: string
@@ -18,11 +20,14 @@ type AppHeaderProps = {
 }
 
 // 화면 맨 위 56px 띠. 모양만 맡고 로그인 상태 같은 화면 로직은 갖지 않는다.
-export function AppHeader({ title, backTo, backLabel = '목록', actions, wide = false, stickyOnWide = false }: AppHeaderProps) {
+export function AppHeader({ title, titleTo, backTo, backLabel = '목록', actions, wide = false, stickyOnWide = false }: AppHeaderProps) {
+  const showTitle = Boolean(title) && (!backTo || wide)
   return (
     <header className={cx(styles.header, wide && styles.wide, stickyOnWide && styles.stickyOnWide)}>
       <div className={styles.lead}>
-        {title && (!backTo || wide) ? <span className={cx(styles.title, backTo && styles.titleBesideBack)}>{title}</span> : null}
+        {showTitle && titleTo
+          ? <Link to={titleTo} className={cx(styles.title, styles.titleLink, backTo && styles.titleBesideBack)}>{title}</Link>
+          : showTitle ? <span className={cx(styles.title, backTo && styles.titleBesideBack)}>{title}</span> : null}
         {backTo ? (
           <Link to={backTo} className={styles.back}>
             {backLabel}

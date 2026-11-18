@@ -16,6 +16,25 @@
   font-weight: 700;
 }
 
+/* 앱 이름이 링크일 때(titleTo): 글자 모양은 그대로 두고 터치 목표 44px 이상, 포커스 링과 올렸을 때 밑줄만 더한다 */
+.titleLink {
+  align-items: center;
+  min-height: 44px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.titleLink:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.titleLink:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
 /* 뒤로 가기형: 이전 목록으로 가는 글자 링크 */
 .back {
   display: inline-flex;
@@ -50,6 +69,10 @@
 @media (min-width: 1024px) {
   .titleBesideBack {
     display: inline;
+  }
+
+  .titleLink.titleBesideBack {
+    display: inline-flex;
   }
 
   /* 화면 전체 폭 헤더: 앱 이름은 왼쪽에서 24px, 오른쪽 조작은 오른쪽 끝에서 24px */
