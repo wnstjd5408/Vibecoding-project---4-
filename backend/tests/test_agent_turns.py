@@ -8,6 +8,7 @@ AC-4 한도·노출 중단·형식 실패·중단 뒤 저장 거절의 오류 �
 """
 
 import asyncio
+import copy
 import json
 import threading
 import time
@@ -585,30 +586,78 @@ def test_a_replay_of_a_failed_turn_ends_with_the_same_error_event_as_the_live_ru
     assert bedrock.calls == calls and len(fake.finishes) == 1
 
 
-@pytest.mark.parametrize("status", ["completed", "running"])
-def test_a_key_already_used_in_another_conversation_is_409_idempotency_key_reused(client, fake, bedrock, status):
-    """2026-11-18 사용자 결정: 키는 사용자 단위로 유일하므로 다른 대화의 턴을 재생하지 않고 거절한다."""
+def _turn_with_key(fake, cid, key, **values):
+    tid = fake.turn(cid, 1, **values)
+    fake.turns[tid]["idempotency_key"] = key
+    return tid
+
+
+@pytest.mark.parametrize(
+    "status, lease", [("completed", 60), ("failed", 60), ("running", 60), ("running", -30)],
+    ids=["completed", "failed", "running", "running_lapsed"],
+)
+def test_a_key_already_used_in_another_conversation_is_409_idempotency_key_reused(
+    client, fake, bedrock, status, lease
+):
+    """2026-11-18 사용자 결정: 키는 사용자 단위로 유일하므로 다른 대화의 턴을 재생하지 않고 거절한다. 그 턴은 건드리지 않는다."""
     first, second = fake.conversation(A), fake.conversation(A)
     key = str(uuid.uuid4())
-    used = fake.turn(first, 1, status=status)
-    fake.turns[used]["idempotency_key"] = key
-    before = dict(fake.turns)
+    _turn_with_key(fake, first, key, status=status, lease=lease, failure="error" if status == "failed" else None)
+    before = copy.deepcopy(fake.turns)
     response = ask(client, second, key=key)
     assert_error(response, 409, "conflict", "idempotency_key_reused")
     assert "turn_id" not in response.json()["error"] and "Retry-After" not in response.headers
     assert "claim_agent_turn" not in fake.calls and fake.turns == before and bedrock.calls == 0
 
 
-def test_a_key_from_another_conversation_found_only_at_the_claim_is_also_409(client, fake, bedrock, monkeypatch):
+@pytest.mark.parametrize("target", ["unknown", "foreign"])
+def test_a_reused_key_on_a_conversation_the_user_cannot_see_is_still_404(client, fake, bedrock, target):
+    """공통 권한 검사(404)가 409 idempotency_key_reused보다 먼저다(처리 순서 1번). 같은 대화의 409 in_progress와 같다."""
+    key = str(uuid.uuid4())
+    _turn_with_key(fake, fake.conversation(A), key)
+    cid = str(uuid.uuid4()) if target == "unknown" else fake.conversation(B)
+    assert_error(ask(client, cid, key=key), 404, "not_found")
+    assert "claim_agent_turn" not in fake.calls and bedrock.calls == 0
+
+
+@pytest.mark.parametrize("status", ["completed", "running"])
+def test_a_key_from_another_conversation_found_only_at_the_claim_is_also_409(
+    client, fake, bedrock, monkeypatch, status
+):
     """재전송 확인 뒤에 다른 대화에서 같은 키가 먼저 기록되면(동시 요청) 선점이 existing을 돌려준다. 그때도 거절한다."""
     first, second = fake.conversation(A), fake.conversation(A)
     key = str(uuid.uuid4())
-    used = fake.turn(first, 1)
-    fake.turns[used]["idempotency_key"] = key
+    _turn_with_key(fake, first, key, status=status)
     monkeypatch.setattr(fake, "find_agent_turn_by_key", lambda user_id, idempotency_key: None)
     response = ask(client, second, key=key)
     assert_error(response, 409, "conflict", "idempotency_key_reused")
+    assert "claim_agent_turn" in fake.calls
     assert all(row["conversation_id"] == first for row in fake.turns.values()) and bedrock.calls == 0
+
+
+def test_a_same_conversation_key_found_only_at_the_claim_still_replays(client, fake, bedrock, monkeypatch):
+    """선점 경합 경로에서 그 턴이 같은 대화의 것이면 예전처럼 재생한다(AC-3)."""
+    cid = fake.conversation(A)
+    key = str(uuid.uuid4())
+    used = _turn_with_key(fake, cid, key)
+    monkeypatch.setattr(fake, "find_agent_turn_by_key", lambda user_id, idempotency_key: None)
+    parsed = events(ask(client, cid, key=key))
+    assert "claim_agent_turn" in fake.calls
+    assert names(parsed) == ["turn", "result"] and parsed[-1][1]["turn_id"] == used and bedrock.calls == 0
+
+
+def test_a_claimed_key_whose_turn_vanished_is_not_called_reused(client, fake, bedrock, monkeypatch):
+    """선점이 existing을 준 뒤 그 턴이 지워졌으면(그 요청이 429로 선점을 지움) 다른 대화로 단정하지 않는다.
+
+    예전 처리를 그대로 따른다. 끝난 턴이었으면 재생할 턴이 없어 404다.
+    """
+    first, second = fake.conversation(A), fake.conversation(A)
+    key = str(uuid.uuid4())
+    _turn_with_key(fake, first, key)
+    monkeypatch.setattr(fake, "find_agent_turn_by_key", lambda user_id, idempotency_key: None)
+    monkeypatch.setattr(fake, "get_agent_turn", lambda user_id, turn_id: None)
+    assert_error(ask(client, second, key=key), 404, "not_found")
+    assert bedrock.calls == 0
 
 
 def test_a_replay_of_the_first_hidden_turn_sees_its_completed_retry(client, fake, bedrock):

@@ -4,7 +4,8 @@ POST /api/ai/conversations/{conversation_id}/turns — 질문을 받아 근거�
 
 처리 순서(기술 검토 3절):
 1. 노출 중단 플래그(503) → 경로·Idempotency-Key(404·400) → 같은 키 재전송 확인(이 대화에 같은 키의 턴이 있으면 끝난 턴은
-   재생, 진행 중이면 409 in_progress) → AI 설정 확인(500, 원장 전) → 공통 권한 검사(404) →
+   재생, 진행 중이면 409 in_progress. 다른 대화에서 쓴 키면 409 idempotency_key_reused. 두 409는 공통 권한 검사 404 뒤다) →
+   AI 설정 확인(500, 원장 전) → 공통 권한 검사(404) →
    질문·선택 문맥·확인 선택·다시 묻기 검사(422·409). 재전송 확인이 상태 검사보다 먼저여야 첫 요청이 바꾼 상태로 거절하지 않는다.
 2. agent_claim_turn으로 턴을 선점한다. 같은 키의 끝난 턴은 재생하고(모델 호출 없음, 가림 적용), 진행 중이면 409 in_progress,
    같은 대화에 다른 키의 턴이 진행 중이면 409 turn_in_progress(그 턴 id)다. 같은 키는 1번에서 대부분 걸러지고, 여기서는
@@ -802,12 +803,14 @@ def _resent_turn(supabase: SupabaseClient, user: SessionUser, target: str, key: 
 
     첫 요청이 턴을 기록하면 대화 상태가 바뀐다(뒤에 턴이 생기고 선택 문맥이 붙는다). 그래서 같은 본문이 1단계의 상태 검사
     (choice_expired·stale_revision·turn_not_retryable 등)에 걸릴 수 있다. 재전송은 그 검사와 AI 설정 검사보다 먼저 판정한다(AC-3).
-    다른 대화에서 쓴 키는 그 턴의 상태와 관계없이 409 idempotency_key_reused다.
+    다른 대화에서 쓴 키는 그 턴의 상태와 관계없이 409 idempotency_key_reused다. 그 턴은 건드리지 않는다.
+    두 409 모두 이 대화의 공통 권한 검사(404)를 먼저 한다(처리 순서 1번). 없거나 볼 수 없는 대화는 404다.
     """
     turn = supabase.find_agent_turn_by_key(user.user_id, key)
     if turn is None:
         return None
     if turn["conversation_id"] != target:
+        load_conversation(supabase, user, target)
         logger.info("stage=resend turn_id=%s key_reused_elsewhere", turn["id"])
         raise _key_reused()
     logger.info("stage=resend turn_id=%s status=%s", turn["id"], turn["status"])
