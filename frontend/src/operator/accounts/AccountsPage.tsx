@@ -73,7 +73,7 @@ export default function AccountsPage() {
   return (
     <main>
       <h1 className={styles.title}>계정 발급</h1>
-      <p className={styles.lead}>일반 사용자 계정을 만들어요. 가입 화면은 없어서 계정은 운영자만 발급해요.</p>
+      <p className={styles.lead}>일반 사용자 계정을 만들어요. 운영자 계정은 이 화면에서 만들 수 없어요.</p>
       {issued ? (
         <section className={styles.card} aria-labelledby="issued-title">
           <h2 id="issued-title" ref={resultRef} tabIndex={-1} className={styles.cardTitle}>
@@ -127,7 +127,6 @@ export default function AccountsPage() {
             error={reasonText(fieldReasons.password)}
             onChange={(event) => setPassword(event.target.value)}
           />
-          <p className={styles.hint}>발급한 계정은 일반 사용자예요. 운영자 계정은 이 화면에서 만들 수 없어요.</p>
           {formError ? (
             <p role="alert" className={styles.error}>
               오류: {formError}
