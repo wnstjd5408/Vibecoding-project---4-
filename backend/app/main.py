@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from app import (
     accounts,
     agent,
+    agent_turns,
     admin_glossary,
     admin_notes,
     admin_reports,
@@ -35,6 +36,7 @@ app.include_router(quiz_followups.router)
 app.include_router(reports.router)
 app.include_router(favorites.router)
 app.include_router(agent.router)
+app.include_router(agent_turns.router)
 
 
 @app.get("/health", include_in_schema=False)

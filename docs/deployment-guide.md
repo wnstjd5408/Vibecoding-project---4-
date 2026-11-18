@@ -86,6 +86,69 @@ AI 설명(E09)은 요청 하나에서 Bedrock을 최대 두 번 부른다(호출
 
 Vercel의 Git 연동 배포와 GitHub Actions 검사는 서로 다른 작업이다. 빌드 Ready나 PR 메타데이터 검사 성공만으로 제품 테스트 통과를 뜻하지 않는다. 현재 자동화 범위와 수동 검증 명령은 [GitHub Actions 가이드](github-actions.md)를 따른다.
 
+## CS Agent 노출 중단 (MEG-236)
+
+권한 누출처럼 CS Agent "AI에게 질문"을 바로 막아야 할 때 환경변수 `CS_AGENT_DISABLED`를 켠다(API spec v0.2 Q11, 기술 검토 v0.4 6절). 새 대화와 새 질문만 막고, 이미 있는 대화 읽기와 중단은 남긴다.
+
+- **끄는 사람:** 김준성. Vercel 프로젝트의 환경변수를 바꾸고 새 배포를 만들 수 있는 사람이어야 한다.
+- **다시 여는 시점:** 원인을 조치한 뒤 사람이 정한다.
+- **기준 구현:** [`backend/app/agent.py`](../backend/app/agent.py)의 `agent_disabled()`. E27과 E29가 요청을 받을 때 이 함수를 본다.
+
+### 켜면 바뀌는 것
+
+| 엔드포인트 | 플래그를 켠 동안 |
+|---|---|
+| E27 `POST /api/ai/conversations` | 503 `service_unavailable`. 대화를 만들지 않는다 |
+| E29 `POST /api/ai/conversations/{conversation_id}/turns` | 503 `service_unavailable`. 턴을 선점하지 않고 원장 예약·모델 호출도 하지 않는다. 같은 `Idempotency-Key`로 다시 보내도(재생) 503이다 |
+| E28 대화 읽기, E30 턴 읽기 | 그대로 동작한다. 가림 함수도 그대로 적용된다 |
+| E31 중단 | 그대로 동작한다 |
+
+- Origin 검사(403)와 로그인 확인(401), 요청 본문 형식 검사(422)는 플래그보다 먼저다. 로그인하지 않은 요청은 플래그와 관계없이 401이다.
+- 플래그는 요청을 받을 때 한 번만 본다. 켜기 전에 시작한 E29 실행은 그 요청 안에서 끝까지 가서 결과를 저장한다. 진행 중인 답변을 즉시 끊는 장치는 아니다.
+- E32(출처 보기)는 아직 없다. T3b(MEG-237)에서 추가하며, 기술 검토 6절에 따라 플래그를 켠 동안에도 읽기로 남긴다.
+
+### 값 규칙
+
+- 비우거나 `0`·`false`·`no`·`off`이면 꺼져 있다. 대소문자와 앞뒤 공백은 무시한다.
+- 그 밖의 값은 모두 켜짐이다. 잘못 쓴 값도 켜짐으로 보아 기능을 막는 쪽으로 동작한다. 켤 때는 `1`을 쓴다.
+- 평소에는 등록하지 않는다.
+
+### 켜는 순서(노출 중단)
+
+1. Vercel 프로젝트의 **Settings → Environment Variables**에서 `CS_AGENT_DISABLED`를 `1`로 등록한다. 비밀값이 아니므로 타입은 Config로 둔다.
+2. 막을 환경을 고른다. 운영은 **Production**, 스테이징은 **Preview**의 Git Branch `staging`이다. 두 환경은 따로 켜고 끈다. Preview 공통값만 바꾸면 운영에는 반영되지 않는다.
+3. 그 환경의 새 배포를 만든다. 환경변수 변경은 기존 배포에 소급 적용되지 않는다(위 "환경변수 설정" 4번).
+   - Production: 지금 운영 중인 배포와 같은 커밋으로 다시 배포한다.
+   - staging: 배포는 [staging CD](staging-cd.md)의 규칙을 따른다. 대시보드에서 수동으로 만든 배포는 CD가 사람 확인 대상으로 본다(같은 문서 "실행 계약").
+4. 아래 "적용 확인"을 한다.
+5. 환경, 시각, 배포 ID, 확인 결과를 내부 배포 기록에 남긴다. 값과 쿠키는 기록하지 않는다.
+
+### 끄는 순서(다시 열기)
+
+1. 사람이 다시 열기로 정한다.
+2. 같은 환경에서 `CS_AGENT_DISABLED`를 지우거나 `0`으로 바꾼다.
+3. 켜는 순서의 3~5번을 똑같이 한다. 이번에는 아래 확인에서 꺼짐 결과가 나와야 한다.
+
+### 적용 확인
+
+새 배포가 그 환경의 현재 배포가 됐는지 Vercel에서 먼저 확인한다. 그다음 그 환경에 로그인한 브라우저의 개발자 도구 콘솔에서 아래 두 요청을 보낸다. 둘 다 대화나 턴을 만들지 않고 모델도 부르지 않는다.
+
+```js
+const post = (path, body) =>
+  fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then((r) => r.status)
+// E27: 켜짐이면 503, 꺼짐이면 422(T4 전에는 origin wiki를 받지 않는다)
+await post('/api/ai/conversations', { origin: 'wiki' })
+// E29: 없는 대화 id에 Idempotency-Key 없이 보낸다. 켜짐이면 503, 꺼짐이면 400(idempotency_key_required)
+await post('/api/ai/conversations/00000000-0000-4000-8000-000000000000/turns', { question: { kind: 'free', text: '확인' } })
+```
+
+- 둘 다 401이면 로그인하지 않은 것이다. 403이면 접속한 주소가 그 환경의 `ALLOWED_ORIGINS`에 없는 것이다. 어느 쪽도 플래그 확인 결과가 아니다.
+- 켠 동안 이미 있는 대화를 열어 E28·E30이 200인지도 확인한다.
+- `/api/health` 200은 플래그 적용의 근거가 아니다.
+
+**검증 상태:** 플래그 동작은 단위 테스트(`backend/tests/test_agent.py`, `backend/tests/test_agent_turns.py`)로만 확인했다. 실제 Vercel 배포에서 켜고 끈 기록은 아직 없다.
+
 ## 프론트 헬스체크 사용법
 
 동일 출처의 상대경로 `GET /api/health`를 호출한다. 인증 쿠키나 DB·Auth·AI 자격증명은 필요하지 않다. 단, Production의 서버 기동 설정은 충족해야 한다.

@@ -11,7 +11,8 @@
 속도 제한을 대상 확인 앞에 둔 것은 E05·E13과 같다. 없는 id·남의 id로도 DB 읽기를 무제한으로 부를 수 없게 하고, 세는 방식이 같아
 대상이 있는지도 새지 않는다.
 
-노출 중단(Q11): CS_AGENT_DISABLED를 켜면 E27(새 대화)이 503이 된다. E28·E30·E31은 그대로 동작한다.
+노출 중단(Q11): CS_AGENT_DISABLED를 켜면 E27(새 대화)과 E29(질문, agent_turns)가 503이 된다. E28·E30·E31은 그대로 동작한다.
+끄고 켜는 절차는 docs/deployment-guide.md "CS Agent 노출 중단" 절에 있다.
 T4(MEG-163) 전에는 위키 문맥이 없으므로 E27 origin wiki는 422다(기술 검토 4절).
 로그에는 단계·오류 코드만 남기고 질문·답변·노트 원문은 남기지 않는다.
 """
@@ -197,8 +198,8 @@ def read_turn(
     target = path_uuid(turn_id)
     limiter.check(AI_AGENT_READ, f"user:{user.user_id}")
     turn, access = load_turn(supabase, user, target)
-    # 가림은 앞 턴의 출처로도 정해지므로 이 턴까지의 턴을 함께 읽는다.
-    turns = read_turns(supabase, user, access.conversation["id"], max_seq=turn["seq"])
+    # 가림은 앞 턴의 출처와 뒤의 다시 묻기 턴(첫 가림 턴의 retry_allowed)으로 정해지므로 대화의 턴을 모두 읽는다.
+    turns = read_turns(supabase, user, access.conversation["id"])
     payload = next((p for p in visible_turns(supabase, access, turns) if p["turn_id"] == turn["id"]), None)
     if payload is None:
         # 확인한 뒤 턴이 지워졌다(대화 삭제·보관 정리).

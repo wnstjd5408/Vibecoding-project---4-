@@ -639,6 +639,28 @@ def test_a_republished_source_note_shows_the_turns_again(client, fake):
     assert all("hidden" not in t for t in get(client, f"/api/ai/conversations/{cid}").json()["turns"])
 
 
+def test_a_retry_turn_and_the_turns_after_it_are_shown_again(client, fake):
+    """2026-11-18 결정: 첫 가림 턴의 다시 묻기 턴부터는 각자의 출처로 판정한다. 첫 가림 턴의 다시 묻기는 한 번만이다."""
+    cid, t1, t2, t3 = three_turns(fake)
+    retry = fake.turn(cid, 4, sources=[("note", str(OTHER_PUBLIC))])
+    fake.turns[retry]["retry_of_turn_id"] = t2
+    after = fake.turn(cid, 5)
+    fake.note_rows[SOURCE_NOTE]["is_published"] = False
+    turns = get(client, f"/api/ai/conversations/{cid}").json()["turns"]
+    assert [t.get("hidden") for t in turns] == [
+        None,
+        {"reason": "source_revoked", "retry_allowed": False},
+        {"reason": "source_revoked", "retry_allowed": False},
+        None,
+        None,
+    ]
+    assert turns[3]["result"]["state"] == "answered" and turns[4]["turn_id"] == after
+    # E30도 같은 판정이다. 첫 가림 턴(t2)의 retry_allowed는 뒤의 다시 묻기 턴을 보고 정하므로 E30도 뒤 턴까지 읽어야 한다.
+    assert get(client, f"/api/ai/turns/{retry}").json() == turns[3]
+    assert get(client, f"/api/ai/turns/{t3}").json() == turns[2]
+    assert get(client, f"/api/ai/turns/{t2}").json() == turns[1]
+
+
 def test_hidden_marks_rules():
     visible = source_checker({5: {"is_published": True}, 6: {"is_published": False}})
     turns = [

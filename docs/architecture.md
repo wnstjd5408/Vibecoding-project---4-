@@ -247,12 +247,13 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 | `AI_DAILY_BUDGET_USD`·`AI_MONTHLY_BUDGET_USD` | AI 하루 전체·월 예산(USD). 한 사용자의 하루 몫은 하루 예산의 50%다 | AI를 부르는 요청에서 필수. 양의 숫자가 아니면 예약 전에 500이고 AI를 부르지 않는다. 금액은 공개 저장소에 쓰지 않는다(2026-11-02 결정, MEG-86) | 백엔드(Vercel·AI를 시험하는 로컬) |
 | `AI_INPUT_USD_PER_MTOK`·`AI_OUTPUT_USD_PER_MTOK` | 모델의 입력·출력 100만 토큰당 단가(USD). 예약액과 정산액 계산에 쓴다 | 위와 같다. 모델을 바꾸면 같이 바꾼다 | 백엔드(Vercel·AI를 시험하는 로컬) |
 | `ALLOWED_ORIGINS` | 상태를 바꾸는 요청(POST·PUT·PATCH·DELETE)의 `Origin`으로 받을 출처 목록(쉼표로 구분, `scheme://host[:port]`만). CORS 허용 출처도 같은 값이다 | 비우면 `http://localhost:5173`. `*`·경로가 든 값은 시작할 때 거부한다. 운영(`VERCEL_ENV=production`)에서 비우면 앱이 시작하지 않는다 | 백엔드(로컬·Vercel) |
+| `CS_AGENT_DISABLED` | CS Agent "AI에게 질문"의 노출 중단 플래그(spec Q11, MEG-236). 켜면 E27(새 대화)과 E29(질문)가 503 `service_unavailable`이다. E28·E30 읽기와 E31 중단은 그대로 동작한다 | 비우거나 `0`·`false`·`no`·`off`(대소문자·앞뒤 공백 무시)면 꺼짐. 그 밖의 값은 모두 켜짐(잘못 쓴 값도 막는 쪽). 바꾼 뒤 새 배포가 필요하다. 절차는 [배포 가이드](deployment-guide.md#cs-agent-노출-중단-meg-236) | 백엔드(Vercel, 끌 때만) |
 | `VITE_API_MOCK` | 가짜 응답과 실제 API 전환 | `true`일 때만 가짜 응답. 나머지는 같은 출처의 `/api`로 요청한다. `VITE_` 값에는 비밀값을 넣지 않는다 | 프런트엔드(빌드 시) |
 | `VERCEL`·`VERCEL_ENV`·`VERCEL_TARGET_ENV`·`VERCEL_GIT_COMMIT_REF` | Vercel 시스템 환경변수. 직접 넣지 않는다. AI 호출 허용 판정(운영·staging Preview·로컬만)과 운영 판정(`ALLOWED_ORIGINS` 필수)에 쓴다 | Vercel이 런타임에 넣는다. 프로젝트 설정의 시스템 환경변수 노출이 켜져 있어야 한다. Vercel 위인데 `VERCEL_ENV`가 없으면 AI를 막는다(MEG-120, [ai-credentials.md](ai-credentials.md)) | 백엔드(Vercel) |
 
 - 백업 워크플로(`DB Backup`, 7절)는 앱 환경변수가 아니라 GitHub `db-backup` Environment의 비밀값을 쓴다. `SUPABASE_DB_URL`(세션 풀러 연결 문자열, DB 덤프용), `SUPABASE_URL`·`SUPABASE_SECRET_KEY`(이미지 백업용, 백업 전용 키), `AWS_ROLE_ARN`·`BACKUP_BUCKET`(S3 업로드)이고, 변수는 `GLOSSARY_IMAGE_BUCKET`·`NOTE_IMAGE_BUCKET`이다. 앱이 도는 동안 FastAPI 밖에서 DB를 읽는 예외다(D-072). 설정은 [인프라 가이드](../infra/README.md)의 "DB·이미지 백업" 절을 따른다.
 - 가져오기 스크립트가 DB·버킷에 쓸 때 쓰는 가져오기 전용 secret key의 변수 이름은 아직 없다. 가져오기 구현(MEG-85)에서 정한다. (미정, D-070)
-- 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정), `backend/app/ai_ledger.py`(AI 예산·단가), `backend/app/config.py`(허용 출처), `backend/app/supabase.py`(Supabase 주소·secret key·노트·사전 이미지 버킷), `frontend/src/api/source.ts`(가짜/실제 전환)다. `VITE_API_BASE_URL`은 사용하지 않는다. Notion 변수는 가져오기 구현 때 읽는다.
+- 코드가 환경변수를 읽는 곳은 현재 `backend/app/bedrock.py`(AI 설정), `backend/app/ai_ledger.py`(AI 예산·단가), `backend/app/config.py`(허용 출처), `backend/app/agent.py`(CS Agent 노출 중단), `backend/app/supabase.py`(Supabase 주소·secret key·노트·사전 이미지 버킷), `frontend/src/api/source.ts`(가짜/실제 전환)다. `VITE_API_BASE_URL`은 사용하지 않는다. Notion 변수는 가져오기 구현 때 읽는다.
 
 ## 9. 아직 정하지 않은 것
 
