@@ -170,6 +170,8 @@ class Checked:
     exclude_ids: list[str] = field(default_factory=list)
     # 이번 턴에 쓰는 선택 문맥(제외 반영, 추가 포함): (note_id, 원문)
     selections: list[tuple[int, str]] = field(default_factory=list)
+    # selections와 같은 순서의 위치: (note_id, 저장한 개정, 시작, 끝). 노트 검색이 선택 문단을 빼는 데 쓴다(MEG-237).
+    selection_spans: list[tuple[int, int, int, int]] = field(default_factory=list)
     # 이전 대화: 가리지 않은 끝난 턴의 (질문, 답 요약), 오래된 순
     recent: list[tuple[str, str]] = field(default_factory=list)
 
@@ -356,10 +358,14 @@ def _check_selections(
         if selection_id not in excludes:
             excludes.append(selection_id)
     checked.exclude_ids = excludes
-    active = [
-        (selection["note_id"], selection["text_snapshot"])
+    kept = [
+        selection
         for selection in selections
         if selection.get("excluded_at") is None and selection["id"] not in excludes
+    ]
+    active = [(selection["note_id"], selection["text_snapshot"]) for selection in kept]
+    spans = [
+        (selection["note_id"], selection["note_revision"], selection["start"], selection["end"]) for selection in kept
     ]
 
     if body.add_selections:
@@ -389,9 +395,11 @@ def _check_selections(
                 }
             )
             active.append((note_id, snapshot))
+            spans.append((note_id, note["revision"], add.start, add.end))
     if sum(len(text) for _, text in active) > MAX_SELECTION_TOTAL_CHARS:
         raise _field_error("add_selections", "too_long")
     checked.selections = active
+    checked.selection_spans = spans
 
 
 # --- 실행 (스레드) ---
@@ -497,6 +505,7 @@ def _execute(
         topic_label=job.topic_label,
         selection_note_ids=tuple(note_id for note_id, _ in checked.selections),
         selection_texts=tuple(text for _, text in checked.selections),
+        selection_spans=tuple(checked.selection_spans),
         recent_questions=tuple(question for question, _ in checked.recent),
     )
     emit(sse("step", {"step": "understand", "state": "done"}))

@@ -1207,3 +1207,14 @@ def test_figures_that_fail_the_mermaid_check_are_dropped_and_the_answer_stays(cl
 def test_vercel_json_does_not_turn_on_cancellation():
     config = (Path(__file__).resolve().parents[2] / "vercel.json").read_text(encoding="utf-8")
     assert "supportsCancellation" not in config
+
+
+def test_retrieval_gets_the_positions_of_the_selections_in_use(client, fake, retriever):
+    # 노트 검색은 선택 위치로 선택 문단을 뺀다(MEG-237). 제외한 선택은 넘기지 않고, 이번 턴에 더한 선택은 넘긴다.
+    cid = fake.conversation(A)
+    body = {"question": {"kind": "free", "text": QUESTION},
+            "add_selections": [{"note_id": PUBLIC, "note_revision": 3, "start": 4, "end": 9}]}
+    events(ask(client, cid, body=body))
+    context = retriever.calls[-1][2]
+    assert context.selection_spans == ((PUBLIC, 3, 0, 3), (PUBLIC, 3, 4, 9))
+    assert len(context.selection_spans) == len(context.selection_texts)

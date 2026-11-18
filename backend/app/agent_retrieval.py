@@ -52,6 +52,9 @@ class RetrievalContext:
     selection_note_ids: tuple[int, ...] = ()
     selection_texts: tuple[str, ...] = ()
     recent_questions: tuple[str, ...] = field(default=())
+    # 선택 문맥의 위치: (노트 id, 저장한 노트 개정, 시작, 끝). selection_texts와 같은 순서다. 노트 근거 기간에 선택 문장이 든
+    # 문단을 위치로 빼는 데 쓴다(MEG-237). 모르면 비워 둔다(그때는 원문 포함 여부로 본다).
+    selection_spans: tuple[tuple[int, int, int, int], ...] = ()
 
 
 class Retriever(Protocol):
@@ -65,7 +68,7 @@ class Retriever(Protocol):
 
 
 class NoEvidenceRetriever:
-    """T3b 전 기본값. 근거를 찾지 않는다. E29는 모델을 부르지 않고 no_evidence로 끝난다(spec E29 6단계)."""
+    """근거를 찾지 않는 구현(T3b 전 기본값이었다). E29는 모델을 부르지 않고 no_evidence로 끝난다(spec E29 6단계)."""
 
     version = "none-v0"
     source_kind = None

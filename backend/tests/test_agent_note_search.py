@@ -77,7 +77,12 @@ def test_headings_and_blank_lines_inside_code_blocks_are_not_boundaries():
 
 def test_splitting_is_deterministic_and_ignores_carriage_returns():
     body = "# 정의\r\n멱등성 문단.\r\n\r\n둘째 단락."
-    assert note_chunks(body) == note_chunks(body.replace("\r\n", "\n")) == note_chunks(body.replace("\r\n", "\n"))
+    def shape(text):
+        return [(c.section, c.text) for c in note_chunks(text)]
+
+    # 글은 같고, 위치는 원래 본문 기준이라 \r만큼 다르다.
+    assert shape(body) == shape(body.replace("\r\n", "\n")) == shape(body)
+    assert note_chunks(body)[0].end == len(body)
 
 
 def test_empty_sections_and_blank_bodies_make_no_chunks():
@@ -212,3 +217,49 @@ def test_latin_keywords_match_whole_words_only():
 def test_image_syntax_with_a_title_or_escaped_bracket_becomes_alt_text():
     assert replace_images('앞 ![구조](note-image:k "그림 제목") 뒤') == "앞 [그림: 구조] 뒤"
     assert replace_images(r"![a\]b](note-image:k)") == r"[그림: a\]b]"
+
+
+# --- 독립 리뷰 지적 재현 (sdd code-reviewer, 2026-11-18) ---
+
+STACK_BODY = "# 스택\n스택은 나중에 넣은 것을 먼저 뺀다.\n\n# 큐\n큐는 스택과 달리 먼저 넣은 것을 먼저 뺀다.\n\n# 덱\n덱은 스택과 큐를 합친 것이다."
+
+
+def test_a_short_selection_excludes_only_the_paragraph_it_was_selected_in():
+    start = STACK_BODY.index("스택은")
+    query = context(selection_note_ids=(7,), selection_texts=("스택",), selection_spans=((7, 3, start, start + 2),))
+    found = search_notes([note(7, STACK_BODY)], "스택이 뭐야", query)
+    # 선택한 위치의 문단(# 스택)만 빠지고, 같은 낱말이 든 다른 문단은 근거로 남는다.
+    assert [p.section for p in found] == ["큐", "덱"]
+
+
+def test_a_selection_on_an_older_revision_falls_back_to_the_text_test():
+    start = STACK_BODY.index("스택은")
+    query = context(selection_note_ids=(7,), selection_texts=("스택은 나중에 넣은",),
+                    selection_spans=((7, 2, start, start + 10),))
+    found = search_notes([note(7, STACK_BODY, revision=3)], "스택", query)
+    assert [p.section for p in found] == ["큐", "덱"]
+
+
+def test_selection_spans_follow_carriage_returns_in_the_raw_body():
+    body = STACK_BODY.replace("\n", "\r\n")
+    start = body.index("큐는")
+    query = context(selection_note_ids=(7,), selection_texts=("큐는",), selection_spans=((7, 3, start, start + 2),))
+    assert [p.section for p in search_notes([note(7, body)], "스택", query)] == ["스택", "덱"]
+
+
+def test_inline_code_crossing_a_line_does_not_hide_the_next_heading():
+    body = "a `b\n# 제목 c` d\n\n본문"
+    assert [c.section for c in note_chunks(body)] == [None, "제목 c` d"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["![ " * 20000, "# a" + " " * 50000 + "b", "#" + " " * 50000 + "x#"],
+    ids=["image_brackets", "heading_spaces", "closing_hashes"],
+)
+def test_splitting_pathological_bodies_is_fast(body):
+    import time
+
+    started = time.perf_counter()
+    note_chunks(body)
+    assert time.perf_counter() - started < 2
