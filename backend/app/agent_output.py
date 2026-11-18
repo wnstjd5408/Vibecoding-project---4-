@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.agent_retrieval import SOURCE_KINDS, Paragraph
+from app.ai_ledger import PROMPT_OVERHEAD_TOKENS
 
 PROMPT_VERSION = "agent-v1"
 
@@ -142,6 +143,9 @@ def build_prompt(data: PromptInput) -> str:
         if room <= 0:
             break
         piece = _cut(text, room)
+        if not piece:
+            # 빈 선택은 글자 수 상한에 잡히지 않아 줄 수가 끝없이 늘 수 있다. 넣지 않는다(max_prompt_chars의 줄 수 상한).
+            continue
         used += len(piece)
         selections.append(f"- {_data(piece)}")
     parts.append(_block("선택 문맥", "\n".join(selections) or "(없음)"))
@@ -168,18 +172,46 @@ def build_prompt(data: PromptInput) -> str:
 
 
 def max_prompt_chars() -> int:
-    """상한을 모두 채웠을 때의 프롬프트 길이 상한(코드포인트). ai_check_limit의 사전 확인 금액에 쓴다(spec E29 3단계)."""
-    selection_lines = MAX_SELECTION_TOTAL_CHARS + 3 * 20  # 줄머리 "- "와 줄바꿈을 넉넉히 더한다
-    recent = MAX_RECENT_TURNS * (MAX_QUESTION_CHARS + MAX_RECENT_ANSWER_CHARS + 20)
-    paragraphs = MAX_PARAGRAPHS * (MAX_SOURCE_TITLE_CHARS + MAX_SOURCE_SECTION_CHARS + MAX_PARAGRAPH_CHARS + 30)
-    question = MAX_QUESTION_CHARS + MAX_REPLY_TEXT_CHARS + 20
-    blocks = 5 * 40
-    return len(rules(True)) + MAX_TOPIC_CHARS + selection_lines + recent + paragraphs + question + blocks
+    """상한을 모두 채웠을 때의 프롬프트 길이 상한(코드포인트). ai_check_limit의 사전 확인 금액에 쓴다(spec E29 3단계).
+
+    build_prompt의 구성을 그대로 따라 센다. _data의 경계 표시 바꾸기(<<< → ‹‹‹)는 글자 수를 바꾸지 않는다.
+    """
+    empty = len("(없음)")
+    # 선택 문맥: 선택마다 "- "와 줄바꿈이 붙는다. 빈 선택은 넣지 않으므로 선택은 1글자 이상이고, 줄 수는
+    # 많아야 MAX_SELECTION_TOTAL_CHARS다. 줄 수가 가장 많을 때(1글자 선택만) 길이가 가장 길다.
+    selections = max(MAX_SELECTION_TOTAL_CHARS * len("- \n") - 1 + MAX_SELECTION_TOTAL_CHARS, empty)
+    # 이전 대화: 턴마다 "질문 n: "·"답 n: " 두 줄. 줄 사이 줄바꿈은 (2 × 턴 수 - 1)개다.
+    turn = (
+        len(f"질문 {MAX_RECENT_TURNS}: ")
+        + MAX_QUESTION_CHARS
+        + len(f"답 {MAX_RECENT_TURNS}: ")
+        + MAX_RECENT_ANSWER_CHARS
+    )
+    recent = max(MAX_RECENT_TURNS * turn + (2 * MAX_RECENT_TURNS - 1), empty)
+    # 근거 문단: "[n] 제목: 제목 / 절: 절\n본문". 문단 사이는 빈 줄("\n\n")이다.
+    paragraph = (
+        len(f"[{MAX_PARAGRAPHS}] 제목: ")
+        + MAX_SOURCE_TITLE_CHARS
+        + len(" / 절: ")
+        + MAX_SOURCE_SECTION_CHARS
+        + len("\n")
+        + MAX_PARAGRAPH_CHARS
+    )
+    paragraphs = MAX_PARAGRAPHS * paragraph + len("\n\n") * (MAX_PARAGRAPHS - 1)
+    question = MAX_QUESTION_CHARS + len("\n학습자가 고른 뜻: ") + MAX_REPLY_TEXT_CHARS
+    bodies = max(MAX_TOPIC_CHARS, empty) + selections + recent + paragraphs + question
+    names = ("현재 주제", "선택 문맥", "이전 대화", "근거 문단", "질문")
+    blocks = sum(len(_block(name, "")) for name in names)
+    joins = len(names)  # 규칙과 구역 다섯 개를 잇는 줄바꿈
+    return len(rules(True)) + blocks + joins + bodies
 
 
 def max_prompt_tokens() -> int:
-    """원장 추정식(UTF-8 바이트/2 + 64)으로 본 최대 입력 토큰. 한 글자를 3바이트로 잡는다(한국어)."""
-    return math.ceil(max_prompt_chars() * 3 / 2) + 64
+    """원장 추정식(UTF-8 바이트/2 올림 + 64, ai_ledger.estimate_input_tokens)으로 본 최대 입력 토큰.
+
+    한 글자를 UTF-8 최대 길이인 4바이트로 잡는다. 이모지 같은 4바이트 글자로 채워도 실제 추정값을 넘지 않는다.
+    """
+    return math.ceil(max_prompt_chars() * 4 / 2) + PROMPT_OVERHEAD_TOKENS
 
 
 # --- 출력 검증 ---
@@ -484,12 +516,16 @@ _NODE_IDS = re.compile(rf"(?:^|{_ARROW}(?:\|[^|]*\|)?)\s*({_ID})")
 _RESERVED_IDS = frozenset(
     {"end", "graph", "flowchart", "subgraph", "click", "style", "classdef", "class", "linkstyle", "call", "href", "direction"}
 )
-_FORBIDDEN = ("%%", "javascript:", "<", "@{", ":::")
+# 대소문자를 가리지 않고 막는 글자열. "fa:"는 Font Awesome 아이콘 문법(fa:fa-user)이다.
+_FORBIDDEN = ("%%", "javascript:", "<", "@{", ":::", "fa:")
+# Mermaid HTML 엔티티(#quot;, #9829;). 렌더러가 글자로 바꾸므로 막아 둔 글자를 우회할 수 있다.
+_ENTITY = re.compile(r"#\w+;", re.IGNORECASE)
 
 
 def mermaid_allowed(source: str) -> bool:
     """spec 5.3의 허용 문법인가. 통과하지 못하면 그 그림만 뺀다."""
-    if len(source) > MAX_MERMAID_CHARS or any(token in source.lower() for token in _FORBIDDEN):
+    lowered = source.lower()
+    if len(source) > MAX_MERMAID_CHARS or any(token in lowered for token in _FORBIDDEN) or _ENTITY.search(source):
         return False
     lines = [line for line in source.replace("\r\n", "\n").split("\n") if line.strip()]
     if len(lines) < 2 or len(lines) > MAX_MERMAID_LINES or not _HEADER.fullmatch(lines[0].strip()):
