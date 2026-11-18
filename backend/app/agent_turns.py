@@ -68,6 +68,7 @@ from app.agent_output import (
     OutputInvalid,
     PromptInput,
     build_prompt,
+    correction_allowed,
     max_prompt_tokens,
     parse_output,
     source_rows,
@@ -504,7 +505,15 @@ def _execute(
     emit(sse("step", {"step": "retrieve", "state": "current"}))
     paragraphs = usable_paragraphs(retriever.retrieve(job.user, checked.text, context))
     _touch(job, supabase, "retrieve", len(paragraphs))
-    emit(sse("step", {"step": "retrieve", "state": "done", "paragraph_count": len(paragraphs)}))
+    done: dict[str, Any] = {"step": "retrieve", "state": "done", "paragraph_count": len(paragraphs)}
+    # 화면이 "노트 문단 N개"와 "위키 문단 N개"를 고르는 값이다(spec 6절, 2026-11-18 결정).
+    kinds = {paragraph.source_kind for paragraph in paragraphs}
+    source_kind = kinds.pop() if len(kinds) == 1 else getattr(retriever, "source_kind", None)
+    if source_kind is not None:
+        done["source_kind"] = source_kind
+    emit(sse("step", done))
+    # 근거가 노트뿐이면 correction을 받지 않는다(노트로 노트를 교정하지 않음, spec 0절 T4 전 임시 예외).
+    allow_correction = correction_allowed(paragraphs)
 
     if not paragraphs:
         # 쓸 근거가 없으면 모델을 부르지 않는다. 서버 고정 안내만 저장한다(spec E29 6단계, 결정 4·16).
@@ -532,6 +541,7 @@ def _execute(
             paragraphs=paragraphs,
             clarification=checked.clarification,
             allow_topic_check=checked.allow_topic_check,
+            allow_correction=allow_correction,
         )
     )
     try:
@@ -560,7 +570,11 @@ def _execute(
 
     try:
         parsed = parse_output(
-            outcome.text, len(paragraphs), current_topic=topic, allow_topic_check=checked.allow_topic_check
+            outcome.text,
+            len(paragraphs),
+            current_topic=topic,
+            allow_topic_check=checked.allow_topic_check,
+            allow_correction=allow_correction,
         )
     except OutputInvalid as invalid:
         # 형식 실패는 재시도 없이 failed다(Q19 임시). 호출은 이미 정산됐다. 원문은 남기지 않는다.

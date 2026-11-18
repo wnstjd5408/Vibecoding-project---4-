@@ -151,6 +151,36 @@ def test_no_note_ids_means_no_request():
     assert seen == []
 
 
+def test_note_search_reads_only_published_note_bodies():
+    rows = [{"id": 1, "revision": 2, "title": "t", "body_markdown": "b"}]
+    client, seen = recording_client([httpx.Response(200, json=rows)])
+    assert client.list_published_note_bodies() == rows
+    request = seen[0]
+    assert request.method == "GET" and request.url.path == "/rest/v1/notes"
+    # 역할과 관계없이 공개 노트만 읽는다(MEG-237 AC-1). 비공개 열(memo 등)은 읽지 않는다.
+    assert dict(request.url.params) == {
+        "is_published": "eq.true", "select": "id,revision,title,body_markdown", "order": "id.asc",
+    }
+
+
+def test_reading_a_cited_source_reads_the_snapshot_of_that_turn_and_ref():
+    row = {"ref": 2, "source_kind": "note", "paragraph_snapshot": "p"}
+    client, seen = recording_client([httpx.Response(200, json=[row]), httpx.Response(200, json=[])])
+    assert client.get_agent_turn_source(TURN, 2) == row
+    assert client.get_agent_turn_source(TURN, 3) is None
+    params = dict(seen[0].url.params)
+    assert seen[0].url.path == "/rest/v1/ai_turn_sources"
+    assert params["turn_id"] == f"eq.{TURN}" and params["ref"] == "eq.2" and params["limit"] == "1"
+    assert "paragraph_snapshot" in params["select"] and "source_id" in params["select"]
+
+
+def test_reading_a_source_of_a_turn_id_that_is_not_a_uuid_is_refused_before_any_request():
+    client, seen = recording_client([])
+    with pytest.raises(ValueError):
+        client.get_agent_turn_source("not-a-uuid", 1)
+    assert seen == []
+
+
 def test_reading_a_note_for_a_conversation_hides_unpublished_notes_from_members():
     client, seen = recording_client([httpx.Response(200, json=[]), httpx.Response(200, json=[{"id": 1}])])
     assert client.get_note_for_agent(1, include_unpublished=False) is None

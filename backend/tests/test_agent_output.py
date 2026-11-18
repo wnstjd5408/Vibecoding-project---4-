@@ -29,6 +29,7 @@ from app.agent_output import (
     PromptInput,
     _data,
     build_prompt,
+    correction_allowed,
     max_prompt_chars,
     max_prompt_tokens,
     mermaid_allowed,
@@ -403,3 +404,41 @@ def test_parse_output_rejects(payload, reason):
     with pytest.raises(OutputInvalid) as error:
         _parse(payload)
     assert error.value.reason == reason
+
+
+# --- 노트 근거만 있을 때 교정 금지 (MEG-237, spec 0절 T4 전 임시 예외) ---
+
+
+def _paragraph(kind: str) -> Paragraph:
+    return Paragraph(source_kind=kind, source_id="1", revision="1", title="제목", text="본문")
+
+
+def test_correction_is_allowed_only_when_some_evidence_is_not_a_note():
+    assert correction_allowed([_paragraph("note"), _paragraph("note")]) is False
+    assert correction_allowed([_paragraph("note"), _paragraph("wiki")]) is True
+    assert correction_allowed([]) is False
+
+
+def test_a_note_only_prompt_drops_the_correction_rule_and_fields():
+    base = _worst_case_input("가")
+    with_correction = build_prompt(base)
+    without = build_prompt(PromptInput(**{**base.__dict__, "allow_correction": False}))
+    assert "corrections [" in with_correction and "state를 correction으로 하고" in with_correction
+    assert "corrections" not in without and "state를 correction으로 하지 않습니다" in without
+    assert len(without) <= max_prompt_chars()
+
+
+def test_parse_correction_rejected_when_not_allowed():
+    payload = {
+        "state": "correction",
+        "sections": [{"body": "설명 [1]"}],
+        "corrections": [{"note_excerpt": "노트 문장", "corrected": "고친 내용 [1]", "source_refs": [1]}],
+    }
+    with pytest.raises(OutputInvalid) as error:
+        parse_output(json.dumps(payload, ensure_ascii=False), 2, current_topic="t", allow_topic_check=True,
+                     allow_correction=False)
+    assert error.value.reason == "state"
+    # 다른 상태는 그대로 받는다.
+    answered = {"state": "answered", "sections": [{"body": "설명 [1]"}]}
+    assert parse_output(json.dumps(answered, ensure_ascii=False), 2, current_topic="t", allow_topic_check=True,
+                        allow_correction=False).result["state"] == "answered"

@@ -1415,6 +1415,34 @@ class SupabaseClient:
         rows = self._select("notes", params)
         return rows[0] if rows else None
 
+    def list_published_note_bodies(self) -> list[dict[str, Any]]:
+        """CS Agent 노트 임시 검색(MEG-237): 공개 노트 전부의 id, revision, title, body_markdown을 id 순으로 준다.
+
+        역할과 관계없이 공개 노트만 DB에서 거른다(운영자도 비공개 노트는 근거로 쓰지 않는다, 2026-11-18 결정).
+        쪽을 나누지 않는다. prd 공개 노트는 40건(2026-11-18)이고, API 최대 행(1,000)을 넘으면 잘린다. 노트가 늘면 T4에서
+        검색 방식과 함께 다시 정한다.
+        """
+        return self._select(
+            "notes",
+            {"is_published": "eq.true", "select": "id,revision,title,body_markdown", "order": "id.asc"},
+        )
+
+    def get_agent_turn_source(self, turn_id: str, ref: int) -> dict[str, Any] | None:
+        """E32: 턴의 인용 출처 한 개와 인용 당시 원문(paragraph_snapshot). 없으면 None이다.
+
+        ai_turn_sources에는 user_id가 없다. 호출하는 쪽(E32)이 같은 요청에서 load_turn으로 턴 주인을 먼저 확인한다.
+        """
+        rows = self._select(
+            "ai_turn_sources",
+            {
+                "turn_id": f"eq.{uuid.UUID(turn_id)}",
+                "ref": f"eq.{int(ref)}",
+                "select": "ref,source_kind,source_id,cited_revision,title,section,paragraph_snapshot",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
     def get_note_states(self, note_ids: list[int]) -> dict[int, dict[str, Any]]:
         """CS Agent 권한·가림 판정용 노트 상태(id, revision, title, is_published). 없는 노트는 결과에 없다.
 
