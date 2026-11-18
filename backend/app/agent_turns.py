@@ -108,8 +108,9 @@ _MAX_INT = 2**31 - 1
 _UUID_SHAPE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 # 끝난 턴의 failure → 스트림 error 이벤트의 code(실행 중 원인을 모를 때). limit는 S12 화면, 나머지는 S8 화면이다.
 _FAILURE_CODES = {"limit": "ai_limit_reached", "error": "ai_unavailable", "interrupted": "internal_error"}
-# 답 없이 끝난 턴. 확인 선택(reply)의 만료를 정할 때 대상 뒤의 이런 턴은 세지 않는다(2026-11-18 결정).
-_NO_ANSWER_STATUSES = frozenset({"failed", "cancelled"})
+# 확인 선택(reply)의 만료를 정할 때 대상 뒤에 있어도 세지 않는 턴. 답 없이 끝난 턴(2026-11-18 결정)과, 아직 답이 없는
+# 실행 중인 턴이다. 실행 중이면 선점이 409 turn_in_progress로 거절하고, 그 턴이 실패·중단되면 선택은 다시 유효하다.
+_NO_ANSWER_STATUSES = frozenset({"failed", "cancelled", "running"})
 
 
 # --- 요청 모양 (spec E29) ---
@@ -203,6 +204,20 @@ def _uuid_or_422(value: str, name: str) -> str:
     return value.lower()
 
 
+def _bad_text(text: str) -> bool:
+    """DB에 넣을 수 없는 글자가 있는가. NUL과, UTF-8로 바꿀 수 없는 짝 없는 서로게이트다(다른 엔드포인트와 같은 판정).
+
+    서로게이트를 거르지 않으면 선점 RPC의 JSON 인코딩에서 500이 난다.
+    """
+    if "\x00" in text:
+        return True
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
 def _answer_text(result: dict[str, Any]) -> str | None:
     """이전 대화 문맥에 넣을 답 요약. 설명 본문이 있는 결과와 의미 확인만 쓴다."""
     if result.get("state") == "clarify":
@@ -235,7 +250,7 @@ def check_request(
             raise _field_error("question.preset", "invalid_value")
         if question.text is None or not question.text.strip():
             raise _field_error("question.text", "required")
-        if len(question.text) > MAX_QUESTION_CHARS or "\x00" in question.text:
+        if len(question.text) > MAX_QUESTION_CHARS or _bad_text(question.text):
             raise _field_error("question.text", "too_long" if len(question.text) > MAX_QUESTION_CHARS else "invalid_format")
         checked = Checked(kind=question.kind, text=question.text)
         if question.kind == "free":
@@ -284,6 +299,7 @@ def _check_reply(body: TurnRequest, checked: Checked, turns: list[dict[str, Any]
     """앞 턴의 의미 확인·주제 전환 확인에 대한 답(spec E29 reply). 대상 뒤에 턴이 생겼으면 409 choice_expired다.
 
     대상 뒤의 failed·cancelled 턴은 세지 않는다(2026-11-18 결정). 답이 실패하거나 중단된 뒤 새 키로 다시 보낼 수 있다.
+    실행 중인 뒤 턴도 세지 않는다. 그때는 선점이 409 turn_in_progress로 거절한다(끝났다고 알리지 않는다).
     """
     reply = body.reply
     target_id = _uuid_or_422(reply.turn_id, "reply.turn_id")
@@ -316,7 +332,7 @@ def _check_reply(body: TurnRequest, checked: Checked, turns: list[dict[str, Any]
             stored["clarify_option_id"] = reply.clarify_option_id
             checked.clarification = options[reply.clarify_option_id]
         else:
-            if not reply.text.strip() or len(reply.text) > MAX_REPLY_TEXT_CHARS or "\x00" in reply.text:
+            if not reply.text.strip() or len(reply.text) > MAX_REPLY_TEXT_CHARS or _bad_text(reply.text):
                 raise _field_error("reply.text", "too_long" if len(reply.text) > MAX_REPLY_TEXT_CHARS else "invalid_value")
             stored["text"] = reply.text
             checked.clarification = reply.text
@@ -590,7 +606,8 @@ def _final(job: TurnJob, supabase: SupabaseClient, error_code: str | None) -> Fi
     """DB에 남은 턴의 마지막 상태를 가림을 적용해 읽는다. 대화 권한이 사라졌으면 404다."""
     try:
         access = load_conversation(supabase, job.user, job.access.conversation["id"])
-        turns = read_turns(supabase, job.user, access.conversation["id"], max_seq=job.seq)
+        # 앞 턴의 출처와 뒤의 다시 묻기 턴이 모두 가림에 쓰이므로 대화의 턴을 모두 읽는다(E28과 같은 판정).
+        turns = read_turns(supabase, job.user, access.conversation["id"])
         payload = next((p for p in visible_turns(supabase, access, turns) if p["turn_id"] == job.turn_id), None)
     except ApiError as error:
         return Final(None, error.code)
@@ -756,7 +773,8 @@ def _remove_claim(supabase: SupabaseClient, user: SessionUser, turn_id: str) -> 
 def _replay(supabase: SupabaseClient, user: SessionUser, turn_id: str) -> Replay:
     """같은 키의 끝난 턴을 가림을 적용해 돌려준다. 그 턴의 대화 권한을 다시 확인한다(모델 호출 없음)."""
     turn, access = load_turn(supabase, user, turn_id)
-    turns = read_turns(supabase, user, access.conversation["id"], max_seq=turn["seq"])
+    # 앞 턴의 출처와 뒤의 다시 묻기 턴이 모두 가림에 쓰이므로 대화의 턴을 모두 읽는다(E28과 같은 판정).
+    turns = read_turns(supabase, user, access.conversation["id"])
     payload = next((p for p in visible_turns(supabase, access, turns) if p["turn_id"] == turn["id"]), None)
     if payload is None:
         raise ApiError("not_found", stage="db")

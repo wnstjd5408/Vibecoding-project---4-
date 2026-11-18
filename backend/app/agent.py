@@ -198,8 +198,8 @@ def read_turn(
     target = path_uuid(turn_id)
     limiter.check(AI_AGENT_READ, f"user:{user.user_id}")
     turn, access = load_turn(supabase, user, target)
-    # 가림은 앞 턴의 출처로도 정해지므로 이 턴까지의 턴을 함께 읽는다.
-    turns = read_turns(supabase, user, access.conversation["id"], max_seq=turn["seq"])
+    # 가림은 앞 턴의 출처와 뒤의 다시 묻기 턴(첫 가림 턴의 retry_allowed)으로 정해지므로 대화의 턴을 모두 읽는다.
+    turns = read_turns(supabase, user, access.conversation["id"])
     payload = next((p for p in visible_turns(supabase, access, turns) if p["turn_id"] == turn["id"]), None)
     if payload is None:
         # 확인한 뒤 턴이 지워졌다(대화 삭제·보관 정리).

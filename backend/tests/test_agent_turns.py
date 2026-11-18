@@ -585,6 +585,20 @@ def test_a_replay_of_a_failed_turn_ends_with_the_same_error_event_as_the_live_ru
     assert bedrock.calls == calls and len(fake.finishes) == 1
 
 
+def test_a_replay_of_the_first_hidden_turn_sees_its_completed_retry(client, fake, bedrock):
+    """첫 가림 턴 X의 retry_allowed는 뒤의 다시 묻기 턴으로 정한다. 재생도 대화의 턴을 모두 읽어 E28과 같게 판정한다."""
+    cid = fake.conversation(A)
+    hidden = fake.turn(cid, 1, sources=[("note", str(PRIVATE))])
+    key = str(uuid.uuid4())
+    fake.turns[hidden]["idempotency_key"] = key
+    retry = fake.turn(cid, 2)
+    fake.turns[retry]["retry_of_turn_id"] = hidden
+    replay = events(ask(client, cid, key=key))
+    assert replay[-1][1]["turn_id"] == hidden
+    assert replay[-1][1]["hidden"] == {"reason": "source_revoked", "retry_allowed": False}
+    assert bedrock.calls == 0
+
+
 def test_the_same_key_while_running_is_409_in_progress_with_the_turn_id(client, fake, bedrock):
     cid = fake.conversation(A)
     key = str(uuid.uuid4())
@@ -923,6 +937,25 @@ def test_malformed_questions_are_422(client, fake, question, name, reason):
     assert fake.turns == {}
 
 
+@pytest.mark.parametrize("target", ["question", "reply"])
+def test_a_lone_surrogate_in_the_question_or_reply_text_is_a_422_not_a_500(client, fake, bedrock, target):
+    """UTF-8로 바꿀 수 없는 글자(짝 없는 서로게이트)는 선점·DB 호출 전에 422다. 다른 엔드포인트와 같은 판정이다."""
+    cid, body, _ = _clarify_case(fake)
+    # httpx의 json=은 짝 없는 서로게이트를 인코딩하지 못하므로 JSON 이스케이프(백슬래시 u d800)로 직접 보낸다.
+    marker = "앞" + chr(92) + "ud800뒤"
+    if target == "question":
+        raw = '{"question":{"kind":"free","text":"%s"}}' % marker
+        name, reason = "question.text", "invalid_format"
+    else:
+        raw = '{"question":{"kind":"free","text":"q"},"reply":{"turn_id":"%s","text":"%s"}}' % (
+            body["reply"]["turn_id"], marker)
+        name, reason = "reply.text", "invalid_value"
+    headers = {**origin(), **cookie("a-token"), "Idempotency-Key": str(uuid.uuid4()), "Content-Type": "application/json"}
+    response = client.post(f"/api/ai/conversations/{cid}/turns", content=raw.encode("utf-8"), headers=headers)
+    assert_field(response, name, reason)
+    assert "claim_agent_turn" not in fake.calls and bedrock.calls == 0
+
+
 def test_a_preset_question_uses_the_fixed_server_text(client, fake, bedrock):
     events(ask(client, fake.conversation(A), body={"question": {"kind": "preset", "preset": "simple"}}))
     row = last_turn(fake)
@@ -976,6 +1009,16 @@ def test_a_reply_stays_open_when_the_turns_after_it_failed_or_were_cancelled(cli
     parsed = events(ask(client, cid, body=body))
     assert parsed[-1][0] == "result" and parsed[-1][1]["status"] == "completed"
     assert last_turn(fake)["reply"]["turn_id"] == body["reply"]["turn_id"]
+
+
+@pytest.mark.parametrize("case", [_clarify_case, _topic_case], ids=["clarify", "topic"])
+def test_a_reply_while_a_later_turn_is_running_is_turn_in_progress_not_choice_expired(client, fake, bedrock, case):
+    """뒤 턴이 실행 중이면 그 턴이 실패·중단될 수 있으므로 선택이 끝났다고 하지 않는다. 다시 시도할 409 turn_in_progress다."""
+    cid, body, _ = case(fake)
+    running = fake.turn(cid, 2, status="running", lease=60)
+    response = ask(client, cid, body=body)
+    assert_error(response, 409, "conflict", "turn_in_progress")
+    assert response.json()["error"]["turn_id"] == running and bedrock.calls == 0
 
 
 @pytest.mark.parametrize("case", [_clarify_case, _topic_case], ids=["clarify", "topic"])
