@@ -48,7 +48,7 @@ MAX_SENTENCE_CHARS = 500
 # 같은 요청이 최대 약 60초 걸린다(호출 30초 × 2). 진행 중 응답의 재시도 시간은 이 이상이다(1.3, 1.4.5).
 IN_PROGRESS_RETRY_SECONDS = 60
 # reserved로 이 시간 넘게 남은 행은 죽은 요청이다. 다음 예약이 reserved_fallback으로 정산한다(5.3 6번).
-# supabase/migrations/20261102120000_ai_ledger_functions.sql의 ai_reserve(interval '10 minutes')와 같은 값이어야 한다.
+# supabase/migrations/20261118140000_cs_agent_conversations.sql의 ai_reserve(interval '10 minutes')와 같은 값이어야 한다.
 STALE_RESERVED_SECONDS = 10 * 60
 # 프롬프트 형식 버전. 설명 행에 남겨 프롬프트를 바꿨을 때 이전 설명을 가려낼 수 있게 한다.
 PROMPT_VERSION = "explain-v1"
