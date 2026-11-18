@@ -25,6 +25,8 @@ SPEC_MESSAGES = [
     ("conflict", "stale_revision", 409, "The note has changed since it was loaded"),
     ("conflict", "result_unavailable", 409, "The result is no longer available; send a new request"),
     ("conflict", "email_exists", 409, "An account with this email already exists"),
+    # CS Agent API spec v0.2 2.1(MEG-234)
+    ("conflict", "turn_not_cancellable", 409, "The response has already finished"),
     ("payload_too_large", None, 413, "Request is too large"),
     ("unsupported_media_type", None, 415, "Unsupported file type"),
     ("validation_failed", None, 422, "One or more fields are invalid"),

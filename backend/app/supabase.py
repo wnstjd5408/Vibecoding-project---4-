@@ -1,7 +1,7 @@
 """Supabase 호출 최소 래퍼. FastAPI만 secret key로 부른다(D-007).
 
 이 파일이 하는 일: 로그인·세션 갱신·로그아웃·세션 토큰 확인(Auth), profiles·과목·노트·사전 용어 조회와 열람 기록(REST),
-노트 이미지 서명 URL 발급과 사전 이미지 공개 주소(Storage), SQL 함수 호출(RPC).
+노트 이미지 서명 URL 발급과 사전 이미지 공개 주소(Storage), SQL 함수 호출(RPC), CS Agent 대화·턴 읽기와 쓰기(REST).
 """
 
 import hashlib
@@ -1165,6 +1165,166 @@ class SupabaseClient:
         if not separator or not query.startswith("token="):
             return None
         return f"{self._url}/storage/v1{quote(path, safe='/')}?{query}"
+
+    # --- CS Agent 대화·턴 (MEG-234, API spec v0.2 3·4·8절) ---
+    # 표는 20261118140000_cs_agent_conversations.sql이 만든다. 남의 행은 없는 행과 같게 None이다(user_id 필터).
+
+    _AGENT_CONVERSATION_COLUMNS = (
+        "id,user_id,origin,note_id,note_revision,wiki_ref,topic_label,created_at,"
+        'ai_conversation_selections(id,note_id,note_revision,start,"end",text_snapshot,excluded_at,created_at)'
+    )
+    # 응답과 가림 판정에 쓰는 열만 읽는다. 원장·실행 기록 열(ledger_id·model_id 등)과 출처 원문(paragraph_snapshot)은 읽지 않는다.
+    _AGENT_TURN_COLUMNS = (
+        "id,conversation_id,seq,question_kind,question_text,preset,from_turn_id,status,failure,step,"
+        "paragraph_count,result,lease_expires_at,created_at,finished_at,"
+        "ai_turn_sources(ref,source_kind,source_id,cited_revision,title,section,excerpt)"
+    )
+
+    def create_agent_conversation(self, fields: dict[str, Any]) -> dict[str, Any] | None:
+        """E27: 대화 행 하나를 넣고 넣은 행을 돌려준다. 참조한 노트가 그 사이 지워졌으면 None이다.
+
+        선택 문맥은 add_agent_selection으로 따로 넣는다.
+        """
+        response = self._request(
+            "POST",
+            "/rest/v1/ai_conversations",
+            params={"select": "id,user_id,origin,note_id,note_revision,wiki_ref,topic_label,created_at"},
+            json=fields,
+            headers={**self._headers(), "Prefer": "return=representation"},
+        )
+        if response.status_code == 409 and _error_field(response, "code") == "23503":
+            # 확인한 뒤 노트가 지워졌다(외래키 위반). 호출 쪽이 404로 낸다.
+            return None
+        if response.status_code != 201:
+            raise SupabaseConfigError(f"ai_conversations insert status {response.status_code}")
+        return response.json()[0]
+
+    def add_agent_selection(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """E27: 선택 문맥 행 하나(자른 원문과 그때의 개정)를 넣고 넣은 행을 돌려준다."""
+        response = self._request(
+            "POST",
+            "/rest/v1/ai_conversation_selections",
+            params={"select": 'id,note_id,note_revision,start,"end",text_snapshot,excluded_at,created_at'},
+            json=fields,
+            headers={**self._headers(), "Prefer": "return=representation"},
+        )
+        if response.status_code != 201:
+            raise SupabaseConfigError(f"ai_conversation_selections insert status {response.status_code}")
+        return response.json()[0]
+
+    def delete_agent_conversation(self, user_id: str, conversation_id: str) -> None:
+        """E27: 선택 문맥을 넣지 못한 대화를 지운다. 하위 행은 외래키 연쇄로 함께 지워진다."""
+        response = self._request(
+            "DELETE",
+            "/rest/v1/ai_conversations",
+            params={"id": f"eq.{uuid.UUID(conversation_id)}", "user_id": f"eq.{uuid.UUID(user_id)}"},
+            headers={**self._headers(), "Prefer": "return=minimal"},
+        )
+        if response.status_code not in (200, 204):
+            raise SupabaseConfigError(f"ai_conversations delete status {response.status_code}")
+
+    def get_agent_conversation(self, user_id: str, conversation_id: str) -> dict[str, Any] | None:
+        """E28~E31: 그 사용자의 대화 한 개와 선택 문맥 전부(제외한 것 포함, 넣은 순서). 없거나 남의 대화면 None이다."""
+        rows = self._select(
+            "ai_conversations",
+            {
+                "id": f"eq.{uuid.UUID(conversation_id)}",
+                "user_id": f"eq.{uuid.UUID(user_id)}",
+                "select": self._AGENT_CONVERSATION_COLUMNS,
+                "ai_conversation_selections.order": "created_at.asc,id.asc",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    def get_agent_turn(self, user_id: str, turn_id: str) -> dict[str, Any] | None:
+        """E30·E31: 그 사용자의 턴 한 개(대화 id·seq·상태·질문). 없거나 남의 턴이면 None이다."""
+        rows = self._select(
+            "ai_turns",
+            {
+                "id": f"eq.{uuid.UUID(turn_id)}",
+                "user_id": f"eq.{uuid.UUID(user_id)}",
+                "select": "id,conversation_id,seq,status,question_kind,question_text,preset,from_turn_id,created_at",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    def list_agent_turns(self, user_id: str, conversation_id: str, max_seq: int | None = None) -> list[dict[str, Any]]:
+        """E28·E30: 대화의 턴과 각 턴의 인용 출처를 seq 오름차순으로 준다. max_seq를 주면 그 seq까지만 읽는다.
+
+        가림 판정은 앞 턴의 출처를 봐야 하므로 E30도 앞 턴을 함께 읽는다. 한 대화의 턴 수는 7일 보관 안에서 작다고 보고 쪽을
+        나누지 않는다(API 최대 행 1,000을 넘으면 잘린다).
+        """
+        params = {
+            "conversation_id": f"eq.{uuid.UUID(conversation_id)}",
+            "user_id": f"eq.{uuid.UUID(user_id)}",
+            "select": self._AGENT_TURN_COLUMNS,
+            "order": "seq.asc",
+            "ai_turn_sources.order": "ref.asc",
+        }
+        if max_seq is not None:
+            params["seq"] = f"lte.{int(max_seq)}"
+        return self._select("ai_turns", params)
+
+    def expire_agent_turns(self, user_id: str, conversation_id: str, lapsed_before: str, now_iso: str) -> int:
+        """E28·E30·E31: 실행 만료 시각(lease_expires_at)이 lapsed_before 이전인 running 턴을 failed(interrupted)로 바꾼다(spec 3.1).
+
+        status = running이고 아직 만료된 턴만 바꾸는 조건부 갱신이다. 그 사이 실행이 갱신했거나 끝낸 턴은 건드리지 않는다.
+        바꾼 턴 수를 돌려준다.
+        """
+        response = self._request(
+            "PATCH",
+            "/rest/v1/ai_turns",
+            params={
+                "conversation_id": f"eq.{uuid.UUID(conversation_id)}",
+                "user_id": f"eq.{uuid.UUID(user_id)}",
+                "status": "eq.running",
+                "lease_expires_at": f"lte.{lapsed_before}",
+                "select": "id",
+            },
+            json={"status": "failed", "failure": "interrupted", "finished_at": now_iso},
+            headers={**self._headers(), "Prefer": "return=representation"},
+        )
+        if response.status_code != 200:
+            raise SupabaseConfigError(f"ai_turns expire status {response.status_code}")
+        return len(response.json())
+
+    def cancel_agent_turn(self, user_id: str, turn_id: str) -> bool:
+        """E31: running인 그 사용자의 턴만 cancelled로 바꾼다(agent_finish_turn, 조건부 전이). 바꿨으면 True다."""
+        return self.rpc(
+            "agent_finish_turn",
+            {"p_user_id": str(uuid.UUID(user_id)), "p_turn_id": str(uuid.UUID(turn_id)), "p_status": "cancelled"},
+        ) is True
+
+    def get_note_for_agent(self, note_id: int, include_unpublished: bool) -> dict[str, Any] | None:
+        """E27이 읽는 노트의 열(id, revision, title, is_published, body_markdown). 없거나 볼 수 없으면 None이다.
+
+        include_unpublished가 False면 공개 노트만 DB에서 거른다(비공개 노트는 없는 노트와 같다).
+        """
+        params = {
+            "id": f"eq.{int(note_id)}",
+            "select": "id,revision,title,is_published,body_markdown",
+            "limit": "1",
+        }
+        if not include_unpublished:
+            params["is_published"] = "eq.true"
+        rows = self._select("notes", params)
+        return rows[0] if rows else None
+
+    def get_note_states(self, note_ids: list[int]) -> dict[int, dict[str, Any]]:
+        """CS Agent 권한·가림 판정용 노트 상태(id, revision, title, is_published). 없는 노트는 결과에 없다.
+
+        공개 여부와 상관없이 읽는다. 누가 볼 수 있는지는 호출하는 쪽(agent_access)이 역할을 보고 정한다.
+        """
+        ids = sorted({int(note_id) for note_id in note_ids})
+        if not ids:
+            return {}
+        rows = self._select(
+            "notes",
+            {"id": f"in.({','.join(str(note_id) for note_id in ids)})", "select": "id,revision,title,is_published"},
+        )
+        return {row["id"]: row for row in rows}
 
     def keyed_hash(self, value: str) -> str:
         """이메일·IP 같은 원문 대신 저장할 키. secret key로 서명한 해시라 값을 되돌려 추측하기 어렵다."""
