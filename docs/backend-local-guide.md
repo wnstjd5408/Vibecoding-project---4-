@@ -139,6 +139,8 @@ docker stop sql-test
 
 시험 하나만 돌리려면 해당 파일의 환경변수 하나만 설정하면 됩니다. 예를 들어 AI 원장 시험은 `AI_LEDGER_TEST_CONTAINER`만 설정하고 `tests/integration/test_ai_ledger_sql.py`를 실행합니다.
 
+**pg_cron 예약 시험 (로컬 전용)**: 일반 PostgreSQL에는 `pg_cron`이 없어서 CS Agent 대화 정리 예약(`agent-purge-expired`)은 Supabase Postgres 이미지로 따로 확인합니다. 이 시험은 CI가 모으지 않으므로 파일 경로를 직접 넘깁니다. 실행법은 `tests/integration/agent_purge_cron_local.py` 맨 위 설명에 있습니다.
+
 **방법 2. 직접 설치한 PostgreSQL 17 (psql로 직접 확인)**
 
 저장소의 SQL 시험은 `docker exec`로 컨테이너에 접속하므로 직접 설치한 PostgreSQL에서는 그대로 돌지 않습니다. 대신 같은 준비를 psql로 해서 마이그레이션 적용과 권한을 확인합니다. 이 절차의 SQL은 방법 1의 시험이 쓰는 것과 같지만, 직접 설치본에서는 아직 시험하지 않았습니다. 개인 PC의 로컬 서버에만 실행하고 원격 주소에는 실행하지 마세요.
