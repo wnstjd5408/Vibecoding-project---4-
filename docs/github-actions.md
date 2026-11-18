@@ -8,7 +8,7 @@ Staging 보호의 설정안·MEG-168 제품 CI 의존성·관리자 적용 및 �
 
 | 실행 주체 | 실행 조건 | 확인하거나 수행하는 것 | 보장하지 않는 것 |
 |---|---|---|---|
-| GitHub Actions: Product tests | main·staging·기능 통합 브랜치(`meg-<번호>-integration`) 대상 PR, main·staging push. 문서도 실행 | 단위·격리 SQL·lint/build·합성 화면 시험, 미실행/skip 차단 | 실환경 DB·로그인·AI, 배포 차단, 사람의 출시 승인 |
+| GitHub Actions: Product tests | main·staging·기능 통합 브랜치(`meg-<번호>-integration`) 대상 PR, main·staging push. 문서도 실행(문서만 바뀐 PR은 E2E 제외) | 단위·격리 SQL·lint/build·합성 화면 시험, 미실행/skip 차단 | 실환경 DB·로그인·AI, 배포 차단, 사람의 출시 승인 |
 | GitHub Actions: PR metadata | PR 생성·수정·재오픈·새 커밋·리뷰 준비 전환 | 제목·소스 브랜치·본문 형식 | 제품 테스트, AC 충족, 배포 정상 동작 |
 | GitHub Actions: Release tree check | main 대상 PR(`pull_request_target`)과 main push | 후보 브랜치·STG 수락 태그·전체 트리 일치 | STG E2E의 실제 내용, 필수 검사·Deployment Checks 연결(사람 설정) |
 | GitHub Actions: Infra CD | `main`의 지정된 Terraform 파일 변경 push 또는 수동 실행 | Terraform plan, 변경이 있으면 승인 절차 후 저장된 plan 적용 | 프론트·백엔드 배포 및 API 정상 동작 |
@@ -83,15 +83,27 @@ Environment 비밀값 이름은 `AWS_ROLE_ARN`, `BACKUP_BUCKET`, `SUPABASE_DB_UR
 
 ## 제품 테스트 CI (MEG-168)
 
-`Product tests`는 `pull_request`의 병합 결과와 main·staging push 커밋을 검사한다. PR 대상에는 main·staging과 함께 기능 통합 브랜치(`meg-*-integration`)가 들어간다. 통합 브랜치 보호(ruleset)는 사람이 따로 설정한다(MEG-219). checkout의 기본 ref를 사용하고 자격증명을 저장하지 않는다. 경로 필터가 없어 문서 PR도 결과가 보고된다. 동일 PR/브랜치의 이전 실행은 취소하며, 네 job 중 실패·취소·skip이 하나라도 있으면 최종 **Product CI**는 성공하지 않는다. CI 자체에는 배포 명령이 없고 Vercel Git 연동은 별도로 동작한다.
+`Product tests`는 `pull_request`의 병합 결과와 main·staging push 커밋을 검사한다. PR 대상에는 main·staging과 함께 기능 통합 브랜치(`meg-*-integration`)가 들어간다. 통합 브랜치 보호(ruleset)는 사람이 따로 설정한다(MEG-219). checkout의 기본 ref를 사용하고 자격증명을 저장하지 않는다. 경로 필터가 없어 문서 PR도 결과가 보고된다. 동일 PR/브랜치의 이전 실행은 취소하며, job 중 실패·취소·skip이 하나라도 있으면 최종 **Product CI**는 성공하지 않는다. 예외는 문서만 바뀐 PR의 E2E 하나다(아래 "문서만 바뀐 PR"). CI 자체에는 배포 명령이 없고 Vercel Git 연동은 별도로 동작한다.
 
 | check 이름 | 실행 범위 |
 |---|---|
+| Product changed files | PR이면 바뀐 파일 목록으로 문서만 바뀐 PR인지 판정한다. push는 항상 "문서만 바뀐 PR 아님" |
 | Product backend unit | `tests/`에서 `integration/`과 `test_account_issuance_local.py`를 제외한 pytest 전체 |
 | Product backend SQL | `tests/integration/` 전체. 격리된 PostgreSQL에서 실제 SQL 함수 검사 |
 | Product frontend build | lint와 TypeScript·Vite build |
-| Product frontend E2E | 기본 Playwright + notes 전용 설정. 로컬 서버와 합성 데이터만 사용 |
-| Product CI | 위 네 결과가 모두 success인지 확인하는 최종 필수 검사 후보 |
+| Product frontend E2E | 기본 Playwright + notes 전용 설정. 로컬 서버와 합성 데이터만 사용. 문서만 바뀐 PR에서는 skip |
+| Product CI | 위 결과가 모두 success인지 확인하는 최종 필수 검사 후보 |
+
+### 문서만 바뀐 PR (MEG-224)
+
+바뀐 파일이 모두 `docs/` 아래이거나 저장소 루트의 `*.md`인 PR은 **Product frontend E2E**를 건너뛴다. 나머지 job은 그대로 실행한다. 판정 규칙은 다음과 같다.
+
+- 하위 폴더의 `.md`(예: 테스트 fixture)와 `.github/` 변경은 문서로 보지 않는다.
+- 이름이 바뀐 파일은 이전 경로도 같은 기준으로 본다. 코드를 `docs/`로 옮긴 PR은 문서만 바뀐 PR이 아니다.
+- GitHub API가 돌려준 파일 수가 PR의 `changed_files`와 다르면(3,000개 초과 등) 문서만 바뀐 PR로 보지 않는다.
+- main·staging push는 판정하지 않고 항상 모든 job을 실행한다. Staging CD 조건도 그대로다.
+
+**Product CI**는 판정 job이 성공했고 결과가 "문서만 바뀐 PR"일 때에만 E2E의 skip을 성공으로 받는다. 그 밖의 skip·실패·취소는 지금처럼 실패다. 판정 job은 바뀐 파일 목록을 읽으려고 `pull-requests: read` 권한만 추가로 쓰고 PR 코드를 checkout하지 않는다.
 
 ### 재현 명령과 미실행 방지
 

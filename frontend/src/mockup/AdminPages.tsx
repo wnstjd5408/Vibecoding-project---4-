@@ -17,7 +17,7 @@ function DeleteNote({ close }: { close: () => void }) {
   const model = usePreview()
   const go = useGo()
   const note = model.adminNotes.find(({ id }) => id === model.noteId)
-  return <Dialog title="노트를 삭제할까요?" close={close} centered><div className={styles.stack}><Badge>문구 미정</Badge><h2>노트를 삭제할까요?</h2><p>{note?.title}</p><p className={styles.muted}>삭제하면 이 노트로 만든 AI 설명이 무효가 되고, 노트의 이미지 파일도 삭제 대상이 돼요.</p><div className={styles.row}><Button variant="solid" onClick={() => { model.setAdminNotes((old) => old.filter(({ id }) => id !== model.noteId)); model.setNotes((old) => old.filter(({ id }) => id !== model.noteId)); model.setNotice('노트를 삭제했어요.'); go('F5-1a') }}>삭제하기</Button><Button onClick={close}>취소</Button></div></div></Dialog>
+  return <Dialog title="노트를 삭제할까요?" close={close} centered><div className={styles.stack}><Badge>문구 미정</Badge><h2>노트를 삭제할까요?</h2><p>{note?.title}</p><p className={styles.muted}>삭제하면 이 노트로 만든 AI 설명은 더 이상 보이지 않고, 노트의 이미지 파일도 지워요.</p><div className={styles.row}><Button variant="solid" onClick={() => { model.setAdminNotes((old) => old.filter(({ id }) => id !== model.noteId)); model.setNotes((old) => old.filter(({ id }) => id !== model.noteId)); model.setNotice('노트를 삭제했어요.'); go('F5-1a') }}>삭제하기</Button><Button onClick={close}>취소</Button></div></div></Dialog>
 }
 
 function AdminNotes({ deletion = false }: { deletion?: boolean }) {
@@ -53,7 +53,7 @@ function NoteEditor({ creating }: { creating: boolean }) {
       <div className={styles.twoColumns}><Field label="학습일" type="date" value={draft.date} required onChange={(event) => setDraft({ ...draft, date: event.target.value })} /><label className={styles.label}>상위 노트<select className={styles.select} value={draft.parent} onChange={(event) => setDraft({ ...draft, parent: event.target.value })}><option value="">없음</option>{model.adminNotes.filter(({ id }) => id !== draft.id).map((note) => <option key={note.id} value={note.id}>{note.title}</option>)}</select></label></div>
       <div className={styles.stack}>{draft.sources.map((source, index) => <Field key={index} label={index ? `출처 링크 ${index + 1}` : '출처 링크'} type="url" value={source} placeholder="https://example.test/doc" onChange={(event) => setDraft({ ...draft, sources: draft.sources.map((old, i) => i === index ? event.target.value : old) })} />)}<div><Button onClick={() => setDraft({ ...draft, sources: [...draft.sources, ''] })}>출처 추가</Button></div></div>
       <div><label className={styles.label} htmlFor={bodyId}>본문</label><textarea id={bodyId} className={styles.textarea} style={{ minHeight: 200 }} required value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} /><p className={styles.hint}>이미지는 이 화면에서 올리지 않아요. 가져오기로만 들어와요.</p></div>
-      {!creating && <p className={styles.notice}>안내: 제목이나 본문을 저장하면 이 노트로 만든 AI 설명이 무효가 돼요.</p>}
+      {!creating && <p className={styles.notice}>안내: 제목이나 본문을 저장하면 이 노트로 만든 AI 설명은 더 이상 보이지 않아요.</p>}
       {error && <p role="alert" className={styles.error}>{error}</p>}<div className={styles.row}><Button variant="solid" type="submit">저장</Button><Button onClick={() => go('F5-1a')}>취소</Button></div>
       {!creating && <div className={styles.divider}><Button onClick={() => setRemove(true)}>노트 삭제</Button></div>}
     </form>{remove && <DeleteNote close={() => setRemove(false)} />}
@@ -100,7 +100,7 @@ function TermEditor({ creating, fromReport = false }: { creating: boolean; fromR
     <Field label="용어 이름" required maxLength={100} value={draft.label} onChange={(event) => setDraft({ ...draft, label: event.target.value })} />
     <div><label className={styles.label} htmlFor={descId}>{fromReport ? '바른 설명' : '설명'}</label><textarea className={styles.textarea} id={descId} required value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></div>
     <ImageField draft={draft} setDraft={setDraft} />
-    <p className={styles.notice}>{fromReport ? '안내: 저장하면 이 용어는 사전 설명이 먼저 보이고 AI 설명은 무효가 돼요. 신고 상태는 신고 목록에서 따로 바꿔요.' : creating ? '안내: 저장하면 같은 용어의 AI 설명이 무효가 돼요.' : '안내: 저장하면 이 용어의 AI 설명이 무효가 돼요. 용어를 삭제해도 AI 설명과 신고는 남아요.'}</p>
+    <p className={styles.notice}>{fromReport ? '안내: 저장하면 이 용어는 사전 설명이 보이고 AI 설명은 더 이상 보이지 않아요. 신고 상태는 신고 목록에서 따로 바꿔요.' : creating ? '안내: 저장하면 같은 용어의 AI 설명은 더 이상 보이지 않아요.' : '안내: 저장하면 이 용어의 AI 설명은 더 이상 보이지 않아요. 사전 설명을 삭제해도 AI 설명 기록과 신고는 지우지 않아요.'}</p>
     {error && <p className={styles.error} role="alert">{error}</p>}<div className={styles.row}><Button type="submit" variant="solid">{fromReport ? '사전에 저장' : '저장'}</Button>{(creating || fromReport) && <Button onClick={() => go(fromReport ? 'F5-2' : 'F5-1c')}>취소</Button>}</div>
     {!creating && !fromReport && <div className={styles.divider}><Button onClick={() => setRemove(true)}>사전 설명 삭제</Button></div>}
     {remove && <Dialog title="사전 설명을 삭제할까요?" centered close={() => setRemove(false)}><div className={styles.stack}><h2>사전 설명을 삭제할까요?</h2><p>{draft.label}</p><div className={styles.row}><Button variant="danger" onClick={() => { model.setTerms((old) => old.filter(({ id }) => id !== draft.id)); model.setNotice('사전 설명을 삭제했어요.'); go('F5-1e') }}>삭제하기</Button><Button onClick={() => setRemove(false)}>취소</Button></div></div></Dialog>}
@@ -125,12 +125,12 @@ function Accounts({ issued = false }: { issued?: boolean }) {
     // Password is deliberately never copied into application state or storage.
     event.currentTarget.reset(); go('F4-3b')
   }
-  return <><div className={styles.adminTitle}><h1>계정 발급</h1><p className={styles.muted} style={{ marginTop: 8, marginBottom: 24 }}>일반 사용자 계정을 만들어요. 가입 화면은 없어서 계정은 운영자만 발급해요.</p></div>
+  return <><div className={styles.adminTitle}><h1>계정 발급</h1><p className={styles.muted} style={{ marginTop: 8, marginBottom: 24 }}>일반 사용자 계정을 만들어요. 운영자 계정은 이 화면에서 만들 수 없어요.</p></div>
     {issued ? <Card className={`${styles.formCard} ${styles.accountForm}`}><h2>계정을 발급했어요</h2><dl className={styles.details}>{[['이메일', model.issued.email], ['표시 이름', model.issued.name], ['역할', '일반 사용자']].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><p className={styles.notice}>안내: 비밀번호는 화면에 다시 보여 주지 않아요.</p><Button onClick={() => go('F4-3a')}>다른 계정 발급하기</Button></Card> : <form className={`${styles.card} ${styles.formCard} ${styles.accountForm}`} onSubmit={submit}>
       <Field name="email" label="이메일" type="email" placeholder="member@example.test" required />
       <Field name="name" label="표시 이름" placeholder="합성 사용자" required maxLength={80} />
       <Field name="password" label="초기 비밀번호" type="password" autoComplete="new-password" required minLength={8} hint="발급한 뒤에는 이 비밀번호를 다시 볼 수 없어요." />
-      <p className={styles.hint}>발급한 계정은 일반 사용자예요. 운영자 계정은 이 화면에서 만들 수 없어요.</p><div><Button type="submit" variant="solid">발급하기</Button></div>
+      <div><Button type="submit" variant="solid">발급하기</Button></div>
     </form>}
   </>
 }
