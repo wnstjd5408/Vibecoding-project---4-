@@ -164,3 +164,104 @@ def test_a_down_database_is_unavailable():
     client, _ = recording_client([httpx.Response(503)])
     with pytest.raises(SupabaseUnavailable):
         client.list_agent_turns(USER_ID, CONVERSATION)
+
+
+# --- E29 질문 실행(MEG-236) ---
+
+CLAIM_FIELDS = {
+    "p_user_id": USER_ID,
+    "p_conversation_id": CONVERSATION,
+    "p_idempotency_key": "33333333-3333-4333-8333-333333333333",
+    "p_question_kind": "free",
+    "p_question_text": "q",
+    "p_lease_seconds": 120,
+    "p_preset": None,
+    "p_from_turn_id": None,
+    "p_reply": None,
+    "p_retry_of_turn_id": None,
+}
+
+
+def test_claiming_a_turn_calls_the_claim_function_and_returns_its_row():
+    row = {"outcome": "claimed", "turn_id": TURN, "seq": 1, "turn_status": "running"}
+    client, seen = recording_client([httpx.Response(200, json=[row])])
+    assert client.claim_agent_turn(CLAIM_FIELDS) == row
+    assert seen[0].method == "POST" and seen[0].url.path == "/rest/v1/rpc/agent_claim_turn"
+    assert json.loads(seen[0].content) == CLAIM_FIELDS
+
+
+def test_a_claim_for_a_missing_or_foreign_conversation_is_none_and_other_errors_are_config_errors():
+    client, _ = recording_client(
+        [httpx.Response(400, json={"code": "MEG02"}), httpx.Response(400, json={"code": "P0001"})]
+    )
+    assert client.claim_agent_turn(CLAIM_FIELDS) is None
+    with pytest.raises(SupabaseConfigError):
+        client.claim_agent_turn(CLAIM_FIELDS)
+
+
+def test_deleting_a_claimed_turn_only_touches_the_owners_running_turn():
+    client, seen = recording_client([httpx.Response(204)])
+    client.delete_running_agent_turn(USER_ID, TURN)
+    params = dict(seen[0].url.params)
+    assert seen[0].method == "DELETE" and seen[0].url.path == "/rest/v1/ai_turns"
+    assert params == {"id": f"eq.{TURN}", "user_id": f"eq.{USER_ID}", "status": "eq.running"}
+
+
+def test_touching_a_turn_is_a_conditional_update_on_running():
+    client, seen = recording_client([httpx.Response(200, json=[{"id": TURN}]), httpx.Response(200, json=[])])
+    lease = "2026-11-18T06:02:00.000000Z"
+    assert client.touch_agent_turn(USER_ID, TURN, "retrieve", lease, 2) is True
+    assert client.touch_agent_turn(USER_ID, TURN, "compose", lease) is False
+    first, second = seen
+    params = dict(first.url.params)
+    assert first.method == "PATCH" and first.url.path == "/rest/v1/ai_turns"
+    assert params["id"] == f"eq.{TURN}" and params["user_id"] == f"eq.{USER_ID}" and params["status"] == "eq.running"
+    assert first.headers["Prefer"] == "return=representation"
+    assert json.loads(first.content) == {"step": "retrieve", "lease_expires_at": lease, "paragraph_count": 2}
+    # 문단 수를 모르는 단계에서는 이미 적은 값을 지우지 않는다.
+    assert json.loads(second.content) == {"step": "compose", "lease_expires_at": lease}
+
+
+def test_finishing_a_turn_calls_the_conditional_finish_function():
+    client, seen = recording_client([httpx.Response(200, json=True), httpx.Response(200, json=False)])
+    payload = {"p_user_id": USER_ID, "p_turn_id": TURN, "p_status": "failed", "p_failure": "error"}
+    assert client.finish_agent_turn(payload) is True
+    assert client.finish_agent_turn(payload) is False
+    assert seen[0].url.path == "/rest/v1/rpc/agent_finish_turn" and json.loads(seen[0].content) == payload
+
+
+def test_excluding_selections_filters_by_conversation_and_keeps_earlier_exclusions():
+    other = "44444444-4444-4444-8444-444444444444"
+    client, seen = recording_client([httpx.Response(204)])
+    now = "2026-11-18T06:00:00.500000Z"
+    client.exclude_agent_selections(CONVERSATION, [TURN, other], now)
+    client.exclude_agent_selections(CONVERSATION, [], now)
+    assert len(seen) == 1
+    params = dict(seen[0].url.params)
+    assert seen[0].method == "PATCH" and seen[0].url.path == "/rest/v1/ai_conversation_selections"
+    assert params == {"conversation_id": f"eq.{CONVERSATION}", "id": f"in.({TURN},{other})", "excluded_at": "is.null"}
+    assert json.loads(seen[0].content) == {"excluded_at": now}
+
+
+def test_the_topic_label_is_only_set_on_the_owners_empty_label():
+    client, seen = recording_client([httpx.Response(204)])
+    client.set_agent_topic_label(USER_ID, CONVERSATION, "TCP")
+    params = dict(seen[0].url.params)
+    assert seen[0].method == "PATCH" and seen[0].url.path == "/rest/v1/ai_conversations"
+    assert params == {"id": f"eq.{CONVERSATION}", "user_id": f"eq.{USER_ID}", "topic_label": "eq."}
+    assert json.loads(seen[0].content) == {"topic_label": "TCP"}
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda c: c.delete_running_agent_turn(USER_ID, TURN),
+        lambda c: c.touch_agent_turn(USER_ID, TURN, "understand", "2026-11-18T06:02:00.000000Z"),
+        lambda c: c.exclude_agent_selections(CONVERSATION, [TURN], "2026-11-18T06:00:00.500000Z"),
+        lambda c: c.set_agent_topic_label(USER_ID, CONVERSATION, "TCP"),
+    ],
+)
+def test_rejected_e29_writes_are_config_errors(call):
+    client, _ = recording_client([httpx.Response(400, json={"code": "23514"})])
+    with pytest.raises(SupabaseConfigError):
+        call(client)

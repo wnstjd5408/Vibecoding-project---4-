@@ -1297,6 +1297,93 @@ class SupabaseClient:
             {"p_user_id": str(uuid.UUID(user_id)), "p_turn_id": str(uuid.UUID(turn_id)), "p_status": "cancelled"},
         ) is True
 
+    # --- CS Agent 질문 실행 E29 (MEG-236, API spec v0.2 4절 E29, 기술 검토 v0.4 3절) ---
+
+    def claim_agent_turn(self, fields: dict[str, Any]) -> dict[str, Any] | None:
+        """E29 2단계: agent_claim_turn으로 턴을 선점한다. 결과 행(outcome·turn_id·seq·turn_status)을 돌려준다.
+
+        대화가 없거나 그 사용자의 것이 아니면(SQLSTATE MEG02) None이다. 호출 쪽이 404로 낸다.
+        """
+        response = self._request("POST", "/rest/v1/rpc/agent_claim_turn", json=fields, headers=self._headers())
+        if response.status_code != 200:
+            if _error_field(response, "code") == "MEG02":
+                return None
+            raise SupabaseConfigError(f"rpc agent_claim_turn status {response.status_code}")
+        rows = response.json()
+        return rows[0] if isinstance(rows, list) else rows
+
+    def delete_running_agent_turn(self, user_id: str, turn_id: str) -> None:
+        """E29 3단계: 속도 제한·AI 한도에 걸린 선점 턴을 지운다. running인 그 사용자의 턴만 지운다."""
+        response = self._request(
+            "DELETE",
+            "/rest/v1/ai_turns",
+            params={"id": f"eq.{uuid.UUID(turn_id)}", "user_id": f"eq.{uuid.UUID(user_id)}", "status": "eq.running"},
+            headers={**self._headers(), "Prefer": "return=minimal"},
+        )
+        if response.status_code not in (200, 204):
+            raise SupabaseConfigError(f"ai_turns delete status {response.status_code}")
+
+    def touch_agent_turn(
+        self, user_id: str, turn_id: str, step: str, lease_expires_at: str, paragraph_count: int | None = None
+    ) -> bool:
+        """E29 실행: running인 턴의 단계와 실행 만료 시각을 갱신한다(조건부, status = running). 바꿨으면 True다.
+
+        False면 턴이 중단·만료·삭제된 것이다. 실행은 거기서 멈춘다.
+        """
+        fields: dict[str, Any] = {"step": step, "lease_expires_at": lease_expires_at}
+        if paragraph_count is not None:
+            fields["paragraph_count"] = paragraph_count
+        response = self._request(
+            "PATCH",
+            "/rest/v1/ai_turns",
+            params={
+                "id": f"eq.{uuid.UUID(turn_id)}",
+                "user_id": f"eq.{uuid.UUID(user_id)}",
+                "status": "eq.running",
+                "select": "id",
+            },
+            json=fields,
+            headers={**self._headers(), "Prefer": "return=representation"},
+        )
+        if response.status_code != 200:
+            raise SupabaseConfigError(f"ai_turns touch status {response.status_code}")
+        return len(response.json()) == 1
+
+    def finish_agent_turn(self, payload: dict[str, Any]) -> bool:
+        """E29 10단계: agent_finish_turn(조건부 전이). running이던 턴을 바꿨으면 True, 이미 끝났거나 없으면 False다."""
+        return self.rpc("agent_finish_turn", payload) is True
+
+    def exclude_agent_selections(self, conversation_id: str, selection_ids: list[str], now_iso: str) -> None:
+        """E29 exclude_selection_ids: 대화의 선택 문맥을 이번 턴부터 뺀다. 이미 뺀 선택은 그대로 둔다."""
+        if not selection_ids:
+            return
+        ids = ",".join(str(uuid.UUID(selection_id)) for selection_id in selection_ids)
+        response = self._request(
+            "PATCH",
+            "/rest/v1/ai_conversation_selections",
+            params={
+                "conversation_id": f"eq.{uuid.UUID(conversation_id)}",
+                "id": f"in.({ids})",
+                "excluded_at": "is.null",
+            },
+            json={"excluded_at": now_iso},
+            headers={**self._headers(), "Prefer": "return=minimal"},
+        )
+        if response.status_code not in (200, 204):
+            raise SupabaseConfigError(f"ai_conversation_selections exclude status {response.status_code}")
+
+    def set_agent_topic_label(self, user_id: str, conversation_id: str, topic_label: str) -> None:
+        """E29: 주제 이름이 비어 있는 대화(origin none)에 첫 질문으로 주제 이름을 넣는다(spec Q9). 이미 있으면 그대로 둔다."""
+        response = self._request(
+            "PATCH",
+            "/rest/v1/ai_conversations",
+            params={"id": f"eq.{uuid.UUID(conversation_id)}", "user_id": f"eq.{uuid.UUID(user_id)}", "topic_label": "eq."},
+            json={"topic_label": topic_label},
+            headers={**self._headers(), "Prefer": "return=minimal"},
+        )
+        if response.status_code not in (200, 204):
+            raise SupabaseConfigError(f"ai_conversations topic status {response.status_code}")
+
     def get_note_for_agent(self, note_id: int, include_unpublished: bool) -> dict[str, Any] | None:
         """E27이 읽는 노트의 열(id, revision, title, is_published, body_markdown). 없거나 볼 수 없으면 None이다.
 

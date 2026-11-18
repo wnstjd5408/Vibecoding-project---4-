@@ -622,6 +622,33 @@ def test_supabase_store_sends_amounts_as_strings_and_maps_outcomes():
     assert error.value.status == "settled"
 
 
+def test_supabase_store_check_limit_is_read_only_and_counts_as_a_first_attempt():
+    """E29 사전 확인(MEG-236). 예약하지 않는 ai_check_limit을 부르고, true일 때만 한도 안으로 본다."""
+    supabase = RecordingSupabase({"ai_check_limit": True})
+    store = SupabaseLedgerStore(supabase)
+    args = dict(user_id=USER, kind="agent", reserved_usd=Decimal("0.07"), budget=BUDGET, daily_count_limit=20)
+
+    assert store.check_limit(**args) is True
+    assert supabase.calls == [
+        (
+            "ai_check_limit",
+            {
+                "p_user_id": USER,
+                "p_kind": "agent",
+                "p_reserved_usd": "0.07",
+                "p_user_daily_count_limit": 20,
+                "p_attempt_no": 1,
+                "p_daily_budget_usd": "0.9",
+                "p_monthly_budget_usd": "7",
+                "p_user_daily_share": "0.5",
+            },
+        )
+    ]
+    for value in (False, None, "true"):
+        supabase.rows["ai_check_limit"] = value
+        assert store.check_limit(**args) is False
+
+
 def test_supabase_store_settle_and_quiz_claim():
     supabase = RecordingSupabase(
         {

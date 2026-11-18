@@ -35,6 +35,10 @@ CATALOG: dict[tuple[str, str | None], tuple[int, str]] = {
     ("conflict", "email_exists"): (409, "An account with this email already exists"),
     # CS Agent(API spec v0.2 2.1). E31: 이미 끝난 턴은 중단할 수 없다.
     ("conflict", "turn_not_cancellable"): (409, "The response has already finished"),
+    # E29(MEG-236): 같은 대화에 다른 키의 턴이 진행 중, 확인 선택이 더는 유효하지 않음, 다시 묻기 대상이 아님.
+    ("conflict", "turn_in_progress"): (409, "Another question is still being answered"),
+    ("conflict", "choice_expired"): (409, "The choice is no longer available"),
+    ("conflict", "turn_not_retryable"): (409, "This question cannot be sent again"),
     ("payload_too_large", None): (413, "Request is too large"),
     ("unsupported_media_type", None): (415, "Unsupported file type"),
     ("validation_failed", None): (422, "One or more fields are invalid"),
@@ -66,6 +70,7 @@ class ApiError(Exception):
         fields: list[dict[str, str]] | None = None,
         retry_after_seconds: int | None = None,
         stage: str | None = None,
+        turn_id: str | None = None,
     ):
         if (code, detail) not in CATALOG:
             raise ValueError(f"unknown error: {code}/{detail}")
@@ -76,6 +81,8 @@ class ApiError(Exception):
         self.retry_after_seconds = retry_after_seconds
         # 로그에만 남기는 단계(origin·auth·validate·db·ai·storage)
         self.stage = stage
+        # CS Agent E29의 409 in_progress에만 싣는 진행 중 턴 id(CS Agent spec v0.2 2절)
+        self.turn_id = turn_id
 
 
 def new_request_id() -> str:
@@ -86,14 +93,16 @@ def request_id_of(request: Request) -> str:
     return getattr(request.state, "request_id", None) or new_request_id()
 
 
-def build_error_response(
+def error_body(
     request_id: str,
     code: str,
     detail: str | None = None,
     *,
     fields: list[dict[str, str]] | None = None,
     retry_after_seconds: int | None = None,
-) -> JSONResponse:
+    turn_id: str | None = None,
+) -> tuple[int, dict, dict[str, str]]:
+    """(HTTP 상태, 오류 본문, 헤더). E29 스트림의 error 이벤트도 같은 본문을 쓴다."""
     status, message = CATALOG[(code, detail)]
     error: dict = {"code": code, "message": message, "request_id": request_id}
     if detail is not None:
@@ -105,7 +114,24 @@ def build_error_response(
     if retry_after_seconds is not None and (status == 429 or detail == "in_progress"):
         error["retry_after_seconds"] = retry_after_seconds
         headers["Retry-After"] = str(retry_after_seconds)
-    return JSONResponse({"error": error}, status_code=status, headers=headers)
+    if turn_id is not None:
+        error["turn_id"] = turn_id
+    return status, {"error": error}, headers
+
+
+def build_error_response(
+    request_id: str,
+    code: str,
+    detail: str | None = None,
+    *,
+    fields: list[dict[str, str]] | None = None,
+    retry_after_seconds: int | None = None,
+    turn_id: str | None = None,
+) -> JSONResponse:
+    status, body, headers = error_body(
+        request_id, code, detail, fields=fields, retry_after_seconds=retry_after_seconds, turn_id=turn_id
+    )
+    return JSONResponse(body, status_code=status, headers=headers)
 
 
 def _failure_site(exc: BaseException) -> str:
@@ -171,6 +197,7 @@ async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
         exc.detail,
         fields=exc.fields,
         retry_after_seconds=exc.retry_after_seconds,
+        turn_id=exc.turn_id,
     )
 
 

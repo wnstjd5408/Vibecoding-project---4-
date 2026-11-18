@@ -40,6 +40,7 @@ logger = logging.getLogger("app.ai")
 KIND_EXPLAIN = "explain"
 KIND_QUIZ = "quiz"
 KIND_FOLLOWUP = "followup"
+KIND_AGENT = "agent"
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,9 @@ CALL_SPECS: dict[str, CallSpec] = {
     KIND_EXPLAIN: CallSpec(max_tokens=600, effort="none", daily_count_limit=20),
     KIND_QUIZ: CallSpec(max_tokens=3000, effort="low", daily_count_limit=None),
     KIND_FOLLOWUP: CallSpec(max_tokens=400, effort="none", daily_count_limit=None),
+    # CS Agent E29(MEG-236). 출력 1,500토큰은 Q4 임시값, 하루 20턴은 D4(사용자 결정 2026-11-18, 시작값)다.
+    # agent 금액 몫 70%는 SQL 기본값을 쓴다(MEG-232 결정 1). 실측(MEG-236 AC-5) 뒤 다시 정한다.
+    KIND_AGENT: CallSpec(max_tokens=1500, effort="none", daily_count_limit=20),
 }
 # 한 사용자가 하루 전체 예산에서 쓸 수 있는 몫(5.3)
 USER_DAILY_SHARE = Decimal("0.5")
@@ -180,6 +184,10 @@ class LedgerStore(Protocol):
         daily_count_limit: int | None,
     ) -> Reservation: ...
 
+    def check_limit(
+        self, *, user_id: str, kind: str, reserved_usd: Decimal, budget: AiBudget, daily_count_limit: int | None
+    ) -> bool: ...
+
     def settle(
         self,
         ledger_id: int,
@@ -232,6 +240,23 @@ class SupabaseLedgerStore:
         if row["outcome"] == "exists":
             raise LedgerKeyExists(row["ledger_status"])
         return Reservation(ledger_id=int(row["ledger_id"]), attempt_no=attempt_no)
+
+    def check_limit(self, *, user_id, kind, reserved_usd, budget, daily_count_limit) -> bool:
+        """예약하지 않고 이 금액을 지금 예약하면 한도 안인지만 본다(ai_check_limit, 읽기 전용). 첫 시도로 센다."""
+        return (
+            self._supabase.rpc(
+                "ai_check_limit",
+                {
+                    "p_user_id": user_id,
+                    "p_kind": kind,
+                    "p_reserved_usd": str(reserved_usd),
+                    "p_user_daily_count_limit": daily_count_limit,
+                    "p_attempt_no": 1,
+                    **self._budget_args(budget),
+                },
+            )
+            is True
+        )
 
     def settle(self, ledger_id, outcome, *, actual_usd=None, input_tokens=None, output_tokens=None) -> bool:
         return bool(
@@ -298,6 +323,11 @@ def quiz_request_key(user_id: str, set_id: int, attempt: int) -> str:
 
 def followup_request_key(user_id: str, request_id: str) -> str:
     return f"{user_id}:followup:{request_id}"
+
+
+def agent_request_key(user_id: str, idempotency_key: str) -> str:
+    """E29 원장 키의 앞부분. 원장 키는 {user_id}:agent:{Idempotency-Key}:{attempt_no}다(CS Agent spec 9절)."""
+    return f"{user_id}:agent:{idempotency_key}"
 
 
 def _settle(store: LedgerStore, reservation: Reservation, outcome: str, **values) -> None:

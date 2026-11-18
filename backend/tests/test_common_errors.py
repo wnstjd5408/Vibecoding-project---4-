@@ -27,6 +27,10 @@ SPEC_MESSAGES = [
     ("conflict", "email_exists", 409, "An account with this email already exists"),
     # CS Agent API spec v0.2 2.1(MEG-234)
     ("conflict", "turn_not_cancellable", 409, "The response has already finished"),
+    # CS Agent API spec v0.2 2.1(MEG-236, E29)
+    ("conflict", "turn_in_progress", 409, "Another question is still being answered"),
+    ("conflict", "choice_expired", 409, "The choice is no longer available"),
+    ("conflict", "turn_not_retryable", 409, "This question cannot be sent again"),
     ("payload_too_large", None, 413, "Request is too large"),
     ("unsupported_media_type", None, 415, "Unsupported file type"),
     ("validation_failed", None, 422, "One or more fields are invalid"),
