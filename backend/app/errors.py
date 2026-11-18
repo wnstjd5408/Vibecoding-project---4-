@@ -39,6 +39,8 @@ CATALOG: dict[tuple[str, str | None], tuple[int, str]] = {
     ("conflict", "turn_in_progress"): (409, "Another question is still being answered"),
     ("conflict", "choice_expired"): (409, "The choice is no longer available"),
     ("conflict", "turn_not_retryable"): (409, "This question cannot be sent again"),
+    # E29: 이 Idempotency-Key는 같은 사용자의 다른 대화에서 이미 썼다(2026-11-18 사용자 결정, 재생하지 않는다).
+    ("conflict", "idempotency_key_reused"): (409, "This Idempotency-Key was already used for another conversation"),
     ("payload_too_large", None): (413, "Request is too large"),
     ("unsupported_media_type", None): (415, "Unsupported file type"),
     ("validation_failed", None): (422, "One or more fields are invalid"),

@@ -585,6 +585,32 @@ def test_a_replay_of_a_failed_turn_ends_with_the_same_error_event_as_the_live_ru
     assert bedrock.calls == calls and len(fake.finishes) == 1
 
 
+@pytest.mark.parametrize("status", ["completed", "running"])
+def test_a_key_already_used_in_another_conversation_is_409_idempotency_key_reused(client, fake, bedrock, status):
+    """2026-11-18 사용자 결정: 키는 사용자 단위로 유일하므로 다른 대화의 턴을 재생하지 않고 거절한다."""
+    first, second = fake.conversation(A), fake.conversation(A)
+    key = str(uuid.uuid4())
+    used = fake.turn(first, 1, status=status)
+    fake.turns[used]["idempotency_key"] = key
+    before = dict(fake.turns)
+    response = ask(client, second, key=key)
+    assert_error(response, 409, "conflict", "idempotency_key_reused")
+    assert "turn_id" not in response.json()["error"] and "Retry-After" not in response.headers
+    assert "claim_agent_turn" not in fake.calls and fake.turns == before and bedrock.calls == 0
+
+
+def test_a_key_from_another_conversation_found_only_at_the_claim_is_also_409(client, fake, bedrock, monkeypatch):
+    """재전송 확인 뒤에 다른 대화에서 같은 키가 먼저 기록되면(동시 요청) 선점이 existing을 돌려준다. 그때도 거절한다."""
+    first, second = fake.conversation(A), fake.conversation(A)
+    key = str(uuid.uuid4())
+    used = fake.turn(first, 1)
+    fake.turns[used]["idempotency_key"] = key
+    monkeypatch.setattr(fake, "find_agent_turn_by_key", lambda user_id, idempotency_key: None)
+    response = ask(client, second, key=key)
+    assert_error(response, 409, "conflict", "idempotency_key_reused")
+    assert all(row["conversation_id"] == first for row in fake.turns.values()) and bedrock.calls == 0
+
+
 def test_a_replay_of_the_first_hidden_turn_sees_its_completed_retry(client, fake, bedrock):
     """첫 가림 턴 X의 retry_allowed는 뒤의 다시 묻기 턴으로 정한다. 재생도 대화의 턴을 모두 읽어 E28과 같게 판정한다."""
     cid = fake.conversation(A)

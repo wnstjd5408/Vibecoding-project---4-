@@ -8,7 +8,7 @@ POST /api/ai/conversations/{conversation_id}/turns — 질문을 받아 근거�
    질문·선택 문맥·확인 선택·다시 묻기 검사(422·409). 재전송 확인이 상태 검사보다 먼저여야 첫 요청이 바꾼 상태로 거절하지 않는다.
 2. agent_claim_turn으로 턴을 선점한다. 같은 키의 끝난 턴은 재생하고(모델 호출 없음, 가림 적용), 진행 중이면 409 in_progress,
    같은 대화에 다른 키의 턴이 진행 중이면 409 turn_in_progress(그 턴 id)다. 같은 키는 1번에서 대부분 걸러지고, 여기서는
-   동시 요청과 다른 대화에서 쓴 키만 남는다.
+   동시 요청만 남는다. 같은 사용자의 다른 대화에서 쓴 키는 1번과 여기 모두 409 idempotency_key_reused다(재생하지 않는다).
 3. 속도 제한(429 rate_limited)과 AI 한도 사전 확인(ai_check_limit, 429 ai_limit_reached). 걸리면 선점한 턴을 지운다.
    409를 속도 제한보다 먼저 보는 것은 검사 순서의 예외다(spec E29 3단계): 같은 키 재전송이 한도를 쓰지 않게 한다.
 4. 응답 수명 안의 스레드에서 run_turn을 돌린다(Q2 확정: 응답 뒤의 작업은 멈추므로 202 후 백그라운드 실행은 쓰지 않는다).
@@ -788,16 +788,28 @@ def _in_progress(turn_id: str) -> ApiError:
     )
 
 
+def _key_reused() -> ApiError:
+    """이 키는 같은 사용자의 다른 대화에서 이미 썼다(409 idempotency_key_reused, 2026-11-18 사용자 결정).
+
+    키는 사용자 단위로 유일하다(ai_turns unique(user_id, idempotency_key)). 그 턴을 이 대화 경로로 재생하지 않는다.
+    turn_id는 싣지 않는다. 클라이언트는 새 키로 다시 보낸다.
+    """
+    return ApiError("conflict", "idempotency_key_reused", stage="validate")
+
+
 def _resent_turn(supabase: SupabaseClient, user: SessionUser, target: str, key: str) -> Replay | None:
     """같은 키로 이 대화에 이미 기록한 턴이 있으면 재생하거나 409 in_progress로 거절한다. 없으면 None이다.
 
     첫 요청이 턴을 기록하면 대화 상태가 바뀐다(뒤에 턴이 생기고 선택 문맥이 붙는다). 그래서 같은 본문이 1단계의 상태 검사
     (choice_expired·stale_revision·turn_not_retryable 등)에 걸릴 수 있다. 재전송은 그 검사와 AI 설정 검사보다 먼저 판정한다(AC-3).
-    다른 대화에서 쓴 키는 여기서 다루지 않고 예전처럼 선점(existing)의 처리에 맡긴다(사람 결정 전, 동작을 바꾸지 않는다).
+    다른 대화에서 쓴 키는 그 턴의 상태와 관계없이 409 idempotency_key_reused다.
     """
     turn = supabase.find_agent_turn_by_key(user.user_id, key)
-    if turn is None or turn["conversation_id"] != target:
+    if turn is None:
         return None
+    if turn["conversation_id"] != target:
+        logger.info("stage=resend turn_id=%s key_reused_elsewhere", turn["id"])
+        raise _key_reused()
     logger.info("stage=resend turn_id=%s status=%s", turn["id"], turn["status"])
     if turn["status"] == "running" and not lease_lapsed(turn):
         # 실행 중인 턴도 대화 권한은 다시 확인한다. 권한이 없으면 404다.
@@ -863,7 +875,11 @@ def prepare_turn(
         raise ApiError("not_found", stage="db")
     logger.info("stage=claim turn_id=%s outcome=%s", claim["turn_id"], claim["outcome"])
     if claim["outcome"] == "existing":
-        # 위의 재전송 확인과 선점 사이에 같은 키가 먼저 기록됐거나(동시 요청) 다른 대화에서 쓴 키다.
+        # 위의 재전송 확인과 선점 사이에 같은 키가 먼저 기록됐다(동시 요청). 그 턴이 다른 대화의 것이면 거절한다.
+        # 그사이 지워졌으면(그 요청이 429로 선점을 지움) 다른 대화라고 단정하지 않고 아래 처리를 따른다.
+        existing = supabase.get_agent_turn(user.user_id, claim["turn_id"])
+        if existing is not None and existing["conversation_id"] != target:
+            raise _key_reused()
         if claim["turn_status"] == "running":
             raise _in_progress(claim["turn_id"])
         return _replay(supabase, user, claim["turn_id"])
