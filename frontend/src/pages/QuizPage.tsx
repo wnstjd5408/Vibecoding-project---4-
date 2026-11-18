@@ -18,7 +18,7 @@ import styles from './QuizPage.module.css'
 // 화면 문구. 목업에 있는 것(제목·안내·빈 상태)은 목업 그대로이고 나머지는 임시다(문구 미정, 확정되면 이 한 곳만 고친다).
 const MESSAGES = {
   title: '오늘의 퀴즈',
-  subtitle: '어제 열어 본·즐겨찾기한 용어로 만들었어요.',
+  subtitle: '어제 열어 보거나 즐겨찾기한 용어로 만들었어요.',
   loading: '오늘의 퀴즈를 불러오는 중이에요',
   generating: '퀴즈를 만드는 중이에요',
   generatingDescription: '잠시 뒤에 저절로 다시 확인해요.',

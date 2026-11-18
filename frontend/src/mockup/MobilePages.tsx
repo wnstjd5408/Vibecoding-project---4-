@@ -27,8 +27,8 @@ export function Header({ back, signed = false, operator = false, noAccount = fal
 
 export function LoginPrompt({ quiz = false, close }: { quiz?: boolean; close: () => void }) {
   const go = useGo()
-  return <Dialog title={quiz ? '로그인하세요' : '로그인이 필요해요'} close={close}>
-    <div className={styles.stack}><h2>{quiz ? '로그인하세요' : '로그인이 필요해요'}</h2>
+  return <Dialog title={'로그인이 필요해요'} close={close}>
+    <div className={styles.stack}><h2>{'로그인이 필요해요'}</h2>
       <p className={styles.muted}>{quiz ? '오늘의 퀴즈는 로그인한 뒤에 볼 수 있어요. 계정은 운영자가 만들어 줘요.' : '로그인하면 AI 설명, 즐겨찾기, 오늘의 퀴즈를 쓸 수 있어요. 계정은 운영자가 만들어 줘요.'}</p>
       <Button variant="solid" onClick={() => go('F4-1')}>로그인</Button></div>
   </Dialog>
@@ -153,11 +153,11 @@ export function Quiz({ id }: { id: ScreenId }) {
   const follow = id === 'F3-5'
   const submit = (event: FormEvent) => { event.preventDefault(); if (!draft.trim()) return; if (follow) { if (step === 2) setDone(true); else setStep(2); setDraft('') } else { model.setAnswer(draft); go('F3-4') } }
   return <><Header signed menuInitiallyOpen={id === 'F4-4'} /><main className={styles.content}>
-    <div className={styles.quizHeading}><h1>오늘의 퀴즈</h1>{!empty && <p className={styles.muted}>어제 열어 본·즐겨찾기한 용어로 만들었어요.</p>}</div>
+    <div className={styles.quizHeading}><h1>오늘의 퀴즈</h1>{!empty && <p className={styles.muted}>어제 열어 보거나 즐겨찾기한 용어로 만들었어요.</p>}</div>
     {empty ? <Card><div className={styles.stack}><h3>{done ? '오늘의 퀴즈를 마쳤어요' : '오늘 풀 퀴즈가 없어요'}</h3><p className={styles.muted}>노트에서 용어를 열어 보면 다음 날 퀴즈가 만들어져요.</p><Button variant="solid" onClick={() => go('F1-1b')}>노트 보러 가기</Button></div></Card> : <Card><form className={styles.quizCard} onSubmit={submit}>
       <div className={`${styles.row} ${styles.smallGap}`}><Badge>AI 생성</Badge>{follow ? <Badge>꼬리 질문 {step}/2</Badge> : <Badge difficulty>난이도 중</Badge>}</div>
       <h3>{follow ? step === 1 ? '합성 꼬리 질문 예시: 방금 답에서 왜 그렇게 생각했나요?' : '합성 꼬리 질문 예시: 다른 상황에도 적용할 수 있을까요?' : 'DNS를 한 문장으로 설명해 보세요.'}</h3>
-      {follow && <p className={styles.muted}>꼬리 질문은 맞고 틀림을 채점하지 않아요.</p>}
+      {follow && <p className={styles.muted}>꼬리 질문은 채점하지 않아요.</p>}
       {id === 'F3-4' ? <><div><span className={styles.label}>내 답</span><p className={styles.answer}>{model.answer || '합성 답변 예시예요. 사용자가 쓴 답이 여기에 보여요.'}</p></div><div className={styles.aiBox}><h3>정답과 해설</h3><p className={styles.answer}>정답과 해설이 여기에 들어가요. 합성 문구 예시예요.</p></div></> : <div><label className={styles.label} htmlFor="quiz-answer">내 답</label><textarea id="quiz-answer" className={styles.textarea} placeholder="답을 입력해요" value={draft} onChange={(event) => setDraft(event.target.value)} required maxLength={4000} /></div>}
       <div className={styles.row}>{id === 'F3-4' ? <Button variant="solid" onClick={() => go('F3-5')}>다음</Button> : <Button variant="solid" type="submit" disabled={!draft.trim()}>답하기</Button>}<Button variant="danger" onClick={() => setReport(true)}>오류 신고</Button></div>
     </form></Card>}
