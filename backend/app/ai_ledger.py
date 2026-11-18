@@ -330,6 +330,14 @@ def agent_request_key(user_id: str, idempotency_key: str) -> str:
     return f"{user_id}:agent:{idempotency_key}"
 
 
+def agent_explain_request_key(user_id: str, idempotency_key: str) -> str:
+    """E29 노트 용어 질문의 explain 원장 키 앞부분(MEG-243, spec 9절). {user_id}:agent-explain:{Idempotency-Key}:{attempt_no}다.
+
+    턴의 Idempotency-Key를 쓴다. E09 키({user_id}:{Idempotency-Key})·agent 키와 겹치지 않고, 턴마다 첫 시도는 최대 1건이다.
+    """
+    return f"{user_id}:agent-explain:{idempotency_key}"
+
+
 # run_ai_call이 예약한 뒤에 낸 예외에 붙이는 속성 이름. 값은 마지막 예약의 원장 id다.
 _LEDGER_ID_ATTR = "ledger_id"
 
