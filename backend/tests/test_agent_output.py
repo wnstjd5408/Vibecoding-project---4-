@@ -428,16 +428,22 @@ def test_a_note_only_prompt_drops_the_correction_rule_and_fields():
     assert len(without) <= max_prompt_chars()
 
 
-def test_parse_correction_rejected_when_not_allowed():
+def test_parse_correction_becomes_answered_when_not_allowed():
     payload = {
         "state": "correction",
         "sections": [{"body": "설명 [1]"}],
-        "corrections": [{"note_excerpt": "노트 문장", "corrected": "고친 내용 [1]", "source_refs": [1]}],
+        "corrections": [{"note_excerpt": "노트 문장", "corrected": "고친 내용 [2]", "source_refs": [2]}],
+        "figures": [FIGURE],
     }
-    with pytest.raises(OutputInvalid) as error:
-        parse_output(json.dumps(payload, ensure_ascii=False), 2, current_topic="t", allow_topic_check=True,
-                     allow_correction=False)
-    assert error.value.reason == "state"
+    parsed = parse_output(json.dumps(payload, ensure_ascii=False), 2, current_topic="t", allow_topic_check=True,
+                          allow_correction=False)
+    # 교정 항목(과 그 인용)은 버리고 본문만 answered로 받는다. 본문 인용만 출처가 된다.
+    assert parsed.result == {"state": "answered", "sections": [{"body": "설명 [1]"}], "suggestions": []}
+    assert parsed.refs == (1,)
+    # 본문 검증은 그대로다: 인용 없는 본문은 형식 실패다.
+    with pytest.raises(OutputInvalid):
+        parse_output(json.dumps({**payload, "sections": [{"body": "인용 없음"}]}, ensure_ascii=False), 2,
+                     current_topic="t", allow_topic_check=True, allow_correction=False)
     # 다른 상태는 그대로 받는다.
     answered = {"state": "answered", "sections": [{"body": "설명 [1]"}]}
     assert parse_output(json.dumps(answered, ensure_ascii=False), 2, current_topic="t", allow_topic_check=True,

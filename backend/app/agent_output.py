@@ -398,18 +398,18 @@ def parse_output(
 ) -> ParsedOutput:
     """모델 출력(JSON 텍스트)을 spec 5절 result로 바꾼다. 틀리면 OutputInvalid다.
 
-    allow_correction이 False면(근거가 노트뿐) correction은 형식 실패다. 프롬프트에서 그 상태를 빼 두었기 때문이다.
+    allow_correction이 False면(근거가 노트뿐) 프롬프트에서 correction을 빼 두었다. 그래도 모델이 correction을 내면 실패로 끝내지
+    않고 본문(sections)만 남긴 answered로 받는다. 결정(2026-11-18)이 "answered나 partial로 답한다"이기 때문이다.
 
     출처(sources)는 결과에 넣지 않는다. 인용한 번호(refs)로 서버가 근거 문단에서 만들어 ai_turn_sources에 저장한다.
     """
     raw = _load_json(text)
     state = raw.get("state")
-    if (
-        state not in MODEL_STATES
-        or (state == "topic_check" and not allow_topic_check)
-        or (state == "correction" and not allow_correction)
-    ):
+    if state not in MODEL_STATES or (state == "topic_check" and not allow_topic_check):
         raise OutputInvalid("state")
+    if state == "correction" and not allow_correction:
+        # 노트로 노트를 교정하지 않는다. 교정 항목은 버리고 본문만 answered로 받는다(본문 검증은 그대로 한다).
+        state, raw = "answered", {"sections": raw.get("sections")}
 
     if state == "topic_check":
         return ParsedOutput({"state": "topic_check", "topic_check": {"current_topic": current_topic}}, ())

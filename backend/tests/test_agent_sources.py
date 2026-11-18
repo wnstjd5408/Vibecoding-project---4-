@@ -212,19 +212,11 @@ def test_the_paragraph_holding_the_selection_is_not_evidence(client, fake, bedro
 # --- 노트 근거만 있을 때는 교정하지 않는다 ---
 
 
-def test_with_note_evidence_only_the_prompt_has_no_correction_and_a_correction_reply_fails(client, fake, bedrock):
+def test_with_note_evidence_only_the_prompt_has_no_correction_rule(client, fake, bedrock):
     cid = fake.conversation(A)
-    correction = json.dumps({
-        "state": "correction",
-        "sections": [{"body": "설명 [1]"}],
-        "corrections": [{"note_excerpt": "멱등성", "corrected": "고친 내용 [1]", "source_refs": [1]}],
-    }, ensure_ascii=False)
-    bedrock.replies = [bedrock_reply(correction)]
-    parsed = events(ask(client, cid, body={"question": {"kind": "free", "text": "멱등성이 뭐야?"}}))
+    asked_turn(client, fake, cid)
     prompt = bedrock.prompts[-1]
     assert "corrections" not in prompt and "state를 correction으로 하지 않습니다" in prompt
-    assert parsed[-1][0] == "error" and parsed[-1][1]["error"]["code"] == "ai_unavailable"
-    assert fake.finishes[-1]["p_status"] == "failed"
 
 
 # --- AC-2: 인용한 노트를 비공개로 바꾸거나 지우면 그 턴부터 hidden, E32는 404 ---
@@ -375,3 +367,43 @@ def test_e32_stays_readable_while_the_agent_is_disabled(client, fake, monkeypatc
     turn, _ = asked_turn(client, fake, cid)
     monkeypatch.setenv(agent.DISABLE_ENV, "1")
     assert get(client, source_path(turn["turn_id"])).status_code == 200
+
+
+def test_a_correction_reply_on_note_evidence_is_kept_as_an_answer(client, fake, bedrock):
+    # 리뷰 지적(2026-11-18): 근거가 노트뿐이면 correction을 answered로 받는다(결정 "answered나 partial로 답한다").
+    cid = fake.conversation(A)
+    correction = json.dumps({
+        "state": "correction",
+        "sections": [{"body": "설명 [1]"}],
+        "corrections": [{"note_excerpt": "멱등성", "corrected": "고친 내용 [1]", "source_refs": [1]}],
+        "unresolved": ["남은 점"],
+    }, ensure_ascii=False)
+    bedrock.replies = [bedrock_reply(correction)]
+    result, _ = asked_turn(client, fake, cid)
+    assert result["result"]["state"] == "answered"
+    assert result["result"]["sections"] == [{"body": "설명 [1]"}]
+    assert "corrections" not in result["result"] and "unresolved" not in result["result"]
+    assert [s["ref"] for s in result["result"]["sources"]] == [1]
+
+
+def test_an_operator_sees_the_turn_hidden_after_the_cited_note_is_deleted(client, fake):
+    # 노트 출처는 역할과 관계없이 공개이고 존재해야 보인다(test-verifier 지적: 운영자 삭제 경우).
+    cid = fake.conversation(OP)
+    turn, _ = asked_turn(client, fake, cid, token="op-token")
+    fake.delete_note(SOURCE_NOTE)
+    [read] = get(client, f"/api/ai/conversations/{cid}", token="op-token").json()["turns"]
+    assert read["hidden"] == {"reason": "source_revoked", "retry_allowed": True}
+    assert get(client, f"/api/ai/turns/{turn['turn_id']}", token="op-token").json() == read
+    assert_error(get(client, source_path(turn["turn_id"]), token="op-token"), 404, "not_found")
+
+
+def test_image_figures_are_dropped_on_note_evidence(client, fake, bedrock):
+    # 노트 근거 기간에는 figures에 kind image를 넣지 않는다(기술 검토 4절 T4 전 동작).
+    cid = fake.conversation(A)
+    image = {"kind": "image", "image": {"url": "https://example.test/x.png"}, "caption": "c", "alt_text": "a",
+             "source_refs": [1], "after_section": 1}
+    diagram = {"mermaid": "flowchart LR\n  A[요청] --> B[응답]", "caption": "흐름", "alt_text": "요청에서 응답",
+               "source_refs": [1], "after_section": 1}
+    bedrock.replies = [bedrock_reply(answer_json(figures=[image, diagram]))]
+    result, _ = asked_turn(client, fake, cid)
+    assert [f["kind"] for f in result["result"]["figures"]] == ["diagram"]

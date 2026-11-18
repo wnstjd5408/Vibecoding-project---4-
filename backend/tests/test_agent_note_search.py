@@ -51,7 +51,8 @@ def test_a_section_over_the_limit_is_split_at_paragraph_boundaries_without_cutti
     rebuilt = [p for c in chunks for p in c.text.split("\n\n")]
     assert rebuilt == paragraphs
     # 저장 전 거르기(usable_paragraphs)에서도 잘리지 않는다.
-    assert all(len(c.text) <= MAX_CHUNK_CHARS for c in chunks)
+    found = search_notes([note(1, body)], "단락", context())
+    assert found and usable_paragraphs(found) == found
 
 
 def test_a_single_paragraph_over_the_limit_is_split_at_line_boundaries():
@@ -198,3 +199,16 @@ def test_the_retriever_reads_only_published_note_bodies_and_reports_its_kind():
     user = SessionUser(user_id="u", role="operator")
     assert [p.source_id for p in retriever.retrieve(user, "멱등성", context())] == ["1", "2"]
     assert store.calls == 1 and retriever.source_kind == "note" and retriever.version == "note-keyword-v1"
+
+
+# --- 리뷰 지적 재현 (code-review high, 2026-11-18) ---
+
+
+def test_latin_keywords_match_whole_words_only():
+    notes = [note(1, "# a\nPUT 요청은 멱등하다."), note(2, "# b\noutput 과 input 을 본다.")]
+    assert [p.source_id for p in search_notes(notes, "PUT", context())] == ["1"]
+
+
+def test_image_syntax_with_a_title_or_escaped_bracket_becomes_alt_text():
+    assert replace_images('앞 ![구조](note-image:k "그림 제목") 뒤') == "앞 [그림: 구조] 뒤"
+    assert replace_images(r"![a\]b](note-image:k)") == r"[그림: a\]b]"

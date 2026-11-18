@@ -24,6 +24,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from app.agent_output import MAX_PARAGRAPH_CHARS, MAX_PARAGRAPHS
 from app.agent_retrieval import Paragraph, RetrievalContext
 from app.auth import SessionUser
 from app.glossary_spans import code_mask
@@ -33,10 +34,11 @@ logger = logging.getLogger("app.agent")
 
 SOURCE_KIND = "note"
 RETRIEVAL_VERSION = "note-keyword-v1"
-# 문단 상한(코드포인트). agent_output.MAX_PARAGRAPH_CHARS와 같아야 저장할 때 잘리지 않는다(Q4 임시값).
-MAX_CHUNK_CHARS = 1500
-# 한 번에 돌려주는 문단 수(agent_output.MAX_PARAGRAPHS와 같다).
-MAX_RESULTS = 5
+# 문단 상한(코드포인트, Q4 임시값). 저장 전 거르기(usable_paragraphs)와 같은 값이어야 문단이 잘리지 않고, E32가 지금
+# 문단과 인용 당시 원문을 비교할 수 있다. 그래서 agent_output의 값을 그대로 쓴다.
+MAX_CHUNK_CHARS = MAX_PARAGRAPH_CHARS
+# 한 번에 돌려주는 문단 수(프롬프트에 넣는 근거 문단 상한과 같다).
+MAX_RESULTS = MAX_PARAGRAPHS
 # 여러 줄 선택을 줄마다 볼 때, 이보다 짧은 줄은 보지 않는다(목록 표시 같은 짧은 줄이 다른 문단에 우연히 들어 있을 수 있다).
 MIN_SELECTION_LINE_CHARS = 10
 # 문맥(선택 문장·주제·직전 질문) 낱말의 가중치. 질문 낱말은 1이다. 제안값이다.
@@ -47,10 +49,12 @@ MAX_COUNT = 3
 
 _HEADING = re.compile(r" {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$")
 _CLOSING_HASHES = re.compile(r"(?:^|[ \t]+)#+$")
-_NOTE_IMAGE = re.compile(r"!\[([^\]]*)\]\(\s*note-image:[^)\s]*\s*\)")
+# ![대체 글](note-image:키 "제목"). 대체 글 안의 \] 이스케이프와 따옴표 제목도 받는다.
+_NOTE_IMAGE = re.compile(r'!\[((?:[^\]\\]|\\.)*)\]\(\s*note-image:[^)\s]*(?:\s+"[^"]*")?\s*\)')
 _BARE_NOTE_IMAGE = re.compile(r"note-image:[^\s)]*")
 _SPACES = re.compile(r"\s+")
 _WORDS = re.compile(r"[a-z0-9][a-z0-9+#]*|[가-힣]+")
+_LATIN = re.compile(r"[a-z0-9+#]+")
 
 # 질문에 흔히 붙는 말. 낱말로 세지 않는다. 제안값이다.
 _STOPWORDS = frozenset(
@@ -59,8 +63,8 @@ _STOPWORDS = frozenset(
         "무엇인가요", "무엇인지", "어떻게", "어떤", "언제", "어디", "누가", "이것", "그것", "저것", "이거", "그거", "저거",
         "대해", "대해서", "관련", "관해", "정리", "질문", "답변", "내용", "있나요", "있어", "있어요", "없어", "하나요",
         "되나요", "인가요", "경우", "그럼", "그러면", "그리고", "또는", "그래서", "다시", "한번", "조금", "이유", "뜻",
-        "의미", "말", "것", "수", "좀", "더", "왜", "뭔가요", "뭘까", "뭐지", "the", "a", "an", "is", "are", "what",
-        "how", "why", "of", "to", "in", "and", "or", "for",
+        "의미", "뭔가요", "뭘까", "뭐지", "the", "is", "are", "what", "how", "why", "of", "to", "in", "and", "or",
+        "for",
     }
 )
 # 낱말 끝의 조사·어미. 긴 것부터 뗀다. 떼고 남은 말이 2글자 이상일 때만 뗀다. 제안값이다.
@@ -248,11 +252,19 @@ def keywords(text: str) -> list[str]:
     return out
 
 
+def _count(word: str, text: str) -> int:
+    """text에 word가 나온 횟수. 영문·숫자 낱말은 낱말 단위로 센다(put이 output 안에서 세지지 않게). 한글은 조사가 붙으므로
+    부분 문자열로 센다."""
+    if _LATIN.fullmatch(word):
+        return len(re.findall(rf"(?<![a-z0-9]){re.escape(word)}(?![a-z0-9])", text))
+    return text.count(word)
+
+
 def _score(words: Iterable[str], body: str, head: str) -> float:
     total = 0.0
     for word in words:
-        count = min(body.count(word), MAX_COUNT)
-        bonus = TITLE_BONUS if word in head else 0
+        count = min(_count(word, body), MAX_COUNT)
+        bonus = TITLE_BONUS if _count(word, head) else 0
         total += count + bonus
     return total
 
