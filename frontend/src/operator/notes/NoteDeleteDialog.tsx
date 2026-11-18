@@ -41,7 +41,7 @@ export function NoteDeleteDialog({ title, busy, error, onConfirm, onClose }: Not
         노트를 삭제할까요?
       </h2>
       <p className={styles.dialogNote}>{title}</p>
-      <p className={styles.dialogBody}>삭제하면 이 노트로 만든 AI 설명이 무효가 되고, 노트의 이미지 파일도 삭제 대상이 돼요.</p>
+      <p className={styles.dialogBody}>삭제하면 이 노트로 만든 AI 설명은 더 이상 보이지 않고, 노트의 이미지 파일도 지워요.</p>
       {error ? (
         <p role="alert" className={styles.error}>
           오류: {error}
