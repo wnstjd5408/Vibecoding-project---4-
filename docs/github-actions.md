@@ -34,7 +34,7 @@ Vercel의 PR 배포 상태나 봇 댓글은 Vercel 연동에서 제공한다. �
 
 **`staging`을 소스 브랜치로 하는 `staging → main` PR은 현재 브랜치명 검사에 실패한다.** 대상 브랜치에 따른 예외가 없으므로 `meg-<번호>-<설명>` 규칙을 만족해야 한다. Vercel의 Staging 배포가 성공해도 이 제한은 사라지지 않는다.
 
-운영 반영은 릴리스 흐름 v3(MEG-216)를 따른다. main PR은 STG에서 검증한 릴리스 후보 브랜치 `meg-<번호>-release`에서만 연다. 아래 Release tree check가 이를 확인한다. 이 검사가 필수 검사로 연결되기 전에는 임시 절차인 [출시 절차](release.md)(MEG-215)를 따른다. 어느 경우든 필수 검사를 우회하지 않는다.
+운영 반영은 릴리스 흐름 v3(MEG-216)를 따른다. main PR은 STG에서 검증한 릴리스 후보 브랜치 `meg-<번호>-release`에서만 연다. 아래 Release tree check가 이를 확인한다. 단계별 순서와 기록 양식은 [출시 절차](release.md)를 따른다. 어느 경우든 필수 검사를 우회하지 않는다.
 
 ## Release tree check
 
