@@ -330,6 +330,19 @@ def agent_request_key(user_id: str, idempotency_key: str) -> str:
     return f"{user_id}:agent:{idempotency_key}"
 
 
+# run_ai_call이 예약한 뒤에 낸 예외에 붙이는 속성 이름. 값은 마지막 예약의 원장 id다.
+_LEDGER_ID_ATTR = "ledger_id"
+
+
+def ledger_id_of(error: BaseException) -> int | None:
+    """run_ai_call이 낸 예외의 마지막 원장 id. 예약 전에 끝났으면(한도·같은 키·첫 예약 DB 실패) None이다.
+
+    E29는 실패한 턴에도 이 값을 저장해 쓴 비용과 턴을 잇는다(CS Agent spec 9절). E09·퀴즈는 쓰지 않는다.
+    """
+    value = getattr(error, _LEDGER_ID_ATTR, None)
+    return value if isinstance(value, int) else None
+
+
 def _settle(store: LedgerStore, reservation: Reservation, outcome: str, **values) -> None:
     """AI를 부른 뒤의 정산. 어떤 실패든 AiSettlementFailed(500)로 바꾼다. 503이면 자동 재시도로 비용이 겹친다."""
     try:
@@ -377,6 +390,7 @@ def run_ai_call(
     first_reservation: 퀴즈처럼 선점 함수가 첫 예약을 이미 한 경우 넘긴다. 호출하지 못하고 끝나면 이 함수가 푼다.
     낼 수 있는 예외: AiConfigError(500), AiCallError(502), AiLimitReached(429), LedgerKeyExists(E09가 판단),
     AiSettlementFailed(500), 첫 예약 단계의 SupabaseUnavailable(503, AI 호출 전이므로).
+    예약한 뒤에 낸 예외에는 마지막 예약의 원장 id를 붙인다(ledger_id_of로 읽는다).
     """
     spec = CALL_SPECS[kind]
     try:
@@ -388,6 +402,47 @@ def run_ai_call(
             logger.warning("ai pre-check failed with a claimed reservation type=%s", type(error).__name__)
             _settle(store, first_reservation, SETTLE_RELEASED)
         raise
+    # 이번 호출에서 예약한 원장 id(시도 순). 예약한 뒤에 난 예외에 마지막 값을 붙인다.
+    spent: list[int] = []
+    try:
+        return _call_attempts(
+            store,
+            settings,
+            budget,
+            spec=spec,
+            user_id=user_id,
+            kind=kind,
+            request_key=request_key,
+            prompt=prompt,
+            oidc_token=oidc_token,
+            first_reservation=first_reservation,
+            client_factory=client_factory,
+            sleep=sleep,
+            spent=spent,
+        )
+    except Exception as error:
+        if spent:
+            setattr(error, _LEDGER_ID_ATTR, spent[-1])
+        raise
+
+
+def _call_attempts(
+    store: LedgerStore,
+    settings: BedrockSettings,
+    budget: AiBudget,
+    *,
+    spec: CallSpec,
+    user_id: str,
+    kind: str,
+    request_key: str,
+    prompt: str,
+    oidc_token: str | None,
+    first_reservation: Reservation | None,
+    client_factory: Callable,
+    sleep: Callable[[float], None],
+    spent: list[int],
+) -> AiOutcome:
+    """run_ai_call의 예약 → 호출 → 정산 반복. 예약할 때마다 원장 id를 spent에 더한다."""
     reserved_usd = budget.reserve_amount(prompt, spec.max_tokens)
     client = None
     last_error: AiCallError | None = None
@@ -414,6 +469,7 @@ def run_ai_call(
                     raise last_error from None
                 # AI를 한 번 부른 뒤의 DB 실패는 500이다(1.4.4).
                 raise AiSettlementFailed(type(error).__name__) from None
+        spent.append(reservation.ledger_id)
 
         calling = False
         try:

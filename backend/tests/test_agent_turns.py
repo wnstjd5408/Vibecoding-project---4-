@@ -170,6 +170,13 @@ class TurnFake(AgentFake):
         }
         return {"outcome": "claimed", "turn_id": tid, "seq": seq, "turn_status": "running"}
 
+    def find_agent_turn_by_key(self, user_id, idempotency_key):
+        self._db("find_agent_turn_by_key")
+        for row in self.turns.values():
+            if row["user_id"] == user_id and row.get("idempotency_key") == idempotency_key:
+                return {k: row[k] for k in ("id", "conversation_id", "seq", "status", "lease_expires_at")}
+        return None
+
     def delete_running_agent_turn(self, user_id, turn_id):
         self._db("delete_running_agent_turn")
         row = self.turns.get(turn_id)
@@ -590,12 +597,133 @@ def test_the_same_key_while_running_is_409_in_progress_with_the_turn_id(client, 
     assert bedrock.calls == 0
 
 
-def test_another_running_turn_in_the_conversation_rejects_a_new_key(client, fake, bedrock, store):
+def _clarify_case(fake):
+    """의미 확인에 답하는 요청. 대상 뒤에 턴이 생기면 같은 본문은 choice_expired가 된다."""
     cid = fake.conversation(A)
-    fake.turn(cid, 1, status="running", lease=60)
+    tid = fake.turn(cid, 1)
+    fake.turns[tid]["result"] = {"state": "clarify", "clarify": {"prompt": "어느 뜻?", "options": [
+        {"option_id": "o-1", "label": "HTTP 멱등성"}, {"option_id": "o-2", "label": "수학의 멱등"}]}}
+    body = {"question": {"kind": "free", "text": QUESTION}, "reply": {"turn_id": tid, "clarify_option_id": "o-1"}}
+    return cid, body, lambda: None
+
+
+def _topic_case(fake):
+    """주제 전환 확인에서 '이어서 질문'. 대상 뒤에 턴이 생기면 같은 본문은 choice_expired가 된다."""
+    cid = fake.conversation(A)
+    tid = fake.turn(cid, 1)
+    fake.turns[tid]["result"] = {"state": "topic_check", "topic_check": {"current_topic": "멱등성"}}
+    body = {"question": {"kind": "free", "text": fake.turns[tid]["question_text"]},
+            "reply": {"turn_id": tid, "topic_choice": "continue"}}
+    return cid, body, lambda: None
+
+
+def _selection_case(fake):
+    """선택 문맥 추가. 첫 요청 뒤 노트 개정이 바뀌면 같은 본문은 stale_revision이 된다."""
+    cid = fake.conversation(A)
+    body = {"question": {"kind": "free", "text": QUESTION},
+            "add_selections": [{"note_id": PUBLIC, "note_revision": 3, "start": 4, "end": 10}]}
+    return cid, body, lambda: fake.note_rows[PUBLIC].update(revision=4)
+
+
+def _retry_case(fake):
+    """다시 묻기. 첫 요청 뒤 출처 노트가 다시 공개되면 대상이 가려지지 않아 같은 본문은 turn_not_retryable이 된다."""
+    cid = fake.conversation(A)
+    hidden = fake.turn(cid, 1, sources=[("note", str(PRIVATE))])
+    body = {"question": {"kind": "free", "text": QUESTION}, "retry_of_turn_id": hidden}
+    return cid, body, lambda: fake.note_rows[PRIVATE].update(is_published=True)
+
+
+RESEND_CASES = pytest.mark.parametrize(
+    "case", [_clarify_case, _topic_case, _selection_case, _retry_case], ids=["clarify", "topic", "selection", "retry"]
+)
+
+
+@RESEND_CASES
+def test_a_same_key_resend_replays_the_finished_turn_before_the_state_checks(client, fake, store, bedrock, case):
+    """AC-3: 같은 키 재전송은 상태에 따라 달라지는 검사보다 먼저 재생한다. 첫 요청이 바꾼 상태 때문에 거절하지 않는다."""
+    cid, body, change = case(fake)
+    key = str(uuid.uuid4())
+    first = events(ask(client, cid, body=body, key=key))
+    assert first[-1][0] == "result" and first[-1][1]["status"] == "completed"
+    change()
+    calls, checks, finishes = bedrock.calls, len(store.checks), len(fake.finishes)
+
+    second = events(ask(client, cid, body=body, key=key))
+
+    assert names(second) == ["turn", "result"] and second[0][1] == first[0][1]
+    assert second[-1][1]["turn_id"] == first[0][1]["turn_id"]
+    assert bedrock.calls == calls and len(store.checks) == checks and len(fake.finishes) == finishes
+
+
+@RESEND_CASES
+def test_a_same_key_resend_while_running_is_409_in_progress_before_the_state_checks(client, fake, bedrock, store, case):
+    cid, body, change = case(fake)
+    key = str(uuid.uuid4())
+    seq = max(row["seq"] for row in fake.turns.values() if row["conversation_id"] == cid) + 1 \
+        if any(row["conversation_id"] == cid for row in fake.turns.values()) else 1
+    tid = fake.turn(cid, seq, status="running", lease=60)
+    fake.turns[tid]["idempotency_key"] = key
+    change()
+
+    response = ask(client, cid, body=body, key=key)
+
+    assert_error(response, 409, "conflict", "in_progress")
+    assert response.json()["error"]["turn_id"] == tid and response.headers["Retry-After"] == "2"
+    assert bedrock.calls == 0 and store.checks == [] and "claim_agent_turn" not in fake.calls
+
+
+def test_a_replay_does_not_need_the_ai_settings(fake, store, bedrock, retriever):
+    """재생은 모델을 부르지 않으므로 AI 설정 오류(500)로 끝나지 않는다."""
+    app = build_app(fake, store, bedrock, retriever)
+    client = TestClient(app)
+    cid = fake.conversation(A)
+    key = str(uuid.uuid4())
+    first = events(ask(client, cid, key=key))
+
+    def broken():
+        raise agent_turns.AiConfigError("AI_DAILY_BUDGET_USD가 필요하다(양의 숫자)")
+
+    app.dependency_overrides[get_ai_runtime] = lambda: AiRuntime(
+        store=store, load_budget=broken, load_settings=broken,
+        client_factory=lambda settings, token=None: bedrock, sleep=lambda seconds: None,
+    )
+    second = events(ask(client, cid, key=key))
+    assert names(second) == ["turn", "result"] and second[-1][1] == first[-1][1]
+    # 새 키는 설정 검사에서 막힌다(선점 전).
+    assert_error(ask(client, cid), 500, "internal_error")
+    assert len(fake.turns) == 1
+
+
+def test_a_same_key_running_turn_whose_lease_lapsed_is_replayed_as_interrupted(client, fake, bedrock):
+    cid = fake.conversation(A)
+    key = str(uuid.uuid4())
+    tid = fake.turn(cid, 1, status="running", lease=-30)
+    fake.turns[tid]["idempotency_key"] = key
+    replay = events(ask(client, cid, key=key))
+    assert names(replay) == ["turn", "error"] and replay[0][1]["turn_id"] == tid
+    assert fake.turns[tid]["status"] == "failed" and fake.turns[tid]["failure"] == "interrupted"
+    assert bedrock.calls == 0
+
+
+def test_another_running_turn_in_the_conversation_rejects_a_new_key(client, fake, bedrock, store, monkeypatch):
+    raised = []
+
+    class RecordingApiError(agent_turns.ApiError):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            raised.append(self)
+
+    monkeypatch.setattr(agent_turns, "ApiError", RecordingApiError)
+    cid = fake.conversation(A)
+    running = fake.turn(cid, 1, status="running", lease=60)
     response = ask(client, cid)
+    [error] = [e for e in raised if e.detail == "turn_in_progress"]
+    assert (error.turn_id, error.retry_after_seconds) == (running, agent_turns.TURN_POLL_SECONDS)
     assert_error(response, 409, "conflict", "turn_in_progress")
-    assert "turn_id" not in response.json()["error"]
+    # 진행 중인 턴을 E30으로 이어 볼 수 있게 그 턴 id와 다시 볼 시간을 준다.
+    assert response.json()["error"]["turn_id"] == running
+    assert response.json()["error"]["retry_after_seconds"] == agent_turns.TURN_POLL_SECONDS
+    assert response.headers["Retry-After"] == str(agent_turns.TURN_POLL_SECONDS)
     assert bedrock.calls == 0 and store.checks == []
 
 
@@ -703,6 +831,59 @@ def test_a_source_that_became_private_before_saving_fails_the_turn(client, fake,
     assert last_turn(fake)["status"] == "failed" and fake.sources == []
 
 
+def test_a_note_source_id_with_a_non_ascii_digit_is_not_visible(fake, store, bedrock, caplog):
+    """'²'.isdigit()는 참이다. 노트 id 모양은 agent_access.note_source_id로 본다. 틀린 모양은 볼 수 없는 출처다."""
+    odd = Paragraph("note", "²", "3", "출처 노트", "멱등성은 같은 요청을 여러 번 보내도 결과가 같은 성질이다.", "정의")
+    client = TestClient(build_app(fake, store, bedrock, FixedRetriever([odd])))
+    parsed = events(ask(client, fake.conversation(A)))
+    assert parsed[-1][1]["error"]["code"] == "internal_error"
+    row = last_turn(fake)
+    assert (row["status"], row["failure"], row["ledger_id"]) == ("failed", "error", 101)
+    assert "source_not_visible" in caplog.text and "unexpected=" not in caplog.text
+
+
+def test_compose_done_is_sent_only_after_the_answer_is_saved(client, fake, bedrock):
+    """spec E29 10단계: 저장(agent_finish_turn)이 거절되면 compose 완료 이벤트를 보내지 않는다."""
+    bedrock.during_call = lambda: fake.cancel_agent_turn(A, last_turn(fake)["id"])
+    parsed = events(ask(client, fake.conversation(A)))
+    assert {"step": "compose", "state": "done"} not in [data for name, data in parsed if name == "step"]
+    assert parsed[-1][1]["status"] == "cancelled"
+
+
+@pytest.mark.parametrize(
+    "setup",
+    [
+        # 재시도까지 모델 오류: 마지막(두 번째) 예약이다.
+        lambda fake, store, bedrock: setattr(bedrock, "replies", [agent_turns.AiCallError("bedrock", "ReadTimeoutError"),
+                                                                  agent_turns.AiCallError("bedrock", "ReadTimeoutError")]),
+        # 호출 뒤 정산 실패(AiSettlementFailed)
+        lambda fake, store, bedrock: setattr(store, "settle", lambda *args, **kwargs: (_ for _ in ()).throw(OSError())),
+        # 호출 중 예상하지 못한 예외
+        lambda fake, store, bedrock: setattr(bedrock, "replies", [RuntimeError("boom")]),
+        # 호출 뒤 출처 확인 중 DB 오류(예상하지 못한 예외, 실행 쪽)
+        lambda fake, store, bedrock: setattr(
+            bedrock, "during_call", lambda: setattr(fake, "get_note_states", _raise(SupabaseConfigError("down")))),
+    ],
+    ids=["model_error", "settlement_failed", "unexpected_in_call", "unexpected_after_call"],
+)
+def test_a_failure_after_spending_keeps_the_last_ledger_id(client, fake, store, bedrock, setup):
+    """비용을 쓴 뒤 실패한 턴도 마지막 원장 행과 잇는다(spec 9절). 비용과 턴을 맞춰 볼 수 있어야 한다."""
+    setup(fake, store, bedrock)
+    parsed = events(ask(client, fake.conversation(A)))
+    assert parsed[-1][0] == "error"
+    row = last_turn(fake)
+    assert row["status"] == "failed"
+    expected = 100 + len(store.reserves)
+    assert store.reserves and fake.finishes[-1]["p_ledger_id"] == expected and row["ledger_id"] == expected
+
+
+def _raise(error):
+    def fail(*args, **kwargs):
+        raise error
+
+    return fail
+
+
 # --- 1단계 검사 ---
 
 
@@ -785,6 +966,27 @@ def test_a_topic_continue_reply_turns_off_the_topic_check(client, fake, bedrock)
     assert_field(ask(client, cid, body=mismatched), "question.text", "invalid_value")
 
 
+@pytest.mark.parametrize("case", [_clarify_case, _topic_case], ids=["clarify", "topic"])
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+def test_a_reply_stays_open_when_the_turns_after_it_failed_or_were_cancelled(client, fake, bedrock, case, status):
+    """2026-11-18 결정: choice_expired를 정할 때 대상 뒤의 failed·cancelled 턴은 세지 않는다. 새 키로 다시 보낼 수 있다."""
+    cid, body, _ = case(fake)
+    fake.turn(cid, 2, status=status, failure="error")
+    fake.turn(cid, 3, status=status, failure="interrupted")
+    parsed = events(ask(client, cid, body=body))
+    assert parsed[-1][0] == "result" and parsed[-1][1]["status"] == "completed"
+    assert last_turn(fake)["reply"]["turn_id"] == body["reply"]["turn_id"]
+
+
+@pytest.mark.parametrize("case", [_clarify_case, _topic_case], ids=["clarify", "topic"])
+def test_a_reply_expires_once_a_later_turn_did_not_fail(client, fake, case):
+    cid, body, _ = case(fake)
+    fake.turn(cid, 2, status="failed", failure="error")
+    fake.turn(cid, 3)
+    assert_error(ask(client, cid, body=body), 409, "conflict", "choice_expired")
+    assert "claim_agent_turn" not in fake.calls
+
+
 def test_retry_is_only_allowed_for_the_first_hidden_turn(client, fake):
     cid = fake.conversation(A)
     visible = fake.turn(cid, 1)
@@ -837,6 +1039,35 @@ def test_an_empty_conversation_takes_its_topic_from_the_first_question(client, f
     events(ask(client, cid, body={"question": {"kind": "free", "text": text}}))
     # 첫 질문의 앞 20자(공백은 하나로 줄인다, spec Q9). E27의 주제 이름 규칙과 같은 함수다.
     assert fake.conversations[cid]["topic_label"] == agent.topic_label_of(text) == "TCP 혼잡 제어는 어떻게 동작해? "
+
+
+def test_the_first_question_of_an_empty_conversation_runs_with_the_topic_it_just_set(fake, store, bedrock):
+    """origin none 대화의 첫 질문은 방금 넣은 주제 이름으로 검색하고 프롬프트를 만든다(읽어 둔 빈 값이 아니다)."""
+    retriever = FixedRetriever(PARAGRAPHS)
+    client = TestClient(build_app(fake, store, bedrock, retriever))
+    cid = fake.conversation(A, note_id=None)
+    fake.conversations[cid]["topic_label"] = ""
+    text = "TCP 혼잡 제어는 어떻게 동작해?"
+    events(ask(client, cid, body={"question": {"kind": "free", "text": text}}))
+    label = agent.topic_label_of(text)
+    [(_, _, context)] = retriever.calls
+    assert context.topic_label == label
+    prompt = bedrock.prompts[-1]
+    assert f"<<<현재 주제 시작>>>\n{label}\n<<<현재 주제 끝>>>" in prompt
+    # 첫 질문은 그 질문이 주제를 정하므로 주제 전환 확인을 하지 않는다.
+    assert "topic_check" not in prompt
+
+
+@pytest.mark.parametrize(
+    "earlier, allowed",
+    [((), False), (("failed",), False), (("cancelled", "failed"), False), (("completed",), True)],
+)
+def test_the_topic_check_needs_an_earlier_completed_turn(client, fake, bedrock, earlier, allowed):
+    cid = fake.conversation(A)
+    for seq, status in enumerate(earlier, start=1):
+        fake.turn(cid, seq, status=status, failure="error")
+    events(ask(client, cid))
+    assert ("topic_check" in bedrock.prompts[-1]) is allowed
 
 
 def test_figures_that_fail_the_mermaid_check_are_dropped_and_the_answer_stays(client, fake, bedrock):

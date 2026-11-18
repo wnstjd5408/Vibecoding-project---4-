@@ -3,10 +3,12 @@
 POST /api/ai/conversations/{conversation_id}/turns — 질문을 받아 근거를 찾고 모델을 한 번 불러 답을 저장한다.
 
 처리 순서(기술 검토 3절):
-1. 노출 중단 플래그(503) → 경로·Idempotency-Key(404·400) → AI 설정 확인(500, 원장 전) → 공통 권한 검사(404) →
-   질문·선택 문맥·확인 선택·다시 묻기 검사(422·409).
+1. 노출 중단 플래그(503) → 경로·Idempotency-Key(404·400) → 같은 키 재전송 확인(이 대화에 같은 키의 턴이 있으면 끝난 턴은
+   재생, 진행 중이면 409 in_progress) → AI 설정 확인(500, 원장 전) → 공통 권한 검사(404) →
+   질문·선택 문맥·확인 선택·다시 묻기 검사(422·409). 재전송 확인이 상태 검사보다 먼저여야 첫 요청이 바꾼 상태로 거절하지 않는다.
 2. agent_claim_turn으로 턴을 선점한다. 같은 키의 끝난 턴은 재생하고(모델 호출 없음, 가림 적용), 진행 중이면 409 in_progress,
-   같은 대화에 다른 키의 턴이 진행 중이면 409 turn_in_progress다.
+   같은 대화에 다른 키의 턴이 진행 중이면 409 turn_in_progress(그 턴 id)다. 같은 키는 1번에서 대부분 걸러지고, 여기서는
+   동시 요청과 다른 대화에서 쓴 키만 남는다.
 3. 속도 제한(429 rate_limited)과 AI 한도 사전 확인(ai_check_limit, 429 ai_limit_reached). 걸리면 선점한 턴을 지운다.
    409를 속도 제한보다 먼저 보는 것은 검사 순서의 예외다(spec E29 3단계): 같은 키 재전송이 한도를 쓰지 않게 한다.
 4. 응답 수명 안의 스레드에서 run_turn을 돌린다(Q2 확정: 응답 뒤의 작업은 멈추므로 202 후 백그라운드 실행은 쓰지 않는다).
@@ -45,8 +47,11 @@ from app.agent import agent_disabled, topic_label_of
 from app.agent_access import (
     TURN_POLL_SECONDS,
     ConversationAccess,
+    lease_lapsed,
     load_conversation,
     load_turn,
+    note_source_id,
+    now_iso,
     path_uuid,
     read_turns,
     source_checker,
@@ -78,6 +83,7 @@ from app.ai_ledger import (
     LedgerKeyExists,
     agent_request_key,
     api_error_for,
+    ledger_id_of,
     run_ai_call,
 )
 from app.auth import SessionUser, require_login
@@ -102,6 +108,8 @@ _MAX_INT = 2**31 - 1
 _UUID_SHAPE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 # 끝난 턴의 failure → 스트림 error 이벤트의 code(실행 중 원인을 모를 때). limit는 S12 화면, 나머지는 S8 화면이다.
 _FAILURE_CODES = {"limit": "ai_limit_reached", "error": "ai_unavailable", "interrupted": "internal_error"}
+# 답 없이 끝난 턴. 확인 선택(reply)의 만료를 정할 때 대상 뒤의 이런 턴은 세지 않는다(2026-11-18 결정).
+_NO_ANSWER_STATUSES = frozenset({"failed", "cancelled"})
 
 
 # --- 요청 모양 (spec E29) ---
@@ -175,6 +183,10 @@ class TurnJob:
     settings: BedrockSettings
     oidc_token: str | None
     request_id: str
+    # 이번 턴에 쓰는 주제 이름. origin none 대화의 첫 질문이면 prepare_turn이 방금 넣은 값이다(spec Q9).
+    topic_label: str = ""
+    # 모델 호출을 정산한 원장 id. 그 뒤에 실패해도 failed 턴에 남겨 비용과 턴을 잇는다(spec 9절).
+    ledger_id: int | None = None
 
 
 @dataclass
@@ -254,6 +266,10 @@ def check_request(
 
     _check_selections(body, checked, access, supabase, user)
 
+    if not any(turn["status"] == "completed" for turn in turns):
+        # 앞에 끝난 답이 없으면 이 질문이 주제를 정한다. 주제 전환 확인을 하지 않는다.
+        checked.allow_topic_check = False
+
     for turn in turns:
         if turn.get("hidden") is not None or turn["status"] != "completed" or "result" not in turn:
             continue
@@ -265,13 +281,17 @@ def check_request(
 
 
 def _check_reply(body: TurnRequest, checked: Checked, turns: list[dict[str, Any]], by_id: dict) -> None:
-    """앞 턴의 의미 확인·주제 전환 확인에 대한 답(spec E29 reply). 대상 뒤에 턴이 생겼으면 409 choice_expired다."""
+    """앞 턴의 의미 확인·주제 전환 확인에 대한 답(spec E29 reply). 대상 뒤에 턴이 생겼으면 409 choice_expired다.
+
+    대상 뒤의 failed·cancelled 턴은 세지 않는다(2026-11-18 결정). 답이 실패하거나 중단된 뒤 새 키로 다시 보낼 수 있다.
+    """
     reply = body.reply
     target_id = _uuid_or_422(reply.turn_id, "reply.turn_id")
     target = by_id.get(target_id)
     if target is None:
         raise _field_error("reply.turn_id", "invalid_value")
-    if turns[-1]["turn_id"] != target_id:
+    later = turns[next(index for index, turn in enumerate(turns) if turn["turn_id"] == target_id) + 1 :]
+    if any(turn["status"] not in _NO_ANSWER_STATUSES for turn in later):
         raise ApiError("conflict", "choice_expired", stage="validate")
     result = target.get("result") or {}
     chosen = [value for value in (reply.clarify_option_id, reply.text, reply.topic_choice) if value is not None]
@@ -397,14 +417,19 @@ def run_turn(
         logger.info("stage=run turn_id=%s stopped", job.turn_id)
     except _Failed as failed:
         error_code = failed.code
-        _finish_failed(job, supabase, failed.failure, failed.ledger_id)
+        _finish_failed(job, supabase, failed.failure, _spent_ledger_id(job, failed.ledger_id))
     except Exception as error:
         logger.error("stage=run turn_id=%s unexpected=%s", job.turn_id, type(error).__name__)
         error_code = "internal_error"
-        _finish_failed(job, supabase, "error", None)
+        _finish_failed(job, supabase, "error", _spent_ledger_id(job, ledger_id_of(error)))
     final = _final(job, supabase, error_code)
     emit(_final_event(job, final))
     return final
+
+
+def _spent_ledger_id(job: TurnJob, from_error: int | None) -> int | None:
+    """failed 턴에 남길 원장 id. 정산이 끝난 뒤의 실패는 그 호출의 id, 호출 중 실패는 예외에 실린 마지막 예약 id다."""
+    return job.ledger_id if job.ledger_id is not None else from_error
 
 
 def _finish_failed(job: TurnJob, supabase: SupabaseClient, failure: str, ledger_id: int | None) -> None:
@@ -451,7 +476,7 @@ def _execute(
         conversation_id=conversation["id"],
         origin=conversation["origin"],
         note_id=conversation.get("note_id"),
-        topic_label=conversation.get("topic_label") or "",
+        topic_label=job.topic_label,
         selection_note_ids=tuple(note_id for note_id, _ in checked.selections),
         selection_texts=tuple(text for _, text in checked.selections),
         recent_questions=tuple(question for question, _ in checked.recent),
@@ -480,7 +505,7 @@ def _execute(
     # 예약 직전의 취소 확인(spec E29 7단계). 갱신이 status = running 조건이라 중단된 턴이면 여기서 멈춘다.
     _touch(job, supabase, "compose")
     emit(sse("step", {"step": "compose", "state": "current"}))
-    topic = conversation.get("topic_label") or ""
+    topic = job.topic_label
     prompt = build_prompt(
         PromptInput(
             question=checked.text,
@@ -505,14 +530,16 @@ def _execute(
             client_factory=runtime.client_factory,
             sleep=runtime.sleep,
         )
-    except AiLimitReached:
+    except AiLimitReached as error:
         # 사전 확인 뒤 실제 예약에서 한도에 걸렸다(동시 요청 등). 화면은 S12다.
-        raise _Failed("limit", "ai_limit_reached") from None
+        raise _Failed("limit", "ai_limit_reached", ledger_id_of(error)) from None
     except LedgerKeyExists:
         # 턴 선점 때문에 정상 흐름에서는 생기지 않는다. 새 호출 없이 failed다(spec E29 8단계).
         raise _Failed("error", "internal_error") from None
     except (AiCallError, AiSettlementFailed, AiConfigError) as error:
-        raise _Failed("error", api_error_for(error).code) from None
+        # 예약한 뒤의 실패면 예외에 마지막 원장 id가 실려 있다. failed 턴에 남긴다.
+        raise _Failed("error", api_error_for(error).code, ledger_id_of(error)) from None
+    job.ledger_id = outcome.ledger_id
 
     try:
         parsed = parse_output(
@@ -525,7 +552,6 @@ def _execute(
 
     sources = source_rows(paragraphs, parsed.refs)
     _check_sources(job, supabase, sources, outcome.ledger_id)
-    emit(sse("step", {"step": "compose", "state": "done"}))
     if not _finish(
         job,
         supabase,
@@ -540,6 +566,8 @@ def _execute(
     ):
         # 실행 중 E31로 중단됐거나 만료됐다. 결과는 버리고 정산은 그대로 둔다(spec 3.1).
         raise _Stopped()
+    # 저장한 뒤에만 compose 완료를 알린다(spec E29 10단계).
+    emit(sse("step", {"step": "compose", "state": "done"}))
 
 
 def _check_sources(job: TurnJob, supabase: SupabaseClient, sources: list[dict[str, Any]], ledger_id: int) -> None:
@@ -548,8 +576,10 @@ def _check_sources(job: TurnJob, supabase: SupabaseClient, sources: list[dict[st
         return
     note_ids = []
     for source in sources:
-        if source["source_kind"] == "note" and source["source_id"].isdigit():
-            note_ids.append(int(source["source_id"]))
+        # 노트 id 모양은 가림 함수와 같은 note_source_id로 본다. str.isdigit는 '²' 같은 문자도 참이다.
+        note_id = note_source_id(source) if source["source_kind"] == "note" else None
+        if note_id is not None:
+            note_ids.append(note_id)
     visible = source_checker(supabase.get_note_states(note_ids) if note_ids else {})
     if not all(visible(source) for source in sources):
         logger.warning("stage=sources turn_id=%s source_not_visible", job.turn_id)
@@ -733,6 +763,36 @@ def _replay(supabase: SupabaseClient, user: SessionUser, turn_id: str) -> Replay
     return Replay(payload)
 
 
+def _in_progress(turn_id: str) -> ApiError:
+    """같은 키의 턴이 아직 실행 중이다(409 in_progress). 그 턴 id로 E30을 조회하면 된다."""
+    return ApiError(
+        "conflict", "in_progress", retry_after_seconds=TURN_POLL_SECONDS, turn_id=turn_id, stage="validate"
+    )
+
+
+def _resent_turn(supabase: SupabaseClient, user: SessionUser, target: str, key: str) -> Replay | None:
+    """같은 키로 이 대화에 이미 기록한 턴이 있으면 재생하거나 409 in_progress로 거절한다. 없으면 None이다.
+
+    첫 요청이 턴을 기록하면 대화 상태가 바뀐다(뒤에 턴이 생기고 선택 문맥이 붙는다). 그래서 같은 본문이 1단계의 상태 검사
+    (choice_expired·stale_revision·turn_not_retryable 등)에 걸릴 수 있다. 재전송은 그 검사와 AI 설정 검사보다 먼저 판정한다(AC-3).
+    다른 대화에서 쓴 키는 여기서 다루지 않고 예전처럼 선점(existing)의 처리에 맡긴다(사람 결정 전, 동작을 바꾸지 않는다).
+    """
+    turn = supabase.find_agent_turn_by_key(user.user_id, key)
+    if turn is None or turn["conversation_id"] != target:
+        return None
+    logger.info("stage=resend turn_id=%s status=%s", turn["id"], turn["status"])
+    if turn["status"] == "running" and not lease_lapsed(turn):
+        # 실행 중인 턴도 대화 권한은 다시 확인한다. 권한이 없으면 404다.
+        load_conversation(supabase, user, target)
+        raise _in_progress(turn["id"])
+    # 만료된 running 턴은 _replay의 read_turns가 failed(interrupted)로 바꾼 뒤 읽는다.
+    replay = _replay(supabase, user, turn["id"])
+    if replay.payload["status"] == "running":
+        # 만료 판정과 바꾸기 사이에 실행이 다시 갱신했다. 아직 실행 중이다.
+        raise _in_progress(turn["id"])
+    return replay
+
+
 def prepare_turn(
     conversation_id: str,
     body: TurnRequest,
@@ -749,6 +809,11 @@ def prepare_turn(
         raise ApiError("service_unavailable", stage="flag")
     target = path_uuid(conversation_id)
     key = read_idempotency_key(idempotency_key)
+
+    # 같은 키 재전송은 상태 검사 전에 재생하거나 거절한다. 재생은 모델을 부르지 않으므로 AI 설정 검사보다도 먼저다.
+    resent = _resent_turn(supabase, user, target, key)
+    if resent is not None:
+        return resent
 
     # 설정·배포 환경 오류로 끝날 요청이 턴을 선점하지 않게 먼저 검사한다(spec v0.2 5.4).
     try:
@@ -780,19 +845,22 @@ def prepare_turn(
         raise ApiError("not_found", stage="db")
     logger.info("stage=claim turn_id=%s outcome=%s", claim["turn_id"], claim["outcome"])
     if claim["outcome"] == "existing":
+        # 위의 재전송 확인과 선점 사이에 같은 키가 먼저 기록됐거나(동시 요청) 다른 대화에서 쓴 키다.
         if claim["turn_status"] == "running":
-            raise ApiError(
-                "conflict",
-                "in_progress",
-                retry_after_seconds=TURN_POLL_SECONDS,
-                turn_id=claim["turn_id"],
-                stage="validate",
-            )
+            raise _in_progress(claim["turn_id"])
         return _replay(supabase, user, claim["turn_id"])
     if claim["outcome"] == "in_progress":
-        raise ApiError("conflict", "turn_in_progress", stage="validate")
+        # 같은 대화에 다른 키의 턴이 실행 중이다. turn_id는 그 턴이다(agent_claim_turn). E30으로 이어 볼 수 있다.
+        raise ApiError(
+            "conflict",
+            "turn_in_progress",
+            retry_after_seconds=TURN_POLL_SECONDS,
+            turn_id=claim["turn_id"],
+            stage="validate",
+        )
 
     turn_id = claim["turn_id"]
+    topic = access.conversation.get("topic_label") or ""
     try:
         limiter.check(AI_AGENT, f"user:{user.user_id}")
         # Q4 상한을 모두 채운 최대 예약액으로 남은 한도를 본다. 예약은 하지 않는다(spec E29 3단계).
@@ -807,15 +875,18 @@ def prepare_turn(
         ):
             raise ApiError("ai_limit_reached", stage="ai")
         if checked.exclude_ids:
-            supabase.exclude_agent_selections(target, checked.exclude_ids, _now_iso())
+            supabase.exclude_agent_selections(target, checked.exclude_ids, now_iso())
         for selection in checked.new_selections:
             supabase.add_agent_selection(selection)
-        if not access.conversation.get("topic_label"):
-            # origin none 대화는 첫 질문의 앞 20자를 주제 이름으로 쓴다(spec Q9).
-            supabase.set_agent_topic_label(user.user_id, target, topic_label_of(checked.text))
+        if not topic:
+            # origin none 대화는 첫 질문의 앞 20자를 주제 이름으로 쓴다(spec Q9). 실행도 이 값을 쓴다.
+            topic = topic_label_of(checked.text)
+            supabase.set_agent_topic_label(user.user_id, target, topic)
     except BaseException:
         _remove_claim(supabase, user, turn_id)
         raise
+    if not topic:
+        checked.allow_topic_check = False
 
     return TurnJob(
         user=user,
@@ -828,11 +899,8 @@ def prepare_turn(
         settings=settings,
         oidc_token=oidc_token,
         request_id=request_id,
+        topic_label=topic,
     )
-
-
-def _now_iso() -> str:
-    return datetime.fromtimestamp(session.now(), UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 @router.post("/ai/conversations/{conversation_id}/turns", summary="E29 ask a question in a CS Agent conversation")

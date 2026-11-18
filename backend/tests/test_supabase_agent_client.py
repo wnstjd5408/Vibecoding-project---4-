@@ -199,6 +199,30 @@ def test_a_claim_for_a_missing_or_foreign_conversation_is_none_and_other_errors_
         client.claim_agent_turn(CLAIM_FIELDS)
 
 
+def test_finding_a_turn_by_key_filters_by_owner_and_key_and_reads_only_the_resend_columns():
+    key = CLAIM_FIELDS["p_idempotency_key"]
+    row = {"id": TURN, "conversation_id": CONVERSATION, "seq": 1, "status": "running",
+           "lease_expires_at": "2026-11-18T06:02:00+00:00"}
+    client, seen = recording_client([httpx.Response(200, json=[row]), httpx.Response(200, json=[])])
+    assert client.find_agent_turn_by_key(USER_ID, key) == row
+    assert client.find_agent_turn_by_key(USER_ID, key) is None
+    params = dict(seen[0].url.params)
+    assert seen[0].method == "GET" and seen[0].url.path == "/rest/v1/ai_turns"
+    assert params == {
+        "user_id": f"eq.{USER_ID}",
+        "idempotency_key": f"eq.{key}",
+        "select": "id,conversation_id,seq,status,lease_expires_at",
+        "limit": "1",
+    }
+
+
+def test_finding_a_turn_by_a_key_that_is_not_a_uuid_is_refused_before_any_request():
+    client, seen = recording_client([])
+    with pytest.raises(ValueError):
+        client.find_agent_turn_by_key(USER_ID, "k,or(user_id.neq.x)")
+    assert seen == []
+
+
 def test_deleting_a_claimed_turn_only_touches_the_owners_running_turn():
     client, seen = recording_client([httpx.Response(204)])
     client.delete_running_agent_turn(USER_ID, TURN)

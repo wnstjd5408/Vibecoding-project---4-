@@ -1312,6 +1312,22 @@ class SupabaseClient:
         rows = response.json()
         return rows[0] if isinstance(rows, list) else rows
 
+    def find_agent_turn_by_key(self, user_id: str, idempotency_key: str) -> dict[str, Any] | None:
+        """E29 1단계: 같은 사용자·같은 Idempotency-Key의 턴(id·대화 id·seq·상태·실행 만료 시각). 없으면 None이다.
+
+        ai_turns의 unique(user_id, idempotency_key)라 많아야 한 행이다. 재전송을 상태 검사 전에 재생·거절하는 데 쓴다.
+        """
+        rows = self._select(
+            "ai_turns",
+            {
+                "user_id": f"eq.{uuid.UUID(user_id)}",
+                "idempotency_key": f"eq.{uuid.UUID(idempotency_key)}",
+                "select": "id,conversation_id,seq,status,lease_expires_at",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
     def delete_running_agent_turn(self, user_id: str, turn_id: str) -> None:
         """E29 3단계: 속도 제한·AI 한도에 걸린 선점 턴을 지운다. running인 그 사용자의 턴만 지운다."""
         response = self._request(

@@ -110,8 +110,8 @@ def error_body(
     if fields:
         error["fields"] = fields
     headers = {}
-    # 429와 409 in_progress에서만 재시도 시간을 준다.
-    if retry_after_seconds is not None and (status == 429 or detail == "in_progress"):
+    # 429와 409 in_progress·turn_in_progress(CS Agent E29)에서만 재시도 시간을 준다.
+    if retry_after_seconds is not None and (status == 429 or detail in ("in_progress", "turn_in_progress")):
         error["retry_after_seconds"] = retry_after_seconds
         headers["Retry-After"] = str(retry_after_seconds)
     if turn_id is not None:
