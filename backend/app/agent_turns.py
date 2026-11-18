@@ -68,6 +68,7 @@ from app.agent_output import (
     OutputInvalid,
     PromptInput,
     build_prompt,
+    correction_allowed,
     max_prompt_tokens,
     parse_output,
     source_rows,
@@ -169,6 +170,8 @@ class Checked:
     exclude_ids: list[str] = field(default_factory=list)
     # 이번 턴에 쓰는 선택 문맥(제외 반영, 추가 포함): (note_id, 원문)
     selections: list[tuple[int, str]] = field(default_factory=list)
+    # selections와 같은 순서의 위치: (note_id, 저장한 개정, 시작, 끝). 노트 검색이 선택 문단을 빼는 데 쓴다(MEG-237).
+    selection_spans: list[tuple[int, int, int, int]] = field(default_factory=list)
     # 이전 대화: 가리지 않은 끝난 턴의 (질문, 답 요약), 오래된 순
     recent: list[tuple[str, str]] = field(default_factory=list)
 
@@ -355,10 +358,14 @@ def _check_selections(
         if selection_id not in excludes:
             excludes.append(selection_id)
     checked.exclude_ids = excludes
-    active = [
-        (selection["note_id"], selection["text_snapshot"])
+    kept = [
+        selection
         for selection in selections
         if selection.get("excluded_at") is None and selection["id"] not in excludes
+    ]
+    active = [(selection["note_id"], selection["text_snapshot"]) for selection in kept]
+    spans = [
+        (selection["note_id"], selection["note_revision"], selection["start"], selection["end"]) for selection in kept
     ]
 
     if body.add_selections:
@@ -388,9 +395,11 @@ def _check_selections(
                 }
             )
             active.append((note_id, snapshot))
+            spans.append((note_id, note["revision"], add.start, add.end))
     if sum(len(text) for _, text in active) > MAX_SELECTION_TOTAL_CHARS:
         raise _field_error("add_selections", "too_long")
     checked.selections = active
+    checked.selection_spans = spans
 
 
 # --- 실행 (스레드) ---
@@ -496,6 +505,7 @@ def _execute(
         topic_label=job.topic_label,
         selection_note_ids=tuple(note_id for note_id, _ in checked.selections),
         selection_texts=tuple(text for _, text in checked.selections),
+        selection_spans=tuple(checked.selection_spans),
         recent_questions=tuple(question for question, _ in checked.recent),
     )
     emit(sse("step", {"step": "understand", "state": "done"}))
@@ -504,7 +514,15 @@ def _execute(
     emit(sse("step", {"step": "retrieve", "state": "current"}))
     paragraphs = usable_paragraphs(retriever.retrieve(job.user, checked.text, context))
     _touch(job, supabase, "retrieve", len(paragraphs))
-    emit(sse("step", {"step": "retrieve", "state": "done", "paragraph_count": len(paragraphs)}))
+    done: dict[str, Any] = {"step": "retrieve", "state": "done", "paragraph_count": len(paragraphs)}
+    # 화면이 "노트 문단 N개"와 "위키 문단 N개"를 고르는 값이다(spec 6절, 2026-11-18 결정).
+    kinds = {paragraph.source_kind for paragraph in paragraphs}
+    source_kind = kinds.pop() if len(kinds) == 1 else getattr(retriever, "source_kind", None)
+    if source_kind is not None:
+        done["source_kind"] = source_kind
+    emit(sse("step", done))
+    # 근거가 노트뿐이면 correction을 받지 않는다(노트로 노트를 교정하지 않음, spec 0절 T4 전 임시 예외).
+    allow_correction = correction_allowed(paragraphs)
 
     if not paragraphs:
         # 쓸 근거가 없으면 모델을 부르지 않는다. 서버 고정 안내만 저장한다(spec E29 6단계, 결정 4·16).
@@ -532,6 +550,7 @@ def _execute(
             paragraphs=paragraphs,
             clarification=checked.clarification,
             allow_topic_check=checked.allow_topic_check,
+            allow_correction=allow_correction,
         )
     )
     try:
@@ -560,7 +579,11 @@ def _execute(
 
     try:
         parsed = parse_output(
-            outcome.text, len(paragraphs), current_topic=topic, allow_topic_check=checked.allow_topic_check
+            outcome.text,
+            len(paragraphs),
+            current_topic=topic,
+            allow_topic_check=checked.allow_topic_check,
+            allow_correction=allow_correction,
         )
     except OutputInvalid as invalid:
         # 형식 실패는 재시도 없이 failed다(Q19 임시). 호출은 이미 정산됐다. 원문은 남기지 않는다.

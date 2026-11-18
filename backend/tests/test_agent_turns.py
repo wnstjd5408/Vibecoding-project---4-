@@ -329,7 +329,7 @@ def test_the_stream_sends_steps_in_order_and_saves_the_result_with_agent_finish_
         {"step": "understand", "state": "current"},
         {"step": "understand", "state": "done"},
         {"step": "retrieve", "state": "current"},
-        {"step": "retrieve", "state": "done", "paragraph_count": 2},
+        {"step": "retrieve", "state": "done", "paragraph_count": 2, "source_kind": "note"},
         {"step": "compose", "state": "current"},
         {"step": "compose", "state": "done"},
     ]
@@ -343,7 +343,8 @@ def test_the_stream_sends_steps_in_order_and_saves_the_result_with_agent_finish_
     assert result["result"]["suggestions"] == ["재시도는 언제 안전해?"]
     # 인용한 문단만 출처가 된다(ref 1). 인용하지 않은 2번 문단은 빠진다.
     assert result["result"]["sources"] == [
-        {"ref": 1, "title": "출처 노트", "section": "정의", "excerpt": PARAGRAPHS[0].text, "cited_revision": "3"}
+        {"ref": 1, "source_kind": "note", "title": "출처 노트", "section": "정의", "excerpt": PARAGRAPHS[0].text,
+         "cited_revision": "3"}
     ]
     # 응답에는 원장·실행 기록이 없다(spec 2절).
     assert not {"ledger_id", "model_id", "prompt_version"} & set(result)
@@ -355,7 +356,7 @@ def test_the_stream_sends_steps_in_order_and_saves_the_result_with_agent_finish_
          "excerpt": PARAGRAPHS[0].text, "paragraph_snapshot": PARAGRAPHS[0].text, "section": "정의"}
     ]
     assert (finish["p_model_id"], finish["p_prompt_version"], finish["p_retrieval_version"]) == (
-        SETTINGS.model_id, "agent-v1", "fixed-test")
+        SETTINGS.model_id, "agent-v2", "fixed-test")
     assert row["status"] == "completed" and row["paragraph_count"] == 2
     # 원장: 사전 확인 1회, 예약 1회(agent 키 형식), 정산 1회. 모델 호출 1회.
     assert store.reserves == [{"kind": "agent", "key": f"{A}:agent:{key}:1", "daily_count_limit": 20}]
@@ -1206,3 +1207,14 @@ def test_figures_that_fail_the_mermaid_check_are_dropped_and_the_answer_stays(cl
 def test_vercel_json_does_not_turn_on_cancellation():
     config = (Path(__file__).resolve().parents[2] / "vercel.json").read_text(encoding="utf-8")
     assert "supportsCancellation" not in config
+
+
+def test_retrieval_gets_the_positions_of_the_selections_in_use(client, fake, retriever):
+    # 노트 검색은 선택 위치로 선택 문단을 뺀다(MEG-237). 제외한 선택은 넘기지 않고, 이번 턴에 더한 선택은 넘긴다.
+    cid = fake.conversation(A)
+    body = {"question": {"kind": "free", "text": QUESTION},
+            "add_selections": [{"note_id": PUBLIC, "note_revision": 3, "start": 4, "end": 9}]}
+    events(ask(client, cid, body=body))
+    context = retriever.calls[-1][2]
+    assert context.selection_spans == ((PUBLIC, 3, 0, 3), (PUBLIC, 3, 4, 9))
+    assert len(context.selection_spans) == len(context.selection_texts)

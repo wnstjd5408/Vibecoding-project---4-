@@ -387,15 +387,15 @@ def test_reading_a_conversation_returns_it_with_turns_in_order(client, fake):
     first, cancelled, failed, running = data["turns"]
     assert first["status"] == "completed" and first["question"] == {"kind": "free", "text": f"{QUESTION} 1"}
     assert first["result"]["state"] == "answered"
-    assert first["result"]["sources"] == [{"ref": 1, "title": "출처 1", "cited_revision": "3", "excerpt": "발췌"}]
+    assert first["result"]["sources"] == [{"ref": 1, "source_kind": "note", "title": "출처 1", "cited_revision": "3", "excerpt": "발췌"}]
     assert "hidden" not in first and "finished_at" in first
     assert "result" not in cancelled and cancelled["status"] == "cancelled"
     assert failed["failure"] == "error" and "result" not in failed
     assert running["status"] == "running" and running["step"] == "retrieve" and "finished_at" not in running
-    # 내부 열은 내보내지 않는다(spec 2절).
+    # 내부 열은 내보내지 않는다(spec 2절). source_kind는 2026-11-18 결정(MEG-237)으로 sources[]에 넣는다(spec 5.2).
     text = response.text
     for secret in ("ledger_id", "model-secret", "prompt_version", "retrieval_version", "lease_expires_at",
-                   "paragraph_snapshot", "인용 당시 원문", "source_kind", "user_id"):
+                   "paragraph_snapshot", "인용 당시 원문", "source_id", "user_id"):
         assert secret not in text
 
 

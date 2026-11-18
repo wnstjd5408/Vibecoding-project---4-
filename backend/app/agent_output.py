@@ -5,6 +5,8 @@
 - 출력: 모델은 JSON 텍스트 하나를 낸다. 서버가 스키마로 검증하고, 틀리면 재시도 없이 턴을 failed로 끝낸다(Q19 임시).
 - 인용: 본문의 [n]은 근거 문단 번호다. 번호마다 근거 문단이 있어야 하고, 인용한 문단만 출처가 된다(spec 5.1·5.2).
 - Mermaid: figures[]에만 담고 허용 문법(flowchart의 노드와 화살표)만 통과시킨다. 통과하지 못한 그림만 빼고 본문은 남긴다(spec 5.3).
+- 교정(correction): 근거가 노트뿐이면 프롬프트에서 교정 규칙을 빼고 출력의 correction도 받지 않는다. 노트로 노트를 교정하지
+  않는다(spec 0절 T4 전 임시 예외, 사용자 결정 2026-11-18, MEG-237).
 
 길이 상한은 Q4 임시값이다(질문 1,000자, 선택 문맥 합계 2,000자, 최근 턴 4개·앞 답변 1,200자, 근거 문단 5개·문단당 1,500자).
 모델 실측(MEG-236 AC-5) 뒤 확정한다.
@@ -20,7 +22,8 @@ from typing import Any
 from app.agent_retrieval import SOURCE_KINDS, Paragraph
 from app.ai_ledger import PROMPT_OVERHEAD_TOKENS
 
-PROMPT_VERSION = "agent-v1"
+# agent-v2(MEG-237): 근거가 노트뿐이면 교정 규칙을 빼고 "교정하지 않음" 규칙을 넣는다.
+PROMPT_VERSION = "agent-v2"
 
 # Q4 임시 상한(코드포인트)
 MAX_QUESTION_CHARS = 1000
@@ -99,6 +102,13 @@ class PromptInput:
     paragraphs: Sequence[Paragraph]
     clarification: str | None = None
     allow_topic_check: bool = True
+    # 근거가 노트뿐이면 False다(교정 규칙과 correction 필드를 프롬프트에서 뺀다).
+    allow_correction: bool = True
+
+
+def correction_allowed(paragraphs: Sequence[Paragraph]) -> bool:
+    """노트가 아닌 근거(위키)가 하나라도 있어야 correction을 허용한다. 노트로 노트를 교정하지 않는다(2026-11-18 결정)."""
+    return any(paragraph.source_kind != "note" for paragraph in paragraphs)
 
 
 _RULES = """당신은 컴퓨터공학 학습자의 질문에 답하는 학습 도우미입니다.
@@ -108,8 +118,7 @@ _RULES = """당신은 컴퓨터공학 학습자의 질문에 답하는 학습 �
 - "선택 문맥"은 학습자가 노트에서 고른 문장입니다. 검증된 사실이 아니므로 인용하지 않고 질문의 맥락으로만 씁니다.
 - 근거 문단이 질문의 일부만 다루면 state를 partial로 하고, 다루지 못한 부분을 limitation에 한 문장으로 씁니다. limitation에는 인용 번호를 쓰지 않습니다.
 - 질문의 뜻이 둘 이상으로 갈려 답을 정할 수 없을 때만 state를 clarify로 하고, 고를 수 있는 뜻을 2~4개 씁니다.
-{topic_rule}- 선택 문맥의 문장이 근거 문단과 어긋날 때만 state를 correction으로 하고, 어긋난 노트 문장과 근거로 고친 내용을 corrections에 씁니다.
-- 본문(body)은 한국어로 씁니다. 단락, 제목, 목록, 표, 굵게, 기울임, 인라인 코드, 코드 블록만 쓰고 링크, 이미지, HTML은 쓰지 않습니다.
+{topic_rule}{correction_rule}- 본문(body)은 한국어로 씁니다. 단락, 제목, 목록, 표, 굵게, 기울임, 인라인 코드, 코드 블록만 쓰고 링크, 이미지, HTML은 쓰지 않습니다.
 - 그림이 이해를 도울 때만 figures에 Mermaid flowchart를 넣습니다. 노드와 화살표만 쓰고 click, 링크, 스타일, 주석, HTML은 쓰지 않습니다. 그림의 내용은 본문에도 글로 씁니다.
 - suggestions에는 학습자가 이어서 물어볼 만한 질문을 0~3개 씁니다. 직전 설명을 되풀이하지 않습니다.
 - 출력은 JSON 객체 하나만 씁니다. 코드 블록 표시나 앞뒤 설명을 붙이지 않습니다.
@@ -118,23 +127,39 @@ state별 필드:
 - answered: sections, figures(선택), suggestions(선택)
 - partial: sections, limitation
 - clarify: clarify {{"prompt": "확인 질문", "options": ["뜻 1", "뜻 2"]}}
-- correction: sections, corrections [{{"note_excerpt": "노트 문장", "corrected": "고친 내용 [1]", "source_refs": [1]}}], unresolved(선택, 문자열 목록)
-{topic_fields}"""
+{correction_fields}{topic_fields}"""
 
 _TOPIC_RULE = "- 질문이 현재 주제와 다른 주제라고 판단하면 state를 topic_check로 하고 다른 필드는 쓰지 않습니다.\n"
 _TOPIC_FIELDS = "- topic_check: 다른 필드 없음\n"
 
 
-def rules(allow_topic_check: bool) -> str:
+_CORRECTION_RULE = (
+    "- 선택 문맥의 문장이 근거 문단과 어긋날 때만 state를 correction으로 하고, 어긋난 노트 문장과 근거로 고친 내용을 "
+    "corrections에 씁니다.\n"
+)
+_CORRECTION_FIELDS = (
+    '- correction: sections, corrections [{"note_excerpt": "노트 문장", "corrected": "고친 내용 [1]", '
+    '"source_refs": [1]}], unresolved(선택, 문자열 목록)\n'
+)
+# 근거가 노트뿐일 때: 선택 문맥과 근거 문단이 어긋나도 교정하지 않고 partial의 한계 문장으로 알린다.
+_NO_CORRECTION_RULE = (
+    "- 선택 문맥의 문장이 근거 문단과 어긋나도 state를 correction으로 하지 않습니다. 근거 문단으로 설명하고, 어긋나는 점은 "
+    "partial의 limitation에 한 문장으로 씁니다.\n"
+)
+
+
+def rules(allow_topic_check: bool, allow_correction: bool = True) -> str:
     return _RULES.format(
         topic_rule=_TOPIC_RULE if allow_topic_check else "",
         topic_fields=_TOPIC_FIELDS if allow_topic_check else "",
+        correction_rule=_CORRECTION_RULE if allow_correction else _NO_CORRECTION_RULE,
+        correction_fields=_CORRECTION_FIELDS if allow_correction else "",
     )
 
 
 def build_prompt(data: PromptInput) -> str:
     """spec E29 5단계(질문 이해)와 8단계 입력. 자료는 모두 Q4 상한 안으로 자른다."""
-    parts = [rules(data.allow_topic_check)]
+    parts = [rules(data.allow_topic_check, data.allow_correction)]
     parts.append(_block("현재 주제", _data(_cut(data.topic_label, MAX_TOPIC_CHARS)) or "(없음)"))
 
     selections, used = [], 0
@@ -203,7 +228,8 @@ def max_prompt_chars() -> int:
     names = ("현재 주제", "선택 문맥", "이전 대화", "근거 문단", "질문")
     blocks = sum(len(_block(name, "")) for name in names)
     joins = len(names)  # 규칙과 구역 다섯 개를 잇는 줄바꿈
-    return len(rules(True)) + blocks + joins + bodies
+    rules_chars = max(len(rules(True, True)), len(rules(True, False)))
+    return rules_chars + blocks + joins + bodies
 
 
 def max_prompt_tokens() -> int:
@@ -367,8 +393,13 @@ def _load_json(text: str) -> dict[str, Any]:
     return value
 
 
-def parse_output(text: str, paragraph_count: int, *, current_topic: str, allow_topic_check: bool) -> ParsedOutput:
+def parse_output(
+    text: str, paragraph_count: int, *, current_topic: str, allow_topic_check: bool, allow_correction: bool = True
+) -> ParsedOutput:
     """모델 출력(JSON 텍스트)을 spec 5절 result로 바꾼다. 틀리면 OutputInvalid다.
+
+    allow_correction이 False면(근거가 노트뿐) 프롬프트에서 correction을 빼 두었다. 그래도 모델이 correction을 내면 실패로 끝내지
+    않고 본문(sections)만 남긴 answered로 받는다. 결정(2026-11-18)이 "answered나 partial로 답한다"이기 때문이다.
 
     출처(sources)는 결과에 넣지 않는다. 인용한 번호(refs)로 서버가 근거 문단에서 만들어 ai_turn_sources에 저장한다.
     """
@@ -376,6 +407,9 @@ def parse_output(text: str, paragraph_count: int, *, current_topic: str, allow_t
     state = raw.get("state")
     if state not in MODEL_STATES or (state == "topic_check" and not allow_topic_check):
         raise OutputInvalid("state")
+    if state == "correction" and not allow_correction:
+        # 노트로 노트를 교정하지 않는다. 교정 항목은 버리고 본문만 answered로 받는다(본문 검증은 그대로 한다).
+        state, raw = "answered", {"sections": raw.get("sections")}
 
     if state == "topic_check":
         return ParsedOutput({"state": "topic_check", "topic_check": {"current_topic": current_topic}}, ())

@@ -284,8 +284,16 @@ def turn_payload(turn: dict[str, Any], hidden: Hidden | None) -> dict[str, Any]:
 
 
 def source_payload(source: dict[str, Any]) -> dict[str, Any]:
-    """spec 5.2 출처 객체. 종류·내부 id·인용 원문은 넣지 않는다(E32가 다시 확인하고 연다)."""
-    payload = {"ref": source["ref"], "title": source["title"], "cited_revision": source["cited_revision"]}
+    """spec 5.2 출처 객체. 내부 id·인용 원문은 넣지 않는다(E32가 다시 확인하고 연다).
+
+    source_kind(note·wiki)는 화면이 출처 문구를 고르는 값이다(spec 0절 T4 전 임시 예외, 2026-11-18 결정, MEG-237).
+    """
+    payload = {
+        "ref": source["ref"],
+        "source_kind": source["source_kind"],
+        "title": source["title"],
+        "cited_revision": source["cited_revision"],
+    }
     for key in ("section", "excerpt"):
         if source.get(key) is not None:
             payload[key] = source[key]
