@@ -16,7 +16,14 @@
 do $$
 begin
   if not exists (select 1 from pg_catalog.pg_available_extensions where name = 'pg_cron') then
-    raise notice 'pg_cron is not available on this server; skipping the agent-purge-expired schedule';
+    raise warning 'pg_cron is not available on this server; skipping the agent-purge-expired schedule';
+    return;
+  end if;
+  -- pg_cron은 cron.database_name(Supabase는 postgres) DB에만 설치된다. 시험용으로 만든 다른 DB에 마이그레이션을
+  -- 적용할 때는 create extension이 실패하므로 건너뛴다. 원격 Supabase는 postgres DB라 이 분기를 타지 않는다.
+  if current_database() <> coalesce(current_setting('cron.database_name', true), 'postgres') then
+    raise warning 'pg_cron schedules live in database %; skipping the agent-purge-expired schedule in %',
+      coalesce(current_setting('cron.database_name', true), 'postgres'), current_database();
     return;
   end if;
 

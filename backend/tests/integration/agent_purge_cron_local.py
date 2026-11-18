@@ -7,6 +7,9 @@ CI의 SQL 단계는 일반 PostgreSQL만 띄우므로 이 파일은 test_ 이름
     $env:PG_CRON_TEST_CONTAINER = "pgcron-test"
     uv run pytest tests/integration/agent_purge_cron_local.py -v
 
+컨테이너는 실행할 때마다 새로 띄운다. 이미 마이그레이션이 적용된 컨테이너를 다시 쓰면 예약 파일만 다시 적용하므로,
+그 사이 바뀐 다른 마이그레이션(정리 함수, 외래키)은 반영되지 않는다.
+
 Supabase 이미지는 pg_cron을 미리 읽어 두고(shared_preload_libraries) postgres 역할이 슈퍼유저가 아니라서
 원격 Supabase의 마이그레이션 실행 조건과 가깝다. 예약이 등록되고, 실행하면 7일 지난 대화와 하위 행만 지우며
 원장 행은 남는지 본다. 원격 URL이나 자격증명은 받지 않는다. 금액은 시험용 숫자다.
@@ -28,11 +31,15 @@ SCHEDULE_MIGRATION = MIGRATIONS / "20261118150000_cs_agent_purge_schedule.sql"
 JOB = "agent-purge-expired"
 
 
-def sql(query):
+def _run(query, database="postgres"):
     # Supabase 이미지는 TCP(localhost)로 들어가야 postgres 역할로 접속된다. 연결은 컨테이너 안에서만 열린다.
-    result = subprocess.run(["docker", "exec", "-i", CRON_CONTAINER, "psql", "-U", "postgres", "-h", "localhost",
-                             "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-qAt"],
-                            input=query, text=True, encoding="utf-8", capture_output=True, timeout=60)
+    return subprocess.run(["docker", "exec", "-i", CRON_CONTAINER, "psql", "-U", "postgres", "-h", "localhost",
+                           "-d", database, "-v", "ON_ERROR_STOP=1", "-qAt"],
+                          input=query, text=True, encoding="utf-8", capture_output=True, timeout=60)
+
+
+def sql(query):
+    result = _run(query)
     assert result.returncode == 0, result.stderr
     return result.stdout.strip()
 
@@ -64,8 +71,14 @@ def cron_db():
 
 @pytest.fixture
 def clean(cron_db):
+    # 시험 중 실제 예약(18:00 GMT)이 끼어들어 행을 지우지 않게 잠시 끈다.
+    jobid = sql(f"select jobid from cron.job where jobname = '{JOB}';")
+    sql(f"select cron.alter_job({jobid}, active => false);")
     sql("delete from public.ai_conversations; delete from public.ai_usage_ledger; delete from public.notes;")
-    return cron_db
+    try:
+        yield cron_db
+    finally:
+        sql(f"select cron.alter_job({jobid}, schedule => '0 18 * * *', active => true);")
 
 
 def new_user():
@@ -154,8 +167,8 @@ def test_scheduler_runs_the_job_and_records_only_the_deleted_count(clean):
     jobid = sql(f"select jobid from cron.job where jobname = '{JOB}';")
     started = sql("select clock_timestamp();")
 
-    # 스케줄러가 실제로 이 예약을 돌리는지 보려고 잠시 1초 간격으로 바꿨다가 되돌린다.
-    sql(f"select cron.alter_job({jobid}, schedule => '1 seconds');")
+    # 스케줄러가 실제로 이 예약을 돌리는지 보려고 잠시 1초 간격으로 켰다가 되돌린다(clean 픽스처가 끈 상태).
+    sql(f"select cron.alter_job({jobid}, schedule => '1 seconds', active => true);")
     try:
         row = ""
         deadline = time.monotonic() + 20
@@ -167,10 +180,23 @@ def test_scheduler_runs_the_job_and_records_only_the_deleted_count(clean):
                 break
             time.sleep(0.5)
     finally:
-        sql(f"select cron.alter_job({jobid}, schedule => '0 18 * * *');")
+        sql(f"select cron.alter_job({jobid}, schedule => '0 18 * * *', active => false);")
 
     assert sql(f"select schedule from cron.job where jobid = {jobid};") == "0 18 * * *"
     # 첫 실행이 2개를 지웠고, 실행 기록에는 지운 수만 남는다.
     assert row == "succeeded|2 rows|postgres"
     assert sql("select id from public.ai_conversations;") == kept
     assert counts() == "1,1,1,1,3"
+
+
+def test_schedule_migration_skips_databases_other_than_cron_database_name(cron_db):
+    # 저장소의 다른 SQL 시험처럼 새 DB를 만들어 마이그레이션을 적용해도 실패하지 않고 건너뛴다.
+    name = "meg235_" + uuid.uuid4().hex
+    sql(f"create database {name};")
+    try:
+        result = _run(SCHEDULE_MIGRATION.read_text(encoding="utf-8"), database=name)
+        assert result.returncode == 0, result.stderr
+        assert "skipping the agent-purge-expired schedule in " + name in result.stderr
+        assert sql(f"select count(*) from cron.job where jobname = '{JOB}';") == "1"
+    finally:
+        sql(f"drop database {name} with (force);")
