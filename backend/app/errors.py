@@ -33,6 +33,8 @@ CATALOG: dict[tuple[str, str | None], tuple[int, str]] = {
     ("conflict", "stale_revision"): (409, "The note has changed since it was loaded"),
     ("conflict", "result_unavailable"): (409, "The result is no longer available; send a new request"),
     ("conflict", "email_exists"): (409, "An account with this email already exists"),
+    # CS Agent(API spec v0.2 2.1). E31: 이미 끝난 턴은 중단할 수 없다.
+    ("conflict", "turn_not_cancellable"): (409, "The response has already finished"),
     ("payload_too_large", None): (413, "Request is too large"),
     ("unsupported_media_type", None): (415, "Unsupported file type"),
     ("validation_failed", None): (422, "One or more fields are invalid"),
