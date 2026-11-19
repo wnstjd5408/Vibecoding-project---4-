@@ -512,6 +512,52 @@ def test_retry_reservation_db_failure_after_a_call_is_a_500():
     assert store.settled == [(101, "reserved_fallback", {})]
 
 
+class _Boom(FakeBedrock):
+    def converse(self, **kwargs):
+        self.calls += 1
+        raise RuntimeError("unexpected")
+
+
+class _DownOnRetry(FakeStore):
+    def reserve(self, **kwargs):
+        if kwargs["attempt_no"] == 2:
+            raise SupabaseUnavailable("status 503")
+        return super().reserve(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "store, bedrock, raised, ledger_id",
+    [
+        # 재시도까지 실패하면 마지막(두 번째) 예약 행이다.
+        (FakeStore(), FakeBedrock(timeout(), timeout()), AiCallError, 102),
+        # 재시도 예약이 한도로 막혀 첫 실패를 그대로 낼 때는 첫 예약 행이다.
+        (FakeStore(limit_from_attempt=2), FakeBedrock(timeout(), OK), AiCallError, 101),
+        (FakeStore(settle_fails=True), FakeBedrock(OK), AiSettlementFailed, 101),
+        (_DownOnRetry(), FakeBedrock(timeout(), OK), AiSettlementFailed, 101),
+        (FakeStore(), _Boom(), RuntimeError, 101),
+    ],
+)
+def test_a_failure_after_a_reservation_carries_the_last_ledger_id(store, bedrock, raised, ledger_id):
+    """MEG-236: 돈을 쓴 뒤의 실패도 그 원장 행을 턴에 이을 수 있게 마지막 예약의 ledger_id를 예외에 싣는다."""
+    with pytest.raises(raised) as error:
+        run(store, bedrock)
+    assert ai_ledger.ledger_id_of(error.value) == ledger_id
+
+
+@pytest.mark.parametrize(
+    "store, raised",
+    [
+        (FakeStore(limit_from_attempt=1), AiLimitReached),
+        (FakeStore(existing_status="reserved"), LedgerKeyExists),
+        (FakeStore(reserve_down=True), SupabaseUnavailable),
+    ],
+)
+def test_a_failure_before_any_reservation_carries_no_ledger_id(store, raised):
+    with pytest.raises(raised) as error:
+        run(store, FakeBedrock(OK))
+    assert ai_ledger.ledger_id_of(error.value) is None
+
+
 def test_throttling_waits_before_the_retry_but_timeouts_do_not():
     waits = []
 
@@ -620,6 +666,33 @@ def test_supabase_store_sends_amounts_as_strings_and_maps_outcomes():
     with pytest.raises(LedgerKeyExists) as error:
         store.reserve(user_id=USER, kind="explain", key="k:1", attempt_no=1, reserved_usd=Decimal(0), budget=BUDGET, daily_count_limit=20)
     assert error.value.status == "settled"
+
+
+def test_supabase_store_check_limit_is_read_only_and_counts_as_a_first_attempt():
+    """E29 사전 확인(MEG-236). 예약하지 않는 ai_check_limit을 부르고, true일 때만 한도 안으로 본다."""
+    supabase = RecordingSupabase({"ai_check_limit": True})
+    store = SupabaseLedgerStore(supabase)
+    args = dict(user_id=USER, kind="agent", reserved_usd=Decimal("0.07"), budget=BUDGET, daily_count_limit=20)
+
+    assert store.check_limit(**args) is True
+    assert supabase.calls == [
+        (
+            "ai_check_limit",
+            {
+                "p_user_id": USER,
+                "p_kind": "agent",
+                "p_reserved_usd": "0.07",
+                "p_user_daily_count_limit": 20,
+                "p_attempt_no": 1,
+                "p_daily_budget_usd": "0.9",
+                "p_monthly_budget_usd": "7",
+                "p_user_daily_share": "0.5",
+            },
+        )
+    ]
+    for value in (False, None, "true"):
+        supabase.rows["ai_check_limit"] = value
+        assert store.check_limit(**args) is False
 
 
 def test_supabase_store_settle_and_quiz_claim():
