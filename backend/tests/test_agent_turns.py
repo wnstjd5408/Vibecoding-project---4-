@@ -223,6 +223,13 @@ class TurnFake(AgentFake):
             if selection["conversation_id"] == conversation_id and selection["id"] in selection_ids:
                 selection["excluded_at"] = selection["excluded_at"] or now_iso
 
+    def get_note_for_explain(self, note_id, include_unpublished):
+        """이 파일의 시험은 퀴즈 자료(MEG-243)를 보지 않는다. 노트가 없다고 답해 그 처리를 건너뛰게 한다.
+
+        퀴즈 자료는 test_agent_quiz_material.py가 이 가짜를 넓혀 확인한다.
+        """
+        return None
+
     def set_agent_topic_label(self, user_id, conversation_id, topic_label):
         self._db("set_agent_topic_label")
         row = self.conversations[conversation_id]

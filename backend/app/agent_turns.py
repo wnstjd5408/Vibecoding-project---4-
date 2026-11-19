@@ -74,6 +74,7 @@ from app.agent_output import (
     source_rows,
     usable_paragraphs,
 )
+from app.agent_quiz_material import make_quiz_material
 from app.agent_retrieval import RetrievalContext, Retriever, get_retriever
 from app.ai_explain import OIDC_HEADER, AiRuntime, _field_error, get_ai_runtime, read_idempotency_key
 from app.ai_ledger import (
@@ -192,6 +193,10 @@ class TurnJob:
     topic_label: str = ""
     # 모델 호출을 정산한 원장 id. 그 뒤에 실패해도 failed 턴에 남겨 비용과 턴을 잇는다(spec 9절).
     ledger_id: int | None = None
+    # 요청을 받은 시각(time.monotonic). ask가 덮어쓴다. 퀴즈 자료 처리가 함수 최대 실행 시간을 넘지 않게 하는 데 쓴다(MEG-243).
+    started_at: float = field(default_factory=time.monotonic)
+    # agent 호출이 공급자 오류(AiCallError)로 실패했는가. 그러면 퀴즈 자료가 같은 공급자를 바로 다시 부르지 않는다(MEG-243).
+    provider_failed: bool = False
 
 
 @dataclass
@@ -432,9 +437,11 @@ def run_turn(
     retriever: Retriever,
     emit: Callable[[bytes], None],
 ) -> Final:
-    """턴 하나를 끝까지 실행하고 마지막 이벤트를 보낸다. 스레드에서 돈다(run_ai_call이 동기 함수다).
+    """턴 하나를 끝까지 실행하고 마지막 이벤트를 보낸 뒤, 노트 용어 질문이면 퀴즈 자료를 만든다. 스레드에서 돈다.
 
     emit은 SSE 조각을 보낸다. 송신 실패는 응답 쪽이 삼키므로 이 함수는 끝까지 실행된다.
+    퀴즈 자료(MEG-243)는 마지막 이벤트 뒤에 돌아 턴 결과·이벤트·응답을 바꾸지 않고, 예외를 밖으로 내지 않는다.
+    스레드가 끝나야 응답이 끝나므로 요청 수명 안에서 끝난다(기술 검토 1절).
     """
     error_code: str | None = None
     try:
@@ -450,6 +457,7 @@ def run_turn(
         _finish_failed(job, supabase, "error", _spent_ledger_id(job, ledger_id_of(error)))
     final = _final(job, supabase, error_code)
     emit(_final_event(job, final))
+    make_quiz_material(job, supabase, runtime, job.started_at)
     return final
 
 
@@ -573,6 +581,8 @@ def _execute(
         # 턴 선점 때문에 정상 흐름에서는 생기지 않는다. 새 호출 없이 failed다(spec E29 8단계).
         raise _Failed("error", "internal_error") from None
     except (AiCallError, AiSettlementFailed, AiConfigError) as error:
+        # 공급자(Bedrock) 오류·스로틀링이면 퀴즈 자료의 explain 호출을 건너뛴다(사용자 결정 2026-11-19, MEG-243).
+        job.provider_failed = isinstance(error, AiCallError)
         # 예약한 뒤의 실패면 예외에 마지막 원장 id가 실려 있다. failed 턴에 남긴다.
         raise _Failed("error", api_error_for(error).code, ledger_id_of(error)) from None
     job.ledger_id = outcome.ledger_id
@@ -748,6 +758,10 @@ class TurnEventStream(StreamingResponse):
             await sender.body(chunk)
 
 
+# 스트림의 마지막 이벤트(spec 6절). sse()가 만드는 조각의 첫 줄이다.
+_END_EVENTS = (b"event: result\n", b"event: error\n")
+
+
 async def _pump(stream, sender: _SafeSend) -> None:
     started = last = time.monotonic()
     delayed_sent = False
@@ -765,6 +779,9 @@ async def _pump(stream, sender: _SafeSend) -> None:
             now = time.monotonic()
             if chunk is not None:
                 await sender.body(chunk)
+                if chunk.startswith(_END_EVENTS):
+                    # 마지막 이벤트 뒤에는 퀴즈 자료 처리가 끝날 때까지 keep-alive 주석만 보낸다(spec 6절, MEG-243).
+                    delayed_sent = True
             elif not delayed_sent and now >= started + DELAYED_AFTER_SECONDS:
                 await sender.body(sse("delayed", {}))
                 delayed_sent = True
@@ -977,6 +994,8 @@ async def ask(
 ):
     """질문을 받아 답을 만든다. 기본 응답은 SSE(spec 6절)이고, Accept: application/json이면 E30과 같은 JSON이다."""
     request_id = request_id_of(request)
+    # 퀴즈 자료의 AI 호출 마감은 요청을 받은 때부터 잰다. 준비(선점 전 DB 읽기)에 걸린 시간도 함수 실행 시간이다(MEG-243).
+    arrived_at = time.monotonic()
     prepared = await run_in_threadpool(
         prepare_turn,
         conversation_id,
@@ -996,6 +1015,7 @@ async def ask(
         turn = {"turn_id": prepared.payload["turn_id"], "seq": prepared.payload["seq"]}
         return TurnEventStream([sse("turn", turn), _replay_event(request_id, prepared.payload)], None)
 
+    prepared.started_at = arrived_at
     work = partial(run_turn, prepared, supabase, runtime, retriever)
     if _wants_json(request):
         final = await anyio.to_thread.run_sync(work, lambda chunk: None, abandon_on_cancel=False)
