@@ -475,3 +475,18 @@ def test_logs_have_no_term_sentence_or_question(client, fake, caplog):
     assert "stage=quiz_material" in text and "outcome=stored" in text
     for secret in (TERM, "로그에 남으면 안 되는 질문", EXPLAIN_TEXT, BODY[:20]):
         assert secret not in text
+
+
+def test_the_ai_cutoff_counts_from_when_the_request_arrived(client, fake, store, bedrock, monkeypatch):
+    # 선점 전 준비(DB 읽기 등)가 오래 걸리면 그 시간도 함수 최대 실행 시간에 들어간다. 요청을 받은 때부터 잰다.
+    monkeypatch.setattr(agent_quiz_material, "AI_CUTOFF_SECONDS", 0.2)
+    claim = fake.claim_agent_turn
+
+    def slow_claim(fields):
+        time.sleep(0.3)
+        return claim(fields)
+
+    fake.claim_agent_turn = slow_claim
+    cid = fake.conversation(A)
+    events(ask(client, cid))
+    untouched(fake, store, bedrock)

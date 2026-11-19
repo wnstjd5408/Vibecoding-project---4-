@@ -193,7 +193,7 @@ class TurnJob:
     topic_label: str = ""
     # 모델 호출을 정산한 원장 id. 그 뒤에 실패해도 failed 턴에 남겨 비용과 턴을 잇는다(spec 9절).
     ledger_id: int | None = None
-    # 요청을 받아 턴을 준비한 시각(time.monotonic). 퀴즈 자료 처리가 함수 최대 실행 시간을 넘지 않게 하는 데 쓴다(MEG-243).
+    # 요청을 받은 시각(time.monotonic). ask가 덮어쓴다. 퀴즈 자료 처리가 함수 최대 실행 시간을 넘지 않게 하는 데 쓴다(MEG-243).
     started_at: float = field(default_factory=time.monotonic)
 
 
@@ -990,6 +990,8 @@ async def ask(
 ):
     """질문을 받아 답을 만든다. 기본 응답은 SSE(spec 6절)이고, Accept: application/json이면 E30과 같은 JSON이다."""
     request_id = request_id_of(request)
+    # 퀴즈 자료의 AI 호출 마감은 요청을 받은 때부터 잰다. 준비(선점 전 DB 읽기)에 걸린 시간도 함수 실행 시간이다(MEG-243).
+    arrived_at = time.monotonic()
     prepared = await run_in_threadpool(
         prepare_turn,
         conversation_id,
@@ -1009,6 +1011,7 @@ async def ask(
         turn = {"turn_id": prepared.payload["turn_id"], "seq": prepared.payload["seq"]}
         return TurnEventStream([sse("turn", turn), _replay_event(request_id, prepared.payload)], None)
 
+    prepared.started_at = arrived_at
     work = partial(run_turn, prepared, supabase, runtime, retriever)
     if _wants_json(request):
         final = await anyio.to_thread.run_sync(work, lambda chunk: None, abandon_on_cancel=False)
