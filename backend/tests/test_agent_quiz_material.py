@@ -31,7 +31,7 @@ from test_agent_turns import (
 
 from app import agent_quiz_material, agent_turns
 from app.agent_retrieval import FixedRetriever
-from app.ai_ledger import AiLimitReached
+from app.ai_ledger import AiLimitReached, LedgerKeyExists
 from app.glossary import study_date
 from app.glossary_spans import normalize_key
 from app.supabase import SupabaseUnavailable
@@ -151,10 +151,13 @@ class OrderedStore(AgentStore):
         super().__init__()
         self.log: list[tuple] = []
         self.limit_kinds: set[str] = set()
+        self.exists_kinds: set[str] = set()
 
     def reserve(self, **kwargs):
         if kwargs["kind"] in self.limit_kinds:
             raise AiLimitReached()
+        if kwargs["kind"] in self.exists_kinds:
+            raise LedgerKeyExists("reserved")
         reservation = super().reserve(**kwargs)
         self.log.append(("reserve", kwargs["kind"]))
         return reservation
@@ -396,16 +399,29 @@ def _unexpected(fake, store, bedrock):
     fake.find_error = RuntimeError("합성 오류")
 
 
-@pytest.mark.parametrize("failure", [_limit, _bedrock_error, _store_down, _unexpected],
-                         ids=["explain_limit", "bedrock_error", "store_down", "unexpected"])
-def test_material_failures_leave_the_turn_result_unchanged(client, fake, store, bedrock, failure):
+def _key_exists(fake, store, bedrock):
+    # 같은 턴 키의 explain 예약이 이미 있다(정상 흐름에서는 선점 때문에 생기지 않는다).
+    store.exists_kinds = {"explain"}
+
+
+@pytest.mark.parametrize(
+    ("failure", "outcome"),
+    [(_limit, "limit"), (_bedrock_error, "ai_error"), (_store_down, "error"), (_unexpected, "error"),
+     (_key_exists, "exists")],
+    ids=["explain_limit", "bedrock_error", "store_down", "unexpected", "key_exists"],
+)
+def test_material_failures_leave_the_turn_result_unchanged(client, fake, store, bedrock, caplog, failure, outcome):
     expected = _turn_result(client, fake)
     failure(fake, store, bedrock)
+    caplog.set_level(logging.INFO, logger="app.agent")
+    caplog.clear()
     cid = fake.conversation(A)
     parsed = events(ask(client, cid))
     assert (names(parsed), parsed[-1][1]["status"], parsed[-1][1]["result"]) == expected
     assert last_finish_status(fake) == "completed"
     assert fake.term_views == set()
+    # 실패 분기까지 갔는지 결과 종류로 확인한다(용어가 아니라서 건너뛴 것이 아니다).
+    assert f"outcome={outcome}" in caplog.text
 
 
 def last_finish_status(fake):
@@ -444,9 +460,10 @@ def test_a_same_key_replay_does_not_run_material_again(client, fake, store, bedr
 
 
 def test_after_the_last_event_the_stream_sends_only_keep_alive_comments(fake, store, bedrock, monkeypatch):
-    monkeypatch.setattr(agent_turns, "DELAYED_AFTER_SECONDS", 0.3)
-    monkeypatch.setattr(agent_turns, "KEEPALIVE_SECONDS", 0.15)
-    bedrock.explain_delay = 0.8
+    # 턴 자체는 가짜라 수 밀리초에 끝난다. 기준을 1초로 넉넉히 두어 느린 실행기에서도 delayed가 result보다 먼저 나가지 않게 한다.
+    monkeypatch.setattr(agent_turns, "DELAYED_AFTER_SECONDS", 1.0)
+    monkeypatch.setattr(agent_turns, "KEEPALIVE_SECONDS", 0.3)
+    bedrock.explain_delay = 1.6
     client = TestClient(build_app(fake, store, bedrock, FixedRetriever(PARAGRAPHS)))
     cid = fake.conversation(A)
     parsed = events(ask(client, cid))
@@ -490,3 +507,37 @@ def test_the_ai_cutoff_counts_from_when_the_request_arrived(client, fake, store,
     cid = fake.conversation(A)
     events(ask(client, cid))
     untouched(fake, store, bedrock)
+
+
+def test_a_cancelled_turn_still_creates_material(client, fake, store, bedrock):
+    # 설계 결정: 실행까지 간 턴이면 결과(completed·failed·cancelled)와 관계없이 돈다. 사용자가 그 용어를 물었기 때문이다.
+    touch = fake.touch_agent_turn
+
+    def cancel_before_compose(user_id, turn_id, step, lease_expires_at, paragraph_count=None):
+        if step == "compose":
+            fake.turns[turn_id]["status"] = "cancelled"
+        return touch(user_id, turn_id, step, lease_expires_at, paragraph_count)
+
+    fake.touch_agent_turn = cancel_before_compose
+    cid = fake.conversation(A)
+    parsed = events(ask(client, cid))
+    assert parsed[-1][0] == "result" and parsed[-1][1]["status"] == "cancelled"
+    assert bedrock.kinds() == ["explain"] and fake.terms[KEY]["explanations"]
+
+
+def test_a_selection_on_a_hidden_image_token_changes_nothing(client, fake, store, bedrock):
+    body = "그림 ![구조](note-image:abc123) 을 본다."
+    fake.note_rows[PUBLIC]["body_markdown"] = body
+    start = body.index("note-image:abc123")
+    cid = fake.conversation(A)
+    fake.selections[-1].update(start=start, end=start + len("note-image:abc123"), text_snapshot="note-image:abc123")
+    events(ask(client, cid))
+    untouched(fake, store, bedrock)
+
+
+def test_a_private_note_cached_ai_term_records_a_view(client, fake, store, bedrock):
+    term = fake.add_term(TERM, explanation="이미 있는 설명")
+    cid = fake.conversation(OP, note_id=PRIVATE)
+    events(ask(client, cid, token="op-token"))
+    assert bedrock.kinds() == ["agent"] and fake.store_calls == []
+    assert fake.term_views == {(OP, term["id"], _kst_today())}
