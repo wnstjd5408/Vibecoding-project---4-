@@ -394,3 +394,107 @@ def test_concurrent_upsert_delete_and_add_image_keep_a_consistent_state(db):
     assert sql(db, f"""select exists (select 1 from public.glossary_images i
                                        where i.term_id = {term_id}
                                          and not exists (select 1 from public.glossary_entries e where e.term_id = i.term_id));""") == "f"
+
+
+# --- MEG-249 (T4a): 사전 저장마다 오르는 개정 번호 terms.glossary_revision ---
+
+
+def revision(database, term_id):
+    return int(sql(database, f"select glossary_revision from public.terms where id = {term_id};"))
+
+
+def test_each_save_increments_glossary_revision_by_one(db):
+    """AC-1. 처음 등록하면 1이고, 같은 key를 다시 저장할 때마다 1씩 오른다. 응답 모양은 그대로다."""
+    user = new_user(db)
+    first = upsert(db, "revterm", "RevTerm", "v1", user)
+    assert set(first) == {"id", "key", "label", "created"}
+    assert revision(db, first["id"]) == 1
+    for expected in (2, 3):
+        again = upsert(db, "revterm", "RevTerm", f"v{expected}", user)
+        assert again["id"] == first["id"] and again["created"] is False
+        assert revision(db, first["id"]) == expected
+
+
+def test_revision_continues_after_delete_and_registering_the_same_key_again(db):
+    """AC-2. E21은 번호를 건드리지 않고, 같은 key로 다시 등록하면 0이나 1로 돌아가지 않고 이어서 오른다."""
+    operator = new_user(db)
+    term_id = upsert(db, "comeback", "Comeback", "first", operator)["id"]
+    upsert(db, "comeback", "Comeback", "second", operator)
+    assert revision(db, term_id) == 2
+
+    sql(db, as_service(f"select public.glossary_delete_entry({term_id}, '{BUCKET}');"))
+    assert sql(db, f"select source from public.terms where id = {term_id};") == "ai"
+    assert revision(db, term_id) == 2
+
+    again = upsert(db, "comeback", "Comeback", "third", operator)
+    assert again["id"] == term_id and again["created"] is True
+    assert revision(db, term_id) == 3
+    upsert(db, "comeback", "Comeback", "fourth", operator)
+    assert revision(db, term_id) == 4
+
+
+def test_ai_term_starts_at_zero_and_ai_store_does_not_change_the_revision(db):
+    """AI 설명 저장(E09)이 만든 용어는 0이고, 사전으로 처음 등록하면 1이다. 다른 용어의 번호는 그대로다."""
+    note = new_published_note(db)
+    out = sql(db, as_service(store_call(note, "aifirst", "AiFirst")))
+    assert out.split()[0] == "stored"
+    term_id = int(sql(db, "select id from public.terms where key = 'aifirst';"))
+    assert revision(db, term_id) == 0
+
+    other = upsert(db, "bystander", "Bystander", "body", new_user(db))["id"]
+    upsert(db, "aifirst", "AiFirst", "dictionary", new_user(db))
+    assert revision(db, term_id) == 1
+    assert revision(db, other) == 1
+
+
+def test_concurrent_saves_of_the_same_key_increment_once_each(db):
+    """동시에 저장해도 저장 하나에 번호 하나씩 오른다(갱신이 terms 행을 잠근다)."""
+    user = new_user(db)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = list(pool.map(lambda i: upsert(db, "racerev", f"RaceRev{i}", f"b{i}", user), range(6)))
+    assert len({r["id"] for r in results}) == 1
+    assert revision(db, results[0]["id"]) == 6
+
+
+def test_negative_revision_is_rejected_by_the_schema(db):
+    term_id = upsert(db, "guardrev", "GuardRev", "", new_user(db))["id"]
+    error = run_sql(db, f"update public.terms set glossary_revision = -1 where id = {term_id};", expect_ok=False)
+    assert "terms_glossary_revision_check" in error
+
+
+def test_migration_keeps_existing_rows_and_starts_them_at_zero(database):
+    """추가만 하는 마이그레이션이다. 이전 마이그레이션까지 적용한 DB의 사전 항목은 값이 그대로이고 번호는 0이다.
+
+    그 뒤 처음 저장하면 1이 된다. database 고정물은 역할(anon·authenticated·service_role)을 만들려고 받는다.
+    """
+    name = "meg249_" + uuid.uuid4().hex
+    root = Path(__file__).resolve().parents[3]
+    migrations = sorted((root / "supabase" / "migrations").glob("*.sql"))
+    target = next(m for m in migrations if m.name.endswith("_glossary_revision.sql"))
+    sql("postgres", f"create database {name};")
+    try:
+        sql(name, "create schema auth; create table auth.users(id uuid primary key); grant usage on schema public to service_role;")
+        for migration in migrations:
+            if migration.name >= target.name:
+                break
+            sql(name, migration.read_text(encoding="utf-8"))
+        operator = new_user(name)
+        old = upsert(name, "legacy", "Legacy", "legacy body", operator)
+        sql(name, "insert into public.terms (key, label, source) values ('legacyai', 'legacyai', 'ai');")
+        before = sql(name, "select string_agg(t.id || ':' || t.key || ':' || t.label || ':' || t.source || ':' || "
+                           "coalesce(e.body_markdown, '-'), ',' order by t.id) from public.terms t "
+                           "left join public.glossary_entries e on e.term_id = t.id;")
+
+        for migration in migrations:
+            if migration.name >= target.name:
+                sql(name, migration.read_text(encoding="utf-8"))
+
+        after = sql(name, "select string_agg(t.id || ':' || t.key || ':' || t.label || ':' || t.source || ':' || "
+                          "coalesce(e.body_markdown, '-'), ',' order by t.id) from public.terms t "
+                          "left join public.glossary_entries e on e.term_id = t.id;")
+        assert after == before
+        assert sql(name, "select string_agg(glossary_revision::text, ',' order by id) from public.terms;") == "0,0"
+        upsert(name, "legacy", "Legacy", "edited", operator)
+        assert revision(name, old["id"]) == 1
+    finally:
+        sql("postgres", f"drop database {name} with (force);")
