@@ -11,7 +11,8 @@
 -- ---------------------------------------------------------------------------
 -- 1. 열 추가
 -- ---------------------------------------------------------------------------
--- 상수 기본값이 있는 not null 열 추가라 테이블을 다시 쓰지 않는다.
+-- 상수 기본값이 있는 not null 열 추가라 테이블을 다시 쓰지 않는다. 같은 문장의 check 제약은 기존 행을 한 번 읽어
+-- 확인하므로 그동안 terms에 배타 잠금이 걸린다. 지금 terms는 작아 짧게 끝난다.
 alter table public.terms
   add column glossary_revision integer not null default 0
     constraint terms_glossary_revision_check check (glossary_revision >= 0);

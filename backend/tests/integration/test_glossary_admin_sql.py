@@ -446,6 +446,12 @@ def test_ai_term_starts_at_zero_and_ai_store_does_not_change_the_revision(db):
     assert revision(db, term_id) == 1
     assert revision(db, other) == 1
 
+    # 사전에서 지워 AI 용어로 돌아간 뒤 E09가 설명을 저장해도 번호는 그대로다.
+    sql(db, as_service(f"select public.glossary_delete_entry({term_id}, '{BUCKET}');"))
+    out = sql(db, as_service(store_call(note, "aifirst", "AiFirst")))
+    assert out.split()[0] == "stored"
+    assert revision(db, term_id) == 1
+
 
 def test_concurrent_saves_of_the_same_key_increment_once_each(db):
     """동시에 저장해도 저장 하나에 번호 하나씩 오른다(갱신이 terms 행을 잠근다)."""
