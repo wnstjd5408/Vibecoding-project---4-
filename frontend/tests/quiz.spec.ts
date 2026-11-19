@@ -20,7 +20,7 @@ test('AC-1 로그인하면 오늘의 퀴즈 문항 목록이 보인다', async (
   await page.setViewportSize({ width: 390, height: 844 })
   await loginAsMember(page)
   await expect(page.getByRole('heading', { level: 1, name: '오늘의 퀴즈' })).toBeVisible()
-  await expect(page.getByText('어제 열어 본·즐겨찾기한 용어로 만들었어요.')).toBeVisible()
+  await expect(page.getByText('어제 열어 보거나 즐겨찾기한 용어로 만들었어요.')).toBeVisible()
   await expect(page.getByRole('heading', { level: 2, name: '합성 질문 1입니다.' })).toBeVisible()
   await expect(page.getByRole('heading', { level: 2, name: '합성 질문 2입니다.' })).toBeVisible()
   await expect(page.getByRole('main').getByRole('listitem')).toHaveCount(2)
