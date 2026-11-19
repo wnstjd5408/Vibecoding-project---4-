@@ -125,6 +125,7 @@ class MixedBedrock:
     def __init__(self):
         self.log: list[tuple[str, str]] = []
         self.explain_steps: list = []
+        self.agent_steps: list = []
         self.explain_delay = 0.0
 
     def kinds(self) -> list[str]:
@@ -135,7 +136,10 @@ class MixedBedrock:
         kind = {1500: "agent", 600: "explain"}[kwargs["inferenceConfig"]["maxTokens"]]
         self.log.append((kind, prompt))
         if kind == "agent":
-            return bedrock_reply(answer_json())
+            step = self.agent_steps.pop(0) if self.agent_steps else bedrock_reply(answer_json())
+            if isinstance(step, Exception):
+                raise step
+            return step
         if self.explain_delay:
             time.sleep(self.explain_delay)
         step = self.explain_steps.pop(0) if self.explain_steps else bedrock_reply(EXPLAIN_TEXT)
@@ -541,3 +545,37 @@ def test_a_private_note_cached_ai_term_records_a_view(client, fake, store, bedro
     events(ask(client, cid, token="op-token"))
     assert bedrock.kinds() == ["agent"] and fake.store_calls == []
     assert fake.term_views == {(OP, term["id"], _kst_today())}
+
+
+# --- 2026-11-19 결정: agent 호출이 Bedrock 오류로 실패한 턴은 explain을 부르지 않는다 ---
+
+
+def _denied():
+    return ClientError({"Error": {"Code": "AccessDeniedException", "Message": "합성"}}, "Converse")
+
+
+def test_a_turn_whose_agent_call_failed_at_bedrock_does_not_call_explain(client, fake, store, bedrock):
+    bedrock.agent_steps = [_denied(), _denied()]
+    cid = fake.conversation(A)
+    parsed = events(ask(client, cid))
+    assert parsed[-1][0] == "error" and parsed[-1][1]["error"]["code"] == "ai_unavailable"
+    assert "explain" not in bedrock.kinds()
+    assert [r["kind"] for r in store.reserves if r["kind"] == "explain"] == []
+    assert fake.store_calls == [] and fake.term_views == set()
+
+
+def test_a_bedrock_failed_turn_still_records_a_view_for_a_known_term(client, fake, bedrock):
+    term = fake.add_term(TERM, glossary=True)
+    bedrock.agent_steps = [_denied(), _denied()]
+    cid = fake.conversation(A)
+    events(ask(client, cid))
+    assert fake.term_views == {(A, term["id"], _kst_today())}
+
+
+def test_an_output_format_failure_is_not_a_provider_failure_and_still_calls_explain(client, fake, bedrock):
+    # 형식 실패도 ai_unavailable로 끝나지만 공급자는 응답했다. explain은 그대로 부른다.
+    bedrock.agent_steps = [bedrock_reply("JSON이 아닌 답")]
+    cid = fake.conversation(A)
+    parsed = events(ask(client, cid))
+    assert parsed[-1][0] == "error" and parsed[-1][1]["error"]["code"] == "ai_unavailable"
+    assert bedrock.kinds() == ["agent", "explain"] and fake.terms[KEY]["explanations"]

@@ -10,6 +10,8 @@ E09와 같은 저장 경로로 공유 설명(`ai_explanations`, `terms`의 sourc
   (pick_term_and_sentence, 80자 이하)으로 용어 하나가 될 때다. 첫 턴에 한정하지 않는다.
 - 사전 용어나 유효한 AI 설명이 있으면 AI를 부르지 않고 열람만 기록한다(노트가 비공개여도 같다).
 - 비공개 노트의 사전 밖 용어는 AI를 부르지 않는다(저장하지 않을 결과에 비용을 쓰지 않는다, spec v0.2 5.7).
+- 이 턴의 agent 호출이 Bedrock 오류·스로틀링(AiCallError)으로 실패했으면 AI를 부르지 않는다(사용자 결정 2026-11-19).
+  열람 기록은 남긴다. 출력 형식 실패는 공급자 실패가 아니라서 그대로 부른다.
 - 입력은 E09와 같이 용어와 서버가 지금 본문에서 자른 노트 문장뿐이다. 질문·답변·선택 원문(text_snapshot)은 넣지 않는다.
 - 결과는 턴 행·이벤트·응답에 넣지 않는다. 이 처리의 실패와 한도 초과는 모두 여기서 삼킨다.
 - 로그에는 턴 id·결과 종류·오류 이름만 남긴다. 용어·문장·질문은 남기지 않는다.
@@ -98,6 +100,10 @@ def _make(job: Any, supabase: SupabaseClient, runtime: AiRuntime, started_at: fl
         return "private"
     if time.monotonic() - started_at > AI_CUTOFF_SECONDS:
         return "late"
+    if getattr(job, "provider_failed", False):
+        # 이 턴의 agent 호출이 Bedrock 오류·스로틀링으로 실패했다. 같은 공급자를 바로 다시 부르지 않는다. 다음 턴에서 다시 본다
+        # (사용자 결정 2026-11-19). 출력 형식 실패는 공급자 실패가 아니므로 여기에 들지 않는다.
+        return "provider_failed"
 
     try:
         result = run_ai_call(

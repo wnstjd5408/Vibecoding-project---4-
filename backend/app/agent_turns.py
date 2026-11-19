@@ -195,6 +195,8 @@ class TurnJob:
     ledger_id: int | None = None
     # 요청을 받은 시각(time.monotonic). ask가 덮어쓴다. 퀴즈 자료 처리가 함수 최대 실행 시간을 넘지 않게 하는 데 쓴다(MEG-243).
     started_at: float = field(default_factory=time.monotonic)
+    # agent 호출이 공급자 오류(AiCallError)로 실패했는가. 그러면 퀴즈 자료가 같은 공급자를 바로 다시 부르지 않는다(MEG-243).
+    provider_failed: bool = False
 
 
 @dataclass
@@ -579,6 +581,8 @@ def _execute(
         # 턴 선점 때문에 정상 흐름에서는 생기지 않는다. 새 호출 없이 failed다(spec E29 8단계).
         raise _Failed("error", "internal_error") from None
     except (AiCallError, AiSettlementFailed, AiConfigError) as error:
+        # 공급자(Bedrock) 오류·스로틀링이면 퀴즈 자료의 explain 호출을 건너뛴다(사용자 결정 2026-11-19, MEG-243).
+        job.provider_failed = isinstance(error, AiCallError)
         # 예약한 뒤의 실패면 예외에 마지막 원장 id가 실려 있다. failed 턴에 남긴다.
         raise _Failed("error", api_error_for(error).code, ledger_id_of(error)) from None
     job.ledger_id = outcome.ledger_id
