@@ -10,9 +10,12 @@
   문자열로 쓴다. 값이 0 이상 정수가 아니면 그 항목을 뺀다(개정을 모르는 문단을 인용하지 않는다).
 - 문단 분할: 노트와 같은 note_chunks를 쓴다(설계 3.4). E32의 바뀜 판정과 검색 평가가 같은 규칙을 써야 하기 때문이다.
 - 점수 [제안값]: T3b의 낱말 추출(keywords)과 키워드 점수를 그대로 쓴다. 여기에 개념 가산점을 더한다.
-  - wiki_ref 항목(위키에서 연 대화): WIKI_REF_BONUS. 질문 낱말이 없어도("더 쉽게 설명해 줘") 그 항목 문단은 후보다.
-  - 질문·선택 문맥에 나오는 사전 용어의 항목(E05와 같은 찾기 규칙, find_spans): MENTION_BONUS. 이 항목 문단도 후보다.
-  - 나머지 항목은 질문 낱말이 하나라도 들어 있어야 후보다(노트 검색과 같다).
+  - 후보는 노트 검색과 같다: 질문 낱말(질문에 낱말이 없으면 문맥 낱말)이 하나라도 들어 있는 문단이다. 가산점은
+    순서만 바꾼다. 그래야 관계없는 질문이 '근거 없음'(P6)으로 끝날 수 있다.
+  - wiki_ref 항목(위키에서 연 대화): WIKI_REF_BONUS. 예외로, 질문 자체에 낱말이 없을 때("더 쉽게 설명해 주세요")는
+    낱말이 맞지 않아도 그 항목 문단이 후보다. 질문에 낱말이 있는데 맞지 않으면 그 항목도 후보가 아니다.
+  - 질문·선택 문맥에 나오는 사전 용어의 항목(E05와 같은 찾기 규칙, find_spans): MENTION_BONUS. 한글 용어는 조사 때문에
+    부분 문자열로 찾으므로("리포트" 속 "포트") 후보를 늘리는 데 쓰지 않는다.
 - 중복과 상한 [제안값]: 같은 문단 원문(공백 정리 후)은 점수가 높은 하나만 남긴다. 한 항목에서 최대 MAX_PER_ENTRY문단,
   전체 MAX_RESULTS문단(근거 문단 상한과 같다).
 - 선택 문맥 제외는 하지 않는다. 선택은 노트이고 근거는 위키라서 자기 인용 문제가 없다(설계 3.5).
@@ -162,6 +165,7 @@ def search_wiki(rows: Iterable[dict[str, Any]], question: str, context: Retrieva
 
 def search_entries(entries: Sequence[WikiEntry], question: str, context: RetrievalContext) -> list[Paragraph]:
     asked = keywords(question)
+    question_has_words = bool(asked)
     context_text = "\n".join([*context.selection_texts, context.topic_label, *context.recent_questions[-1:]])
     around = [word for word in keywords(context_text) if word not in asked]
     if not asked:
@@ -178,13 +182,15 @@ def search_entries(entries: Sequence[WikiEntry], question: str, context: Retriev
             bonus += WIKI_REF_BONUS
         if entry.term_id in mentioned:
             bonus += MENTION_BONUS
-        if not asked and not bonus:
+        # 질문에 낱말이 없을 때만 wiki_ref 항목은 낱말이 맞지 않아도 후보다(모듈 설명).
+        open_entry = entry.term_id == referenced and not question_has_words
+        if not asked and not open_entry:
             continue
         for index, chunk in enumerate(note_chunks(entry.body)):
             body = chunk.text.lower()
             head = f"{entry.label}\n{chunk.section or ''}".lower()
             main = keyword_score(asked, body, head)
-            if main <= 0 and not bonus:
+            if main <= 0 and not open_entry:
                 continue
             total = main + CONTEXT_WEIGHT * keyword_score(around, body, head) + bonus
             paragraph = Paragraph(

@@ -137,11 +137,32 @@ def test_the_wiki_ref_entry_ranks_first_when_scores_would_tie():
     assert referred[0].source_id == "glossary:4"
 
 
-def test_a_term_named_in_the_question_or_selection_gets_a_bonus():
-    # 질문 낱말("과정")은 어느 항목에도 없지만 선택 문맥에 TCP가 있다.
-    found = search_wiki([DNS, TCP], "이 과정", context(selection_note_ids=(1,), selection_texts=("TCP 연결 과정",)))
+def test_a_term_named_in_the_selection_reorders_but_does_not_add_candidates():
+    udp = entry(1, "UDP", "# 정의\nUDP는 연결 없이 보낸다.")
+    plain = search_wiki([udp, TCP], "연결", context())
+    assert plain[0].source_id == "glossary:3"
+    named = search_wiki([udp, TCP], "연결", context(selection_note_ids=(1,), selection_texts=("UDP 이야기",)))
+    assert named[0].source_id == "glossary:1"
+    # 질문 낱말("과정")이 어느 항목에도 없으면, 선택에 TCP가 있어도 근거가 없다.
+    assert search_wiki([udp, TCP], "이 과정", context(selection_note_ids=(1,), selection_texts=("TCP 연결 과정",))) == []
+
+
+def test_a_question_without_its_own_words_falls_back_to_the_selection_words():
+    found = search_wiki([DNS, TCP], "이거 설명해 줘", context(selection_note_ids=(1,), selection_texts=("TCP 연결 과정",)))
     assert found and {p.source_id for p in found} == {"glossary:3"}
-    assert search_wiki([DNS, TCP], "이 과정", context()) == []
+
+
+def test_off_topic_questions_end_without_evidence():
+    port = entry(1, "포트", "# 정의\n포트는 통신 끝점 번호다.\n\n# 예시\nHTTP는 80번을 쓴다.")
+    rows = [port, DNS]
+    # 한글 용어는 부분 문자열로 찾혀 "리포트" 속에서 "포트"가 나오지만, 후보를 늘리지 않는다.
+    assert search_wiki(rows, "주간 리포트 양식 알려줘", context()) == []
+    assert search_wiki(rows, "점심 메뉴 추천", context(selection_note_ids=(1,), selection_texts=("리포트를 제출한다",))) == []
+    # 위키에서 연 대화라도 질문에 낱말이 있는데 맞지 않으면 근거가 없다(P6).
+    assert search_wiki(rows, "오늘 점심 메뉴 추천", context(origin="wiki", wiki_ref="glossary:2")) == []
+    # 맞는 문단이 wiki_ref 항목의 맞지 않는 문단에 밀리지 않는다.
+    found = search_wiki(rows, "HTTP 80번", context(origin="wiki", wiki_ref="glossary:2"))
+    assert [p.source_id for p in found] == ["glossary:1"]
 
 
 def test_an_invalid_wiki_ref_gives_no_bonus():

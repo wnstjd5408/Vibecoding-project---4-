@@ -63,6 +63,7 @@ FIELDS = (
 _CASE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _SPACES = re.compile(r"\s+")
+_COUNT_ONLY = re.compile(r"stage=[a-z_]+(?: (?:source_kind=(?:note|wiki)|[a-z_]+=[0-9]+))*")
 _EVAL_USER_ID = "00000000-0000-4000-8000-0000000000e0"
 
 
@@ -219,6 +220,10 @@ def _case_rules(case: dict[str, Any]) -> str | None:
         return None
     if route not in ("P3", "P5", "P6"):
         return "route_action_mismatch"
+    if case["selections"] and case["origin"] != "note":
+        return "selections_need_note_origin"
+    if {item["source_id"] for item in case["gold"]} & set(case["forbidden_source_ids"]):
+        return "gold_is_forbidden"
     if len(case["text"]) > MAX_QUESTION_CHARS:
         return "question_too_long"
     if case["expected_term_id"] is not None:
@@ -330,20 +335,25 @@ def _context(case: dict[str, Any]) -> RetrievalContext:
     )
 
 
-def _leaks(case: dict[str, Any], paragraphs: list[Paragraph], messages: list[str]) -> dict[str, int]:
+def _leaks(case: dict[str, Any], paragraphs: list[Paragraph], messages: list[str], current: set[str]) -> dict[str, int]:
     forbidden_texts = [_normal(text) for text in case["forbidden_texts"]]
     forbidden_ids = set(case["forbidden_source_ids"])
     output = 0
     for paragraph in paragraphs:
         text = _normal(paragraph.text)
         output += paragraph.source_kind != SOURCE_KIND
-        output += paragraph.source_id in forbidden_ids
+        # Anything that is not a current entry of the snapshot (deleted, AI-only) is a leak even if the case
+        # forgot to list it (S1).
+        output += paragraph.source_id in forbidden_ids or paragraph.source_id not in current
         output += sum(forbidden in text for forbidden in forbidden_texts)
     # Logs must carry only stage and counts: no question, selection, paragraph or forbidden text (S10).
     secrets = [_normal(case["text"]), *(_normal(item["text"]) for item in case["selections"]),
                *(_normal(p.text) for p in paragraphs), *forbidden_texts]
     secrets = [secret for secret in secrets if secret]
-    log = sum(secret in _normal(message) for message in messages for secret in secrets)
+    # A count-only line (stage=..., key=number or a fixed source kind) cannot carry text, so a short question
+    # such as "wiki" that happens to match its fixed words is not a leak.
+    log = sum(secret in _normal(message) for message in messages if not _COUNT_ONLY.fullmatch(message)
+              for secret in secrets)
     return {"output": output, "log": log}
 
 
@@ -386,6 +396,7 @@ def evaluate(snapshot: dict[str, Any], cases: list[dict[str, Any]], k: int = MAX
     if not 1 <= k <= MAX_RESULTS:
         raise DatasetError("run: invalid_k")
     entries, skipped = wiki_entries(snapshot["terms"])
+    current = {wiki_source_id(entry.term_id) for entry in entries}
     retriever = WikiRetriever(_SnapshotSource(snapshot["terms"]))
     agent_logger = logging.getLogger("app.agent")
 
@@ -442,7 +453,7 @@ def evaluate(snapshot: dict[str, Any], cases: list[dict[str, Any]], k: int = MAX
                 row["e5_no_evidence"] = not found
                 e5_n += 1
                 e5 += row["e5_no_evidence"]
-            leaks = _leaks(case, found, capture.messages)
+            leaks = _leaks(case, found, capture.messages, current)
             row["e6_leaks"] = leaks
             leaks_output += leaks["output"]
             leaks_log += leaks["log"]

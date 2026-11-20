@@ -52,7 +52,7 @@ uv run pytest tests/test_eval_wiki_retrieval.py tests/test_agent_wiki_search.py 
 | forbidden_texts | 결과와 로그에 나오면 안 되는 문자열(카나리). 비공개 노트 선택 문장, 지운 항목 본문 등 |
 | forbidden_source_ids | 결과에 나오면 안 되는 source_id(지운 항목 등) |
 
-규칙: open은 P1·P4만, ask는 P3·P5·P6만 쓴다. P3은 origin wiki, P5는 wiki가 아닌 origin이다. ask에서 gold가 비어 있으면 P6(근거 없음)이고 required_conditions도 비어야 한다. gold·expected_term_id·wiki_ref는 스냅숏의 지금 있는 항목과 맞아야 한다(`gold_not_in_snapshot` 등). 사전 본문이 바뀌면 해시가 달라지므로 사례를 다시 검수한다.
+규칙: open은 P1·P4만, ask는 P3·P5·P6만 쓴다. P3은 origin wiki, P5는 wiki가 아닌 origin이다. selections는 origin note에서만 쓴다. gold의 source_id를 forbidden_source_ids에 넣을 수 없다. ask에서 gold가 비어 있으면 P6(근거 없음)이고 required_conditions도 비어야 한다. gold·expected_term_id·wiki_ref는 스냅숏의 지금 있는 항목과 맞아야 한다(`gold_not_in_snapshot` 등). 사전 본문이 바뀌면 해시가 달라지므로 사례를 다시 검수한다.
 
 P2(별칭, MEG-198), P7(부분 근거, 모델 필요), P8(웹 보완, T4 밖), P9(별칭·대표 페이지 연결 오류)는 지금 모델 없이 잴 수 없어 `route_not_evaluable`로 거부한다.
 
@@ -65,7 +65,9 @@ P2(별칭, MEG-198), P7(부분 근거, 모델 필요), P8(웹 보완, T4 밖), P
 | E3 Recall@k | gold가 있는 ask 사례 | 정답 문단이 하나라도 상위 k개 안에 있다. 정답 문단 단위 비율(`E3_gold_paragraphs_at_k`)도 함께 낸다 |
 | E4 필수 조건 확보 | E3 사례의 필수 조건 전체 | 조건 구절(공백 정리)이 상위 k개 문단 하나 안에 잘리지 않고 들어 있다 |
 | E5 근거 없음 | gold가 비어 있는 ask 사례 | 검색 결과가 0개다 |
-| E6 누출 | ask 사례 | 건수. output: 위키가 아닌 문단, 금지 source_id, 금지 문자열이 결과에 나온 수. log: 검색 중 `app.agent` 로그에 질문·선택 문장·결과 문단·금지 문자열이 나온 수 |
+| E6 누출 | ask 사례 | 건수. output: 위키가 아닌 문단, 스냅숏에 지금 있는 항목이 아닌 source_id(사례에 적지 않아도 센다), 금지 source_id, 금지 문자열이 결과에 나온 수. log: 검색 중 `app.agent` 로그에 질문·선택 문장·결과 문단·금지 문자열이 나온 수. 단계와 개수만 있는 줄(`stage=… key=숫자`, `source_kind=note|wiki`)은 글을 담을 수 없으므로 보지 않는다 |
+
+ask 사례의 E1은 사례 규칙상 "근거를 찾았는가"와 origin으로 정해진다. 그래서 E3·E5와 겹치며, 맞는 문단을 찾았는지는 E3이 본다.
 
 모든 비율은 분자·분모를 함께 낸다. 합성 셋의 값은 명령이 도는지 보는 시험값이지 품질 근거가 아니다. 작은 개발 셋의 결과로 목표 달성을 말하지 않는다(설계 6.2).
 

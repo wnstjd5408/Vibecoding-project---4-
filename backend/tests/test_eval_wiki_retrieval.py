@@ -125,6 +125,28 @@ def test_a_leak_into_the_log_is_counted(snapshot, cases, monkeypatch):
     assert leaks["log"] == 9 and leaks["output"] == 0
 
 
+def test_a_short_question_matching_the_count_only_log_is_not_a_leak(snapshot, cases):
+    case = next(c for c in cases if c["case_id"] == "WRAG-DEV-005")
+    case["text"] = "wiki"
+    assert wr.evaluate(snapshot, [case])["metrics"]["E6_leaks"] == {"output": 0, "log": 0, "cases": 1}
+
+
+def test_an_entry_missing_from_the_snapshot_counts_as_a_leak_even_if_not_listed(snapshot, cases, monkeypatch):
+    # 검색이 지운 항목(106, source ai)을 돌려주는 회귀를 흉내 낸다. 사례에 금지 목록을 적지 않아도 누출로 센다.
+    leaked = copy.deepcopy(snapshot)
+    leaked["terms"][5]["source"] = "glossary"
+    for case in cases:
+        case["forbidden_source_ids"], case["forbidden_texts"] = [], []
+    original = wr.WikiRetriever.retrieve
+
+    def from_leaked_rows(self, user, question, context):
+        self._supabase = wr._SnapshotSource(leaked["terms"])
+        return original(self, user, question, context)
+
+    monkeypatch.setattr(wr.WikiRetriever, "retrieve", from_leaked_rows)
+    assert wr.evaluate(snapshot, cases)["metrics"]["E6_leaks"]["output"] >= 1
+
+
 def test_a_forbidden_entry_reaching_the_output_is_counted(snapshot, cases):
     leaked = copy.deepcopy(snapshot)
     # 어긋난 행(source ai)을 사전 항목처럼 바꾸면 금지 자료가 결과에 나온다.
@@ -149,6 +171,8 @@ def test_a_forbidden_entry_reaching_the_output_is_counted(snapshot, cases):
         (lambda c: c.update(required_conditions=["사전에 없는 조건 문장"]), "condition_not_in_gold"),
         (lambda c: c.update(text="가" * 1001), "question_too_long"),
         (lambda c: c.update(role="anonymous"), "invalid_role"),
+        (lambda c: c.update(forbidden_source_ids=["glossary:101"]), "gold_is_forbidden"),
+        (lambda c: c.update(selections=[{"note_id": 1, "text": "선택"}]), "selections_need_note_origin"),
     ],
 )
 def test_invalid_cases_report_only_line_and_code(snapshot, cases, change, code):
@@ -203,13 +227,12 @@ def test_the_output_must_be_outside_git():
 
 def test_curated_cases_inside_git_are_refused(tmp_path, cases, capsys):
     cases[0]["provenance"] = "curated"
-    inside = Path(__file__).resolve().parent / "fixtures" / "wrag_dev" / "curated-check.jsonl"
-    try:
-        write_cases(inside, cases)
-        assert wr.main(["validate", "--snapshot", str(SNAPSHOT), "--cases", str(inside)]) == 1
-        assert "curated_inside_git" in capsys.readouterr().err
-    finally:
-        inside.unlink(missing_ok=True)
+    # 저장소에 파일을 쓰지 않도록 임시 폴더에 .git을 만들어 Git 작업 폴더로 보이게 한다.
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    inside = write_cases(repo / "cases.jsonl", cases)
+    assert wr.main(["validate", "--snapshot", str(SNAPSHOT), "--cases", str(inside)]) == 1
+    assert "curated_inside_git" in capsys.readouterr().err
     outside = write_cases(tmp_path / "cases.jsonl", cases)
     assert wr.main(["validate", "--snapshot", str(SNAPSHOT), "--cases", str(outside)]) == 0
 
