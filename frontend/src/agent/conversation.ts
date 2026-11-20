@@ -19,6 +19,7 @@ import { newIdempotencyKey } from '../ai/explain.ts'
 import { cancelTurn, createConversation, openTurnStream, readConversation, readTurn } from './api.ts'
 import type {
   AgentConversation,
+  AgentQuestion,
   AgentStep,
   AgentTurn,
   AgentTurnRead,
@@ -39,7 +40,8 @@ export type StepView = { step: AgentStep; state: 'current' | 'done'; paragraphCo
 export type PendingPhase = 'creating' | 'sending' | 'streaming' | 'recovering' | 'following'
 
 export type PendingTurn = {
-  question: AskQuestion
+  // 화면에 보여 줄 질문. 다시 묻기는 대상 턴의 질문이다(가린 추천 질문이면 글이 없다).
+  question: AgentQuestion
   phase: PendingPhase
   // 이 턴의 id. turn 이벤트나 409의 turn_id로 안다. following이면 이어 보는 다른 턴의 id다.
   turnId: string | null
@@ -72,7 +74,7 @@ export type AgentFailure = {
   // 서버 code(또는 클라이언트 code). 화면이 문구를 더 나눌 때 쓴다.
   code: string
   // 보내려던 질문. 실패·제한 뒤에도 질문을 남겨 두는 데 쓴다. 질문과 무관한 실패(E28 등)는 null이다.
-  question: AskQuestion | null
+  question: AgentQuestion | null
   // 실패한 턴의 id. 턴이 생기기 전에 거절됐으면 null이다.
   turnId: string | null
   // 이 시각(ms) 전에는 retry()가 요청을 보내지 않는다. 기다릴 필요가 없으면 null이다.
@@ -102,6 +104,8 @@ export type AskOptions = Omit<AskTurnRequest, 'question'> & {
 // 한 사용자 동작. 같은 동작을 다시 보낼 때는 같은 key를 쓴다.
 type Action = {
   request: AskTurnRequest
+  // 화면에 보여 줄 질문(request.question, 다시 묻기면 대상 턴의 질문)
+  display: AgentQuestion
   context: CreateConversationRequest | undefined
   key: string
   // 이 동작으로 생긴 턴. failed로 끝난 턴이면 retry()가 E30으로 먼저 확인한다.
@@ -156,7 +160,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   })
 }
 
-function failureOf(error: ApiError, question: AskQuestion | null, turnId: string | null): AgentFailure {
+function failureOf(error: ApiError, question: AgentQuestion | null, turnId: string | null): AgentFailure {
   const base = { code: error.code, question, turnId, retryAt: null }
   if (error.code === 'rate_limited') {
     const seconds = error.retryAfterSeconds
@@ -269,7 +273,25 @@ export class AgentConversationController {
     }
     const action: Action = {
       request: { question, ...rest },
+      display: question,
       context,
+      key: newIdempotencyKey(),
+      turnId: null,
+      turnIdFrom: null,
+      keyRenewals: 0,
+    }
+    return this.start(action)
+  }
+
+  // '같은 질문 다시 하기'(F6-15b, spec E29 retry_of_turn_id). 질문은 보내지 않고 서버가 대상 턴에 저장된 질문을 쓴다(MEG-257).
+  // 대상은 hidden.retry_allowed가 true인 턴이다. 뒤쪽 가린 턴은 자동으로 다시 보내지 않는다(결정 17).
+  askAgain(turn: AgentTurn): Promise<void> {
+    if (this.run) return this.run.promise
+    if (this.state.conversation === null || !turn.hidden?.retry_allowed) return Promise.resolve()
+    const action: Action = {
+      request: { retry_of_turn_id: turn.turn_id },
+      display: turn.question,
+      context: undefined,
       key: newIdempotencyKey(),
       turnId: null,
       turnIdFrom: null,
@@ -463,7 +485,7 @@ export class AgentConversationController {
       failure: null,
       cancelled: null,
       pending: {
-        question: action.request.question,
+        question: action.display,
         phase: this.state.conversation === null ? 'creating' : 'sending',
         turnId: mode === 'check' ? action.turnId : null,
         seq: null,
@@ -475,7 +497,7 @@ export class AgentConversationController {
     })
     run.promise = this.execute(run, mode).catch((error: unknown) => {
       // 여기까지 온 오류는 예상하지 못한 것이다. 화면이 멈추지 않게 실패로 남긴다.
-      if (this.run === run && !(error instanceof Stopped)) this.fail(run, failureOf(unexpected(), action.request.question, action.turnId))
+      if (this.run === run && !(error instanceof Stopped)) this.fail(run, failureOf(unexpected(), action.display, action.turnId))
     })
     return run.promise
   }
@@ -522,7 +544,7 @@ export class AgentConversationController {
       const outcome = await this.send(run)
       if (outcome !== 'resend') return
       if (resends >= MAX_RESENDS) {
-        return this.fail(run, failureOf(networkError(), action.request.question, null))
+        return this.fail(run, failureOf(networkError(), action.display, null))
       }
       this.setPending(run, { turnId: null, phase: 'sending', steps: [], delayed: false })
     }
@@ -531,7 +553,7 @@ export class AgentConversationController {
   // E29를 한 번 보낸다. 'resend'면 같은 키(또는 새 키)로 한 번 더 보내야 한다.
   private async send(run: Run): Promise<'done' | 'resend'> {
     const { action, abort } = run
-    const question = action.request.question
+    const question = action.display
     let conversation = this.state.conversation
     try {
       if (conversation === null) {
@@ -579,7 +601,7 @@ export class AgentConversationController {
         return true
       case 'error': {
         const error = new ApiError(0, event.data)
-        this.fail(run, failureOf(error, run.action.request.question, run.action.turnId ?? pending.turnId))
+        this.fail(run, failureOf(error, run.action.display, run.action.turnId ?? pending.turnId))
         return true
       }
     }
@@ -593,13 +615,19 @@ export class AgentConversationController {
       this.fail(run, {
         kind: turn.failure === 'limit' ? 'limit_reached' : 'failed',
         code,
-        question: run.action.request.question,
+        question: run.action.display,
         turnId: turn.turn_id,
         retryAt: null,
       })
       return
     }
-    const patch: Partial<AgentState> = { turns: mergeTurn(this.state.turns, turn) }
+    let turns = mergeTurn(this.state.turns, turn)
+    const target = run.action.request.retry_of_turn_id
+    if (target && turn.status === 'completed') {
+      // 다시 묻기는 대상 턴마다 한 번이다. 서버도 완료된 다시 묻기 뒤에는 대상의 retry_allowed를 false로 준다(spec E29).
+      turns = turns.map((item) => (item.turn_id === target && item.hidden ? { ...item, hidden: { ...item.hidden, retry_allowed: false } } : item))
+    }
+    const patch: Partial<AgentState> = { turns }
     if (turn.status === 'cancelled') patch.cancelled = { turnId: turn.turn_id, question: turn.question }
     this.finishRun(run, patch)
   }
@@ -608,7 +636,7 @@ export class AgentConversationController {
   private async recover(run: Run): Promise<'done' | 'resend'> {
     const turnId = run.action.turnId
     if (turnId === null) {
-      this.fail(run, failureOf(networkError(), run.action.request.question, null))
+      this.fail(run, failureOf(networkError(), run.action.display, null))
       return 'done'
     }
     const outcome = await this.poll(run, turnId, 'recovering')
@@ -621,14 +649,14 @@ export class AgentConversationController {
     if (outcome.kind === 'error') {
       // 다시 해도 같은 결과인 실패(404 S9, 401 로그인 필요, 503 등)는 그대로 둔다. 그 밖에는 처리 여부를 확인하지 못한 것이라
       // network로 두고 retry()가 E30부터 다시 본다.
-      const failure = failureOf(outcome.error, run.action.request.question, turnId)
+      const failure = failureOf(outcome.error, run.action.display, turnId)
       this.fail(run, FINAL_KINDS.has(failure.kind) ? failure : { ...failure, kind: 'network' })
     }
     return 'done'
   }
 
   // 스트림이 열리기 전의 거절
-  private async rejected(run: Run, error: ApiError, question: AskQuestion): Promise<'done' | 'resend'> {
+  private async rejected(run: Run, error: ApiError, question: AgentQuestion): Promise<'done' | 'resend'> {
     const { action } = run
     if (isApiError(error, 'conflict', 'in_progress') && error.turnId) {
       // 같은 키의 턴이 진행 중이다(앞서 보낸 요청이 서버에 닿았다). 그 턴을 이어 본다.

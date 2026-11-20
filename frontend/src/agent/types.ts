@@ -165,8 +165,10 @@ export type AskReply =
   | { turn_id: string; text: string }
   | { turn_id: string; topic_choice: 'continue' }
 
+// question은 다시 묻기(retry_of_turn_id)에서만 생략한다. 서버가 대상 턴에 저장된 질문을 쓴다(MEG-257).
+// 가린 추천 질문 턴은 응답에서 질문 글이 빠지므로 화면은 질문을 보내지 않는다.
 export type AskTurnRequest = {
-  question: AskQuestion
+  question?: AskQuestion
   add_selections?: { note_id: number; note_revision: number; start: number; end: number }[]
   exclude_selection_ids?: string[]
   reply?: AskReply | null

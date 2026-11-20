@@ -3,6 +3,9 @@
 //  - 서버 쪽 턴은 스트림과 따로 진행한다. 스트림이 끊겨도 턴은 끝까지 가고, E30이 그 결과를 준다(MEG-229 Q2 실측과 같다).
 //  - 같은 키 재전송(재생·409 in_progress), 다른 대화의 키(409 idempotency_key_reused), 같은 대화의 진행 중 턴(409 turn_in_progress),
 //    E31 중단을 서버 규칙대로 돌려준다.
+//  - revokeAgentMockSources()는 지금까지 끝난 답변의 출처를 볼 수 없게 만든다. 서버의 가림 함수(agent_access.hidden_marks)처럼
+//    그 출처를 쓴 첫 턴부터 가리고, 다시 묻기(retry_of_turn_id)는 그 첫 턴에만 한 번 허용한다(MEG-260, F6-15b).
+//  - revokeAgentMockNote()는 대화의 노트를 볼 수 없게 만든다. E27~E32가 404다(F6-15).
 // 시나리오는 setAgentMockScenario로 고른다. 다시 고르거나 resetAgentMock을 부를 때까지 다음 질문마다 같은 시나리오를 쓴다.
 // 다만 rate_limited와 turn_in_progress는 한 번 거절한 뒤 answered로 돌아간다(기다린 뒤 다시 보내면 성공하는 흐름).
 // 화면 개발 중에는 브라우저 콘솔이나 시험에서 `await import('/src/api/mocks/agent.ts')`로 불러 바꿀 수 있다.
@@ -63,6 +66,10 @@ type MockTurn = {
   cutAt: number | null
   final: { status: 'completed' | 'failed'; result?: AgentResult; failure?: TurnFailure; code?: string }
   cancelledAt: number | null
+  // 다시 묻기 턴이면 대상 턴 id
+  retryOf: string | null
+  // revokeAgentMockSources()로 이 턴이 인용한 출처를 볼 수 없게 됐다
+  revoked: boolean
 }
 
 type MockConversation = { conversation: AgentConversation; turnIds: string[] }
@@ -70,6 +77,7 @@ type MockConversation = { conversation: AgentConversation; turnIds: string[] }
 const conversations = new Map<string, MockConversation>()
 const turns = new Map<string, MockTurn>()
 const keys = new Map<string, string>()
+let noteRevoked = false
 
 export function setAgentMockScenario(next: AgentMockScenario, options: { stepMs?: number } = {}): void {
   scenario = next
@@ -83,6 +91,21 @@ export function resetAgentMock(): void {
   conversations.clear()
   turns.clear()
   keys.clear()
+  noteRevoked = false
+}
+
+// 지금까지 끝난 답변(출처가 있는 completed 턴)의 출처를 볼 수 없게 만든다. 뒤에 만드는 턴은 영향이 없다.
+export function revokeAgentMockSources(): void {
+  const now = Date.now()
+  for (const turn of turns.values()) {
+    const final = turn.final.result
+    if (statusAt(turn, now).status === 'completed' && final && 'sources' in final && (final.sources ?? []).length > 0) turn.revoked = true
+  }
+}
+
+// 대화의 노트를 볼 수 없게 만든다(삭제·비공개 전환). E27~E32가 404를 돌려준다.
+export function revokeAgentMockNote(): void {
+  noteRevoked = true
 }
 
 // 시험이 보낸 요청(경로·Idempotency-Key)을 확인할 때 쓴다.
@@ -133,7 +156,7 @@ function resultFor(kind: AgentMockScenario, topic: string): AgentResult {
         state: 'correction',
         sections: [{ heading: '핵심', body: '합성 교정 설명입니다 [1].' }],
         corrections: [{ note_excerpt: '합성 노트 문장', corrected: '합성 고친 내용 [1]', source_refs: [1] }],
-        unresolved: [],
+        unresolved: ['합성 노트 문장 둘은 참고한 노트에서 확인하지 못했어요. 맞는지 틀린지는 판단하지 않았어요.'],
         sources: [NOTE_SOURCES[0]],
       }
     case 'topic_check':
@@ -174,11 +197,47 @@ function statusAt(turn: MockTurn, now: number): { status: AgentTurn['status']; s
   return { status: 'running', step: passed.at(-1)?.step ?? 'understand' }
 }
 
+type MockHidden = NonNullable<AgentTurn['hidden']>
+
+// 서버 가림 함수(agent_access.hidden_marks)를 줄인 것. 볼 수 없는 출처를 쓴 첫 턴(X)부터 가리고, X를 대상으로 한 다시 묻기 턴에서
+// 연쇄가 끝난다. 완료된 다시 묻기가 있거나 X가 가린 턴의 추천 질문이면 X의 retry_allowed는 false다.
+function hiddenMarks(conversationId: string, now: number): Map<string, MockHidden | null> {
+  const ordered = (conversations.get(conversationId)?.turnIds ?? []).map((id) => turns.get(id)!)
+  const retried = new Set(ordered.filter((turn) => turn.retryOf !== null && statusAt(turn, now).status === 'completed').map((turn) => turn.retryOf))
+  const marks = new Map<string, MockHidden | null>()
+  let first: string | null = null
+  for (const turn of ordered) {
+    const id = turn.turn.turn_id
+    if (first !== null && turn.retryOf === first) first = null
+    if (first === null && turn.revoked) {
+      first = id
+      const from = turn.turn.question.kind === 'suggested' ? turn.turn.question.from_turn_id : undefined
+      const fromHidden = from !== undefined && (marks.get(from) ?? null) !== null
+      marks.set(id, { reason: 'source_revoked', retry_allowed: !retried.has(id) && !fromHidden })
+    } else if (first === null) {
+      marks.set(id, null)
+    } else {
+      marks.set(id, { reason: 'source_revoked', retry_allowed: false })
+    }
+  }
+  return marks
+}
+
+// 가린 추천 질문 턴은 질문 글을 뺀다(agent_access.turn_payload).
+function visibleQuestion(question: AgentQuestion, hidden: MockHidden | null): AgentQuestion {
+  if (!hidden || question.kind !== 'suggested') return question
+  const { text: _text, ...rest } = question
+  void _text
+  return rest
+}
+
 function payloadOf(turn: MockTurn, now: number = Date.now()): AgentTurn {
   const { status, step } = statusAt(turn, now)
-  const payload: AgentTurn = { ...turn.turn, status }
+  const hidden = hiddenMarks(turn.conversationId, now).get(turn.turn.turn_id) ?? null
+  const payload: AgentTurn = { ...turn.turn, question: visibleQuestion(turn.turn.question, hidden), status }
+  if (hidden) payload.hidden = hidden
   if (status === 'running' && step) payload.step = step
-  if (status === 'completed') payload.result = turn.final.result
+  if (status === 'completed' && !hidden) payload.result = turn.final.result
   if (status === 'failed') payload.failure = turn.final.failure
   if (status !== 'running') {
     const at = turn.cancelledAt ?? turn.finishAt
@@ -189,6 +248,7 @@ function payloadOf(turn: MockTurn, now: number = Date.now()): AgentTurn {
 
 function questionOf(body: AskTurnRequest): AgentQuestion | null {
   const question = body.question
+  if (question === undefined) return null
   if (question.kind === 'free') return question.text ? { kind: 'free', text: question.text } : null
   if (question.kind === 'suggested') {
     return question.text && question.from_turn_id ? { kind: 'suggested', text: question.text, from_turn_id: question.from_turn_id } : null
@@ -199,7 +259,7 @@ function questionOf(body: AskTurnRequest): AgentQuestion | null {
   return null
 }
 
-function createTurn(conversation: MockConversation, key: string, question: AgentQuestion, kind: AgentMockScenario): MockTurn {
+function createTurn(conversation: MockConversation, key: string, question: AgentQuestion, kind: AgentMockScenario, retryOf: string | null = null): MockTurn {
   const now = Date.now()
   const id = newIdempotencyKey()
   const steps: [AgentStep, 'current' | 'done', Record<string, unknown>?][] = [
@@ -242,6 +302,8 @@ function createTurn(conversation: MockConversation, key: string, question: Agent
     cutAt,
     final,
     cancelledAt: null,
+    retryOf,
+    revoked: false,
   }
   if (conversation.conversation.origin === 'none' && conversation.conversation.topic_label === '' && question.text) {
     conversation.conversation.topic_label = question.text.slice(0, 20)
@@ -369,7 +431,7 @@ export function openMockTurnStream(request: {
   if (getMockSession() === 'visitor') return loginRequired()
   if (scenario === 'service_unavailable') return unavailable()
   const conversation = conversations.get(conversationId)
-  if (!conversation) return notFound()
+  if (!conversation || noteRevoked) return notFound()
   const now = Date.now()
   const existingId = keys.get(key)
   if (existingId !== undefined) {
@@ -386,7 +448,19 @@ export function openMockTurnStream(request: {
     }
     return { stream: replayStream(existing) }
   }
-  const question = questionOf(body)
+  let retryOf: string | null = null
+  let question = questionOf(body)
+  if (body.question === undefined && body.retry_of_turn_id) {
+    // 질문 없는 다시 묻기: 대상 턴에 저장된 질문을 쓴다(MEG-257). 대상은 retry_allowed가 true인 가린 턴이어야 한다.
+    const target = turns.get(body.retry_of_turn_id)
+    if (target && target.conversationId === conversationId) {
+      if (!hiddenMarks(conversationId, now).get(target.turn.turn_id)?.retry_allowed) {
+        return errorBody(409, 'conflict', 'This question cannot be sent again', { detail: 'turn_not_retryable' })
+      }
+      question = target.turn.question
+      retryOf = target.turn.turn_id
+    }
+  }
   if (question === null) {
     return errorBody(422, 'validation_failed', 'Request validation failed', {
       fields: [{ name: 'question', reason: 'invalid_value', message: 'Value is not allowed or refers to a missing item' }],
@@ -412,7 +486,12 @@ export function openMockTurnStream(request: {
     return errorBody(429, 'rate_limited', 'Too many requests; retry later', { retry_after_seconds: POLL_SECONDS })
   }
   if (scenario === 'ai_limit_reached') return errorBody(429, 'ai_limit_reached', 'AI usage limit reached; retry later')
-  const turn = createTurn(conversation, key, question, scenario)
+  // 확인 카드에 답한 질문(의미 확인 선택·보충, 주제 전환 '이 대화에서 계속')과 다시 묻기는 같은 확인을 다시 하지 않는다.
+  // 앞에 끝난 답이 없으면 그 질문이 주제를 정하므로 주제 전환 확인을 하지 않는다(agent_turns.check_request).
+  const answeredBefore = conversation.turnIds.some((turnId) => statusAt(turns.get(turnId)!, now).status === 'completed')
+  const confirmed = body.reply || retryOf
+  const kind = (confirmed && (scenario === 'clarify' || scenario === 'topic_check')) || (scenario === 'topic_check' && !answeredBefore) ? 'answered' : scenario
+  const turn = createTurn(conversation, key, question, kind, retryOf)
   return { stream: liveStream(turn, signal) }
 }
 
@@ -482,6 +561,7 @@ export const agentRoutes: Route[] = [
       log('POST', '/api/ai/conversations')
       if (getMockSession() === 'visitor') return loginRequired()
       if (scenario === 'service_unavailable') return unavailable()
+      if (noteRevoked) return notFound()
       return createConversation((body ?? {}) as CreateConversationRequest)
     },
   },
@@ -492,7 +572,7 @@ export const agentRoutes: Route[] = [
       log('GET', `/api/ai/conversations/${id}`)
       if (getMockSession() === 'visitor') return loginRequired()
       const conversation = conversations.get(decodeURIComponent(id))
-      if (!conversation) return notFound()
+      if (!conversation || noteRevoked) return notFound()
       const now = Date.now()
       return {
         status: 200,
@@ -507,7 +587,7 @@ export const agentRoutes: Route[] = [
       log('GET', `/api/ai/turns/${id}`)
       if (getMockSession() === 'visitor') return loginRequired()
       const turn = turns.get(decodeURIComponent(id))
-      if (!turn) return notFound()
+      if (!turn || noteRevoked) return notFound()
       const payload = payloadOf(turn)
       return { status: 200, body: payload.status === 'running' ? { ...payload, retry_after_seconds: POLL_SECONDS } : payload }
     },
@@ -519,7 +599,7 @@ export const agentRoutes: Route[] = [
       log('POST', `/api/ai/turns/${id}/cancel`)
       if (getMockSession() === 'visitor') return loginRequired()
       const turn = turns.get(decodeURIComponent(id))
-      if (!turn) return notFound()
+      if (!turn || noteRevoked) return notFound()
       if (statusAt(turn, Date.now()).status !== 'running') {
         return errorBody(409, 'conflict', 'The response has already finished', { detail: 'turn_not_cancellable' })
       }
@@ -533,7 +613,7 @@ export const agentRoutes: Route[] = [
     handle: (_request, [id, ref]) => {
       log('GET', `/api/ai/turns/${id}/sources/${ref}`)
       if (getMockSession() === 'visitor') return loginRequired()
-      const turn = turns.get(decodeURIComponent(id))
+      const turn = noteRevoked ? undefined : turns.get(decodeURIComponent(id))
       const payload = turn ? payloadOf(turn) : null
       const result = payload?.status === 'completed' ? payload.result : undefined
       const sources = result && 'sources' in result ? (result.sources ?? []) : []
