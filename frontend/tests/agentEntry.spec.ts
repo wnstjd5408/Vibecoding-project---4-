@@ -133,6 +133,8 @@ for (const [device, viewport] of [['PC', PC], ['모바일', MOBILE]] as const) {
     await expect(panel.getByRole('button', { name: '자세히 설명' })).toHaveCount(0)
     await expect(panel.getByRole('button', { name: '새 대화' })).toHaveCount(0)
     await expect(panel.getByText('지금은 새 질문을 받을 수 없어요. 이 대화와 출처는 계속 볼 수 있어요.')).toBeVisible()
+    // 입력 칸이 사라져도 포커스는 패널 안에 남는다(본문 body로 떨어지지 않는다)
+    expect(await panel.evaluate((dialog) => dialog.contains(document.activeElement) && document.activeElement !== document.body)).toBe(true)
     await shot(page, testInfo, `503-${device === 'PC' ? 'pc' : 'mobile'}-first 첫 질문 503`)
     // E27이 503이라 E29는 보내지 않았다
     expect(await requests(page)).toEqual(['POST /api/ai/conversations'])

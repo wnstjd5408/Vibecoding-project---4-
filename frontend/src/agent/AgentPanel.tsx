@@ -153,6 +153,12 @@ export function AgentPanel(props: AgentPanelProps) {
   const locked = pending !== null || failureLock || closed
   // 입구가 닫혀도 진행 중인 답변은 끝까지 받고 중단할 수 있어야 하므로 그동안은 입력 칸(중단 버튼)을 남긴다.
   const composerHidden = closed && pending === null
+  // 입력 칸이 사라지면(503 직후) 그 안에 있던 포커스가 문서 body로 떨어진다. 패널 제목으로 옮겨 키보드·낭독기 사용자가 자리를 잃지 않게 한다.
+  useLayoutEffect(() => {
+    if (!composerHidden) return
+    const dialog = dialogRef.current
+    if (dialog?.open && !dialog.contains(document.activeElement)) titleRef.current?.focus({ preventScroll: true })
+  }, [composerHidden])
   const fresh = state.turns.length === 0 && pending === null && failure === null
 
   const entries: Entry[] = state.turns.map((turn) => ({ kind: 'turn', key: turn.turn_id, turn }))
