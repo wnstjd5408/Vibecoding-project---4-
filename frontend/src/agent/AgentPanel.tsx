@@ -7,6 +7,8 @@
 //  - 예외 상태(의미 확인·근거 일부·근거 없음·교정·주제 전환·다른 영역 선택·접근 변경)는 T6d(MEG-260)다.
 //  - PC 보기 전환(MEG-261, T6f): 패널(F6-3), 떠 있는 창(F6-3f), 전체 화면(F6-3x). 같은 dialog의 모양만 바꾸므로 대화·초안·스크롤이 그대로 남는다.
 //  - 다시 답하기 화면과 버튼은 만들지 않는다(MEG-228, spec 부록 A).
+//  - 새 질문 입구가 닫히면(closed: 노출 중단 플래그·503, MEG-259) 입력 칸·빠른 질문·추천 질문·'새 대화'·'중단한 질문 다시 넣기'를 숨긴다.
+//    지금 대화, 이전 대화 보기, 출처 보기, 진행 중인 답변의 중단은 그대로 둔다(E28·E30·E31·E32는 플래그와 무관하다).
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { AiBadge, Button } from '../components/index.ts'
@@ -43,6 +45,8 @@ type AgentPanelProps = {
   onClose: () => void
   // 패널을 닫을 때 포커스를 돌려줄 곳(노트 본문)
   returnFocus: () => HTMLElement | null
+  // 새 질문 입구가 닫혔다(노출 중단 플래그 또는 E27·E29의 503, agent/availability.ts)
+  closed?: boolean
 }
 
 type Entry =
@@ -50,7 +54,9 @@ type Entry =
   | { kind: 'pending'; key: string; pending: PendingTurn }
   | { kind: 'failure'; key: string; failure: AgentFailure }
 
-const isLimitLike = (failure: AgentFailure | null) => failure !== null && (failure.kind === 'limit_reached' || failure.kind === 'service_unavailable')
+const isLimitLike = (failure: AgentFailure | null) => failure !== null && failure.kind === 'limit_reached'
+// 503(노출 중단). 다시 확인해도 열리지 않으므로 사용 제한 카드와 따로 그린다(MEG-259).
+const isUnavailable = (failure: AgentFailure | null) => failure !== null && failure.kind === 'service_unavailable'
 // 다시 보낼 수 있는 실패인가(기다릴 시간은 따지지 않는다). 이 실패는 '다시 시도' 전에는 보내기를 잠근다(F6-6p).
 const isRetryable = (failure: AgentFailure | null) => failure !== null && canRetry(failure, Number.POSITIVE_INFINITY)
 
@@ -65,7 +71,7 @@ function figuresOf(figures: AgentFigure[] | undefined): AiAnswerFigure[] {
 }
 
 export function AgentPanel(props: AgentPanelProps) {
-  const { open, wide, view, onView, state, controller, ui, onUi, source, onClose, onCloseSource, returnFocus } = props
+  const { open, wide, view, onView, state, controller, ui, onUi, source, onClose, onCloseSource, returnFocus, closed = false } = props
   // 지금 그리는 보기. 전체 화면에서 출처를 열면 잠시 패널로 그린다(agentView.ts).
   const mode = shownAgentView(view, wide, source !== null)
   const dialogRef = useRef<HTMLDialogElement>(null)
@@ -162,7 +168,15 @@ export function AgentPanel(props: AgentPanelProps) {
   const topic = conversation?.topic_label || (ui.selection && !ui.excluded ? topicLabelOf(ui.selection.text) : '')
   // 보내기 잠금: 생성 중, 다시 시도 전의 요청 실패(F6-6p), 다시 확인 전의 사용 제한(F6-17, 모바일 보드 없음)
   const failureLock = failure !== null && (limitLike ? wide : isRetryable(failure))
-  const locked = pending !== null || failureLock
+  const locked = pending !== null || failureLock || closed
+  // 입구가 닫혀도 진행 중인 답변은 끝까지 받고 중단할 수 있어야 하므로 그동안은 입력 칸(중단 버튼)을 남긴다.
+  const composerHidden = closed && pending === null
+  // 입력 칸이 사라지면(503 직후) 그 안에 있던 포커스가 문서 body로 떨어진다. 패널 제목으로 옮겨 키보드·낭독기 사용자가 자리를 잃지 않게 한다.
+  useLayoutEffect(() => {
+    if (!composerHidden) return
+    const dialog = dialogRef.current
+    if (dialog?.open && !dialog.contains(document.activeElement)) titleRef.current?.focus({ preventScroll: true })
+  }, [composerHidden])
   const fresh = state.turns.length === 0 && pending === null && failure === null
 
   const entries: Entry[] = state.turns.map((turn) => ({ kind: 'turn', key: turn.turn_id, turn }))
@@ -296,7 +310,7 @@ export function AgentPanel(props: AgentPanelProps) {
             ? <button type="button" className={styles.iconButton} aria-label={M.backToConversation} onClick={onCloseSource}><BackIcon /></button>
             : <>
                 {viewButtons.map(([target, text]) => <button key={target} type="button" className={styles.headButton} onClick={() => onView(target)}>{text}</button>)}
-                <button type="button" className={styles.headButton} aria-disabled={pending ? true : undefined} onClick={newConversation}>{M.newConversation}</button>
+                {closed ? null : <button type="button" className={styles.headButton} aria-disabled={pending ? true : undefined} onClick={newConversation}>{M.newConversation}</button>}
                 <button type="button" className={`${styles.headButton} ${styles.closeButton}`} onClick={onClose}>{M.close}</button>
               </>}
         </div>
@@ -342,7 +356,7 @@ export function AgentPanel(props: AgentPanelProps) {
       <div ref={bodyRef} className={wide ? styles.body : styles.mobileBody} hidden={sourceOpen} onScroll={onScroll}
         {...(wide && ui.expanded && entries.length > 1 ? { role: 'log', 'aria-label': M.log, tabIndex: 0 } : {})}>
         {fresh
-          ? <AskIntro disabled={!hasSelection} onPreset={(preset) => ask({ kind: 'preset', preset })} />
+          ? (closed ? null : <AskIntro disabled={!hasSelection} onPreset={(preset) => ask({ kind: 'preset', preset })} />)
           : <>
               {collapsed
                 ? <button type="button" className={styles.previous} onClick={expand}>{M.previous(conversation?.topic_label ?? topic, questionLabel(entryQuestion(entries[0])))}</button>
@@ -350,7 +364,7 @@ export function AgentPanel(props: AgentPanelProps) {
               {state.loadFailure && !collapsed ? <p role="alert" className={styles.smallError}>{M.previousFailed}</p> : null}
               {shown.map((entry) => <div key={entry.key} data-entry="" className={styles.entry}>
                 <EntryView entry={entry} latest={entry.key === lastKey} wide={wide} state={state} controller={controller}
-                  hasSelection={hasSelection} locked={locked} draft={ui.draft} onRetry={retry}
+                  hasSelection={hasSelection} locked={locked} closed={closed} draft={ui.draft} onRetry={retry}
                   onDraft={(draft) => { onUi({ draft }); focusInput() }} onAsk={ask} onSource={openSource} onClose={onClose} onFocusInput={focusInput} />
               </div>)}
             </>}
@@ -360,7 +374,11 @@ export function AgentPanel(props: AgentPanelProps) {
             <button type="button" className={styles.newAnswer} onClick={() => { scrollToLatest(); setUnseen(false) }}>{M.newAnswer}</button>
           </div>
         : null}
-      <div className={wide ? styles.composerArea : styles.mobileComposerArea}>
+      {composerHidden
+        ? <div className={wide ? styles.composerArea : styles.mobileComposerArea}>
+            <p className={styles.noticeText}>{M.closedNotice}</p>
+          </div>
+        : <div className={wide ? styles.composerArea : styles.mobileComposerArea}>
         {hasSelection && !(source && !wide)
           ? <div className={styles.chip}>
               <span className={styles.chipText}>{M.selectionChip(selectionText ?? '')}</span>
@@ -381,7 +399,7 @@ export function AgentPanel(props: AgentPanelProps) {
             : null}
           <button type="button" className={styles.send} aria-label={M.send} aria-disabled={canSend ? undefined : true} onClick={send}><SendIcon /></button>
         </div>
-      </div>
+      </div>}
       </div>
     </dialog>
   )
@@ -422,6 +440,8 @@ type EntryProps = {
   controller: AgentConversationController
   hasSelection: boolean
   locked: boolean
+  // 새 질문 입구가 닫혔다. 새 질문을 보내는 버튼(추천 질문, 다시 넣기)을 그리지 않는다.
+  closed: boolean
   draft: string
   onRetry: () => void
   onDraft: (draft: string) => void
@@ -495,6 +515,19 @@ function stepDetail(step: StepView, hasSelection: boolean): string {
 
 // S8 요청 실패(F6-6p·F6-6)와 S12 사용 제한(F6-17). 질문은 남기고, 쓰던 초안은 입력 칸에 그대로 둔다(AC-3).
 function FailureView({ failure, wide, controller, draft, onRetry, onClose, onFocusInput }: EntryProps & { failure: AgentFailure }) {
+  // 503(노출 중단, MEG-259): 질문은 남기고, 새 질문을 받을 수 없다고 알린다. 지금 대화는 계속 읽을 수 있다. 보드가 없어 PC·모바일이 같다.
+  if (isUnavailable(failure)) {
+    return <>
+      <Question question={failure.question ?? { kind: 'free' }} />
+      <div role="alert" className={styles.alertBox}>
+        <p className={styles.noticeTitle}>{M.unavailable}</p>
+        <p className={styles.noticeText}>{M.unavailableHelp}</p>
+        <div className={styles.actions}>
+          <Button onClick={onClose}>{M.keepReading}</Button>
+        </div>
+      </div>
+    </>
+  }
   if (isLimitLike(failure)) {
     // 질문 글을 입력 칸에 되돌려 놓았으면 질문 줄은 다시 보이지 않는다(F6-17).
     const inDraft = failure.question !== null && draft.trim() !== '' && draft.trim() === questionText(failure.question).trim()
@@ -531,12 +564,12 @@ function FailureView({ failure, wide, controller, draft, onRetry, onClose, onFoc
 }
 
 function TurnView(props: EntryProps & { turn: AgentTurn }) {
-  const { turn, latest, locked, onAsk, onSource } = props
+  const { turn, latest, locked, closed, onAsk, onSource } = props
   const badgeId = useId()
   if (turn.status === 'cancelled') return <StoppedView {...props} />
   const result = sectionsOf(turn.result)
   const sources: AgentSource[] = result?.sources ?? []
-  const suggestions = latest && result ? (result.suggestions ?? []).slice(0, 3) : []
+  const suggestions = latest && result && !closed ? (result.suggestions ?? []).slice(0, 3) : []
   return <>
     <Question question={turn.question} />
     {result
@@ -569,11 +602,11 @@ function TurnView(props: EntryProps & { turn: AgentTurn }) {
 }
 
 // S7 중단(F6-14·F6-14b·F6-14m). 받다 만 답변은 숨기고, '중단한 질문 다시 넣기'로 질문을 입력 칸에 되돌린다(결정 1·5·12·13).
-function StoppedView({ turn, latest, wide, state, draft, onDraft, onClose, onFocusInput }: EntryProps & { turn: AgentTurn }) {
+function StoppedView({ turn, latest, wide, state, closed, draft, onDraft, onClose, onFocusInput }: EntryProps & { turn: AgentTurn }) {
   const [confirm, setConfirm] = useState(false)
   const confirmTitle = useRef<HTMLParagraphElement>(null)
   const confirmId = useId()
-  const canReinsert = latest && state.cancelled?.turnId === turn.turn_id
+  const canReinsert = latest && !closed && state.cancelled?.turnId === turn.turn_id
   const question = questionText(state.cancelled?.question ?? turn.question)
   const hasDraft = draft.trim() !== ''
   useEffect(() => {

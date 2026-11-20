@@ -6,7 +6,7 @@ import { goInApp } from './inApp.ts'
 
 // MEG-258 CS Agent 'AI에게 질문' 기본 흐름 화면(T6c). playwright.config.ts가 VITE_API_MOCK=true로 개발 서버를 띄우므로
 // 가짜 API(src/api/mocks/agent.ts)가 E27~E32와 E29의 SSE를 흉내 낸다. 모델은 부르지 않는다.
-// 진입점은 T6e(MEG-259) 전까지 개발 서버의 ?cs-agent=1에서만 열린다(src/agent/preview.ts).
+// 노출 중단 플래그를 끈 빌드(playwright.config.ts의 agent-enabled)에서 돈다. 노트 선택 버튼이 'AI에게 질문'이다(MEG-259).
 // 각 상태의 스크린샷은 시험 결과에 붙인다(AC-1, 캔버스 보드와 나란히 PR에 올린다).
 
 const PC = { width: 1280, height: 800 }
@@ -47,7 +47,7 @@ async function selectText(page: Page, needle: string) {
   }, needle)
 }
 
-async function login(page: Page, viewport = PC, path = '/notes/11?cs-agent=1') {
+async function login(page: Page, viewport = PC, path = '/notes/11') {
   await page.setViewportSize(viewport)
   await page.goto('/login')
   await page.getByLabel('이메일').fill('member@example.test')
@@ -87,13 +87,6 @@ async function sendFree(panel: Locator, text: string) {
   await input(panel).fill(text)
   await send(panel).click()
 }
-
-test('플래그가 없으면(기본) 노트 선택 버튼은 그대로 \'AI 설명\'이고 새 입구가 보이지 않는다', async ({ page }) => {
-  await login(page, PC, '/notes/11')
-  await selectText(page, SELECTED)
-  await expect(page.getByRole('button', { name: 'AI 설명', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'AI에게 질문', exact: true })).toHaveCount(0)
-})
 
 for (const [device, viewport] of [['PC', PC], ['모바일', MOBILE]] as const) {
   test(`${device}: 질문 준비 → 추론 단계(노트 근거 문구) → 답변·출처·추천 질문 → 그림`, async ({ page }, testInfo) => {

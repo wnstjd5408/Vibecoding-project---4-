@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router'
+import { Link, useParams } from 'react-router'
 import { apiFetch, isApiError } from '../api/client.ts'
 import type { NoteReadResponse } from '../api/types.ts'
 import { AccountMenu } from '../account/AccountMenu.tsx'
@@ -22,13 +22,13 @@ import type { AgentUi } from '../agent/agentUi.ts'
 import { AgentSourceDocument } from '../agent/AgentSourceDocument.tsx'
 import { shownAgentView, useAgentView } from '../agent/agentView.ts'
 import { AGENT_MESSAGES } from '../agent/messages.ts'
-import { agentPreviewEnabled } from '../agent/preview.ts'
+import { AGENT_DISABLED_BY_BUILD, closeAgentEntry, useAgentEntryClosed } from '../agent/availability.ts'
 import { useAgentConversation } from '../agent/useAgentConversation.ts'
 import { useAgentSource } from '../agent/useAgentSource.ts'
 import type { OpenSource } from '../agent/useAgentSource.ts'
 import styles from './NoteReadPage.module.css'
 
-// AI 설명 버튼 크기·간격(px). 선택 영역의 손잡이와 겹치지 않도록 선택 끝에서 조금 띄운다.
+// 노트 선택 버튼('AI 설명' 또는 'AI에게 질문') 크기·간격(px). 선택 영역의 손잡이와 겹치지 않도록 선택 끝에서 조금 띄운다.
 const BUTTON_GAP = 24
 const BUTTON_WIDTH = 100
 
@@ -76,10 +76,14 @@ function NoteRead({ noteId }: { noteId: string }) {
   const key = `${noteId}:${attempt}`
   const valid = /^\d+$/.test(noteId)
   // CS Agent 'AI에게 질문'(MEG-258). 대화 상태는 이 노트 화면에 두어 패널을 닫았다 열어도 대화와 초안이 남는다(MEG-255 메모).
-  // 진입점은 T6e(MEG-259) 전까지 개발 서버의 ?cs-agent=1에서만 열린다(agent/preview.ts). 기본은 지금처럼 'AI 설명'이다.
-  const [searchParams] = useSearchParams()
-  const agentPreview = agentPreviewEnabled(searchParams)
+  // 노트 선택 버튼은 새 질문 입구가 열려 있으면 'AI에게 질문', 닫혀 있으면(노출 중단 플래그·503) 기존 'AI 설명'이다(MEG-259, agent/availability.ts).
+  const agentClosed = useAgentEntryClosed()
   const { state: agentState, controller: agent } = useAgentConversation(valid ? Number(noteId) : 0)
+  // E27·E29가 503(노출 중단)을 돌려주면 입구를 닫는다. 열린 패널은 그대로 두어 지금 대화와 출처를 계속 읽게 한다.
+  const agentFailureKind = agentState.failure?.kind
+  useEffect(() => {
+    if (agentFailureKind === 'service_unavailable') closeAgentEntry()
+  }, [agentFailureKind])
   const [agentOpen, setAgentOpen] = useState(false)
   const [agentUi, setAgentUi] = useState<AgentUi>(INITIAL_AGENT_UI)
   const onAgentUi = useCallback((patch: Partial<AgentUi> | ((ui: AgentUi) => Partial<AgentUi>)) => setAgentUi((previous) => ({ ...previous, ...(typeof patch === 'function' ? patch(previous) : patch) })), [])
@@ -167,7 +171,7 @@ function NoteRead({ noteId }: { noteId: string }) {
   const askAi = () => {
     pressing.current = false
     if (!note || !pick) return
-    if (agentPreview) return openAgent()
+    if (!agentClosed) return openAgent()
     const text = note.body_markdown.slice(pick.start, pick.end)
     // 버튼은 누르면 사라지므로, 시트·안내를 닫았을 때 포커스가 돌아갈 곳으로 본문을 먼저 잡아 둔다.
     articleRef.current?.focus({ preventScroll: true })
@@ -175,6 +179,8 @@ function NoteRead({ noteId }: { noteId: string }) {
     setPick(null)
     // 패널은 한 번에 하나만 연다(PC 폭에서는 모달이 아니라 용어 패널이 열린 채 AI 설명을 누를 수 있다).
     setOpenTerm(null)
+    // 503으로 입구가 닫혔을 때는 'AI에게 질문' 패널이 열려 있을 수 있어 함께 닫는다.
+    closeAgent()
     if (auth.role === 'visitor') return openLoginPrompt()
     if (loginPanelOpen) closeLoginPrompt()
     openCount.current += 1
@@ -192,7 +198,7 @@ function NoteRead({ noteId }: { noteId: string }) {
     setPick(null)
     setAttempt((value) => value + 1)
   }, [])
-  // 'AI에게 질문'(임시 연결): 선택만으로는 아무 요청도 보내지 않고 질문 준비 화면(F6-1)을 연다.
+  // 'AI에게 질문': 선택만으로는 아무 요청도 보내지 않고 질문 준비 화면(F6-1)을 연다.
   // 대화가 이미 있으면 그 대화를 그대로 보여 준다. 다른 영역을 고른 뒤의 '현재 대화에 추가'·'새 대화' 선택(F6-8)은 T6d 범위다.
   const openAgent = () => {
     if (!note || !pick) return
@@ -295,14 +301,15 @@ function NoteRead({ noteId }: { noteId: string }) {
                   onPointerDown={(event) => { pressing.current = true; event.preventDefault() }}
                   onPointerCancel={() => { pressing.current = false }}
                   onPointerLeave={() => { pressing.current = false }}
-                  onClick={askAi}>{agentPreview ? AGENT_MESSAGES.title : 'AI 설명'}</SelectionAction>
+                  onClick={askAi}>{agentClosed ? 'AI 설명' : AGENT_MESSAGES.title}</SelectionAction>
               : null}
           </article>
         </>}
     </main>
-    <AgentPanel open={agentOpen} wide={wide} view={agentView} onView={setAgentView} state={agentState} controller={agent} ui={agentUi} onUi={onAgentUi}
+    {/* 노출 중단 플래그를 켠 빌드에서는 패널을 그리지 않는다(닫힌 dialog의 제목 'AI에게 질문'도 문서에 남기지 않는다). */}
+    {AGENT_DISABLED_BY_BUILD ? null : <AgentPanel open={agentOpen} wide={wide} view={agentView} onView={setAgentView} state={agentState} controller={agent} ui={agentUi} onUi={onAgentUi}
       source={agentSource} sourceState={agentSourceState} onOpenSource={openAgentSource} onCloseSource={closeAgentSource}
-      onClose={closeAgent} onLoginRequired={onAgentLoginRequired} returnFocus={() => articleRef.current} />
+      onClose={closeAgent} onLoginRequired={onAgentLoginRequired} returnFocus={() => articleRef.current} closed={agentClosed} />}
     <AiExplainSheet open={openAi !== null} onClose={() => setOpenAi(null)} openId={openAi?.openId ?? 0} target={openAi?.target ?? null} text={openAi?.text ?? ''} onLoginRequired={onAiLoginRequired} onReloadNote={onReloadNote} returnFocus={() => articleRef.current} />
     {/* 용어를 누르면 열리는 시트(F1-3). 시트 안 즐겨찾기 버튼(MEG-90)과 로그인 안내 연결(MEG-77)이 이 안에 있다. */}
     <TermSheet open={term !== undefined} onClose={() => setOpenTerm(null)} openId={openTerm?.openId ?? 0} termId={openTerm?.termId ?? null} label={term?.label ?? ''} onLoginRequired={onFavoriteLoginRequired}
