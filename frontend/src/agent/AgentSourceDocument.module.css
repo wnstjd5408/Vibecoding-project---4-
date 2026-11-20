@@ -1,0 +1,6 @@
+/* PC 출처 보기의 문서 쪽(F6-4 왼쪽). 노트 본문과 같은 폭과 글자 크기를 쓴다 */
+.article { max-width: 720px; margin-inline: auto; }
+.title { margin: 0; font-size: 24px; line-height: 32px; font-weight: 700; }
+.meta { margin: var(--space-2) 0 var(--space-6); color: var(--ink-muted); font-size: 13px; line-height: 18px; font-weight: 500; }
+.changed { margin: 0 0 var(--space-4); font-size: 14px; line-height: 22px; font-weight: 600; }
+.error { margin: 0; font-size: 14px; line-height: 22px; font-weight: 600; }
