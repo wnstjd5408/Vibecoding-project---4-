@@ -42,7 +42,59 @@
 }
 
 .full::backdrop { background: transparent; }
-.panel[open], .full[open] { display: flex; flex-direction: column; }
+
+/* PC 떠 있는 창(F6-3f): 오른쪽 아래 고정, 420×620. 옮기기·접기는 없다(14.5 AI 제안). 노트 쪽은 NoteReadPage가 오른쪽 여백을 둔다 */
+.floating {
+  position: fixed;
+  top: auto;
+  right: var(--space-6);
+  bottom: var(--space-6);
+  left: auto;
+  z-index: 5;
+  box-sizing: border-box;
+  width: 420px;
+  max-width: calc(100vw - 2 * var(--space-6));
+  height: 620px;
+  max-height: calc(100dvh - var(--app-header-height) - 2 * var(--space-6));
+  margin: 0;
+  padding: 0 var(--space-4) var(--space-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-200);
+  color: var(--ink);
+  word-break: keep-all;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* PC 전체 화면(F6-3x): 헤더 아래 화면 전체. 대화만 가운데 읽기 폭(약 720px)으로 두고 노트는 가린다(결정 43) */
+.fullscreen {
+  position: fixed;
+  top: var(--app-header-height);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 5;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  height: auto;
+  max-height: none;
+  margin: 0;
+  padding: 0 var(--space-6) var(--space-6);
+  border: 0;
+  background: var(--surface-200);
+  color: var(--ink);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.panel[open], .floating[open], .fullscreen[open], .full[open] { display: flex; flex-direction: column; }
+/* 보기를 바꿔도 남는 틀. 머리·문맥·대화·입력 칸을 세로로 쌓는다 */
+.frame { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.fullscreen .frame { width: 100%; max-width: 720px; margin-inline: auto; }
+/* 대화 영역 끝에서 더 굴려도 뒤의 노트가 움직이지 않게 한다(노트 읽던 위치를 지킨다) */
+.floating .body, .fullscreen .body, .floating .sourceBody { overscroll-behavior: contain; }
 
 /* --- 머리 --- */
 .head { display: flex; align-items: center; justify-content: space-between; min-height: 56px; flex-shrink: 0; }
@@ -53,6 +105,16 @@
 .headButton[aria-disabled='true'] { color: var(--line-strong); cursor: not-allowed; }
 .closeButton { margin-right: calc(var(--space-3) * -1); }
 .iconButton { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; }
+
+/* 떠 있는 창은 머리와 문맥을 줄인다(F6-3f): 제목 16px, 버튼 안쪽 여백 space-2, 주제와 '선택 내용 보기'를 한 줄에 */
+.floating .head { min-height: 52px; }
+.floating .title { font-size: 16px; line-height: 24px; }
+.floating .headButton { padding: 0 var(--space-2); }
+.floating .closeButton { margin-right: calc(var(--space-2) * -1); }
+.floating .context { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; column-gap: var(--space-2); margin-bottom: var(--space-1); }
+.floating .topic { font-size: 13px; line-height: 18px; }
+.floating .selectionFull { flex-basis: 100%; }
+.floating .body, .floating .sourceBody { padding: var(--space-4) 0; }
 
 .mobileHead { display: flex; align-items: center; justify-content: space-between; height: 56px; flex-shrink: 0; padding: 0 var(--space-2); border-bottom: 1px solid var(--surface-300); }
 .mobileTitle { padding-right: var(--space-3); }

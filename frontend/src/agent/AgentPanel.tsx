@@ -7,7 +7,7 @@
 //  - 예외 상태(MEG-260, T6d): 의미 확인(F6-11·F6-11m), 근거 일부만 확인(F6-12), 근거 없음(F6-12b), 확인된 교정(F6-13·F6-13m),
 //    주제 전환 확인(F6-20), 다른 영역 선택(F6-8·F6-8m), 노트 접근 변경(F6-15·F6-15m), 출처만 권한 회수(F6-15b).
 //    MEG-262에서 새로 그린 모바일 보드(F6-12m·F6-12bm·F6-15bm·F6-20m)의 상태는 T6g(MEG-263)가 반영한다. 그 전까지 모바일은 질문만 보인다.
-//  - 떠 있는 창·전체 화면은 T6f(MEG-261)다.
+//  - PC 보기 전환(MEG-261, T6f): 패널(F6-3), 떠 있는 창(F6-3f), 전체 화면(F6-3x). 같은 dialog의 모양만 바꾸므로 대화·초안·스크롤이 그대로 남는다.
 //  - 다시 답하기 화면과 버튼은 만들지 않는다(MEG-228, spec 부록 A).
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
@@ -22,6 +22,8 @@ import type { AgentConversationController, AgentFailure, AgentState, AskOptions,
 import { AGENT_MESSAGES as M, PRESETS, questionLabel, questionText, topicLabelOf } from './messages.ts'
 import { FRESH_CONTEXT, MAX_ADD_SELECTIONS, MAX_QUESTION, MAX_REPLY, agentAccessLost, quoteOf, sectionsOf } from './agentUi.ts'
 import type { AgentContextSelection, AgentUi } from './agentUi.ts'
+import { shownAgentView } from './agentView.ts'
+import type { AgentView } from './agentView.ts'
 import type {
   AgentFigure,
   AgentQuestion,
@@ -39,6 +41,9 @@ import styles from './AgentPanel.module.css'
 type AgentPanelProps = {
   open: boolean
   wide: boolean
+  // 고른 보기 방식(PC만). 마지막 보기 방식 기억은 노트 화면이 한다(agentView.ts).
+  view: AgentView
+  onView: (view: AgentView) => void
   state: AgentState
   controller: AgentConversationController
   ui: AgentUi
@@ -110,7 +115,9 @@ function firstHiddenIds(turns: AgentTurn[]): Set<string> {
 }
 
 export function AgentPanel(props: AgentPanelProps) {
-  const { open, wide, state, controller, ui, onUi, source, onClose, onCloseSource, returnFocus } = props
+  const { open, wide, view, onView, state, controller, ui, onUi, source, onClose, onCloseSource, returnFocus } = props
+  // 지금 그리는 보기. 전체 화면에서 출처를 열면 잠시 패널로 그린다(agentView.ts).
+  const mode = shownAgentView(view, wide, source !== null)
   const dialogRef = useRef<HTMLDialogElement>(null)
   const titleRef = useRef<HTMLHeadingElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -119,9 +126,9 @@ export function AgentPanel(props: AgentPanelProps) {
   const inputId = useId()
   const selectionId = useId()
   const [showSelection, setShowSelection] = useState(false)
-  const latest = useRef({ onClose, onCloseSource, source, returnFocus })
+  const latest = useRef({ onClose, onCloseSource, onView, source, returnFocus, mode })
   useEffect(() => {
-    latest.current = { onClose, onCloseSource, source, returnFocus }
+    latest.current = { onClose, onCloseSource, onView, source, returnFocus, mode }
   })
 
   // 열고 닫기. PC는 모달이 아닌 dialog(show), 모바일은 모달(showModal)이다. 폭이 바뀌면 같은 dialog를 다시 연다(내용은 그대로).
@@ -153,9 +160,19 @@ export function AgentPanel(props: AgentPanelProps) {
     else focused?.focus({ preventScroll: true })
   }, [open, wide])
 
-  // Esc: 출처 보기면 대화로 돌아가고, 아니면 패널을 닫는다. 모달(모바일)은 cancel 이벤트로, PC는 문서의 keydown으로 듣는다.
+  // 보기를 바꾸면 포커스를 제목으로 옮긴다(14.5 AI 제안). 전체 화면은 제목이 h1이라 새 요소가 생기므로 그린 뒤에 옮긴다.
+  const previousView = useRef(view)
+  useEffect(() => {
+    if (previousView.current === view) return
+    previousView.current = view
+    if (open && wide) titleRef.current?.focus({ preventScroll: true })
+  }, [view, open, wide])
+
+  // Esc: 출처 보기면 대화로 돌아가고, 전체 화면이면 패널로 돌아가고(14.5 AI 제안), 아니면(패널·떠 있는 창) 닫고 진입점으로 돌아간다.
+  // 모달(모바일)은 cancel 이벤트로, PC는 문서의 keydown으로 듣는다.
   const onEscape = () => {
     if (latest.current.source) latest.current.onCloseSource()
+    else if (latest.current.mode === 'fullscreen') latest.current.onView('panel')
     else latest.current.onClose()
   }
   useEffect(() => {
@@ -273,6 +290,15 @@ export function AgentPanel(props: AgentPanelProps) {
     // 내용이 줄어 스크롤 이벤트 없이 맨 아래가 된 경우(새 대화 등)에도 위치를 다시 잰다.
     onScroll()
   }, [lastKey])
+  // 보기를 바꾸면 대화 영역의 폭·높이가 바뀌어 글이 다시 흐른다. 맨 아래를 따라가던 중이었으면 계속 맨 아래에 둔다.
+  // 출처 보기 중에는 대화 영역이 숨어 잴 수 없으므로 건드리지 않는다. 돌아오면 위의 savedScroll이 위치를 되살리고,
+  // 그 전에 맨 아래였으면 다시 맨 아래에 둔다(같은 위치다).
+  useLayoutEffect(() => {
+    const body = bodyRef.current
+    if (!body || sourceOpen) return
+    if (bottomRef.current) body.scrollTop = body.scrollHeight
+    onScroll()
+  }, [mode, sourceOpen])
   const showNewAnswer = wide && !sourceOpen && !atBottom && (unseen || (pending !== null && !collapsed))
 
   // --- 동작 ---
@@ -395,7 +421,7 @@ export function AgentPanel(props: AgentPanelProps) {
     onUi({ expanded: true })
     void controller.refresh()
   }
-  useLayoutEffect(() => resizeInput(inputRef.current), [ui.draft, open, wide])
+  useLayoutEffect(() => resizeInput(inputRef.current), [ui.draft, open, wide, mode])
 
   const label = sourceOpen || pending ? M.labelKeep
     : failureLock ? (limitLike ? M.labelLockedLimit : M.labelLockedFailed)
@@ -408,13 +434,21 @@ export function AgentPanel(props: AgentPanelProps) {
     : wide && latestState === 'no_evidence' ? M.labelNoEvidence
     : M.labelNext
 
+  // 패널 머리 버튼은 대화 상태와 관계없이 늘 같다(MEG-261). 보기 전환 두 개 + 새 대화 + 닫기, 지금 보기의 버튼만 빠진다(결정 44, 14.5 AI 제안).
+  const viewButtons: [AgentView, string][] = mode === 'floating' ? [['panel', M.viewPanel], ['fullscreen', M.viewFullscreen]]
+    : mode === 'fullscreen' ? [['floating', M.viewFloating], ['panel', M.viewPanel]]
+    : [['floating', M.viewFloating], ['fullscreen', M.viewFullscreen]]
+  // 전체 화면은 대화가 주 내용이라 제목이 h1이다(F6-3x).
+  const Title = mode === 'fullscreen' ? 'h1' : 'h2'
+
   const header = wide
     ? <div className={styles.head}>
-        <h2 id={titleId} ref={titleRef} tabIndex={-1} className={styles.title}>{source ? M.sourceTitle(source.ref) : M.title}</h2>
+        <Title id={titleId} ref={titleRef} tabIndex={-1} className={styles.title}>{source ? M.sourceTitle(source.ref) : M.title}</Title>
         <div className={styles.headActions}>
           {source
             ? <button type="button" className={styles.iconButton} aria-label={M.backToConversation} onClick={onCloseSource}><BackIcon /></button>
             : <>
+                {viewButtons.map(([target, text]) => <button key={target} type="button" className={styles.headButton} onClick={() => onView(target)}>{text}</button>)}
                 <button type="button" className={styles.headButton} aria-disabled={pending ? true : undefined} onClick={newConversation}>{M.newConversation}</button>
                 <button type="button" className={`${styles.headButton} ${styles.closeButton}`} onClick={onClose}>{M.close}</button>
               </>}
@@ -435,7 +469,7 @@ export function AgentPanel(props: AgentPanelProps) {
   const context = source ? null
     : <div className={wide ? styles.context : styles.mobileContext}>
         {topic ? <div className={styles.topic}>{M.topic(topic)}</div> : null}
-        {wide && (conversation ? conversation.origin === 'note' : ui.selection !== null) ? <div className={styles.muted}>{hasSelection ? M.contextWithSelection : M.contextNoteOnly}</div> : null}
+        {wide && mode !== 'floating' && (conversation ? conversation.origin === 'note' : ui.selection !== null) ? <div className={styles.muted}>{hasSelection ? M.contextWithSelection : M.contextNoteOnly}</div> : null}
         {hasSelection
           ? <button type="button" className={styles.underline} aria-expanded={showSelection} aria-controls={selectionId} onClick={() => setShowSelection((value) => !value)}>{M.showSelection}</button>
           : null}
@@ -447,8 +481,9 @@ export function AgentPanel(props: AgentPanelProps) {
   if (accessLost) {
     // S9 노트 접근 변경(F6-15·F6-15m, 결정 3): 대화와 출처를 닫고 노트 목록으로 가는 길만 둔다. PC 노트 자리는 노트 화면이 같은 안내로 바꾼다.
     return (
-      <dialog ref={dialogRef} className={wide ? styles.panel : styles.full} aria-labelledby={titleId}
+      <dialog ref={dialogRef} className={wide ? styles[mode] : styles.full} aria-labelledby={titleId}
         onCancel={(event) => { event.preventDefault(); onEscape() }}>
+        <div className={styles.frame} role={mode === 'fullscreen' ? 'main' : undefined}>
         {wide
           ? <div className={styles.head}>
               <h2 id={titleId} ref={titleRef} tabIndex={-1} className={styles.title}>{M.title}</h2>
@@ -472,13 +507,16 @@ export function AgentPanel(props: AgentPanelProps) {
                 </>}
           </div>
         </div>
+        </div>
       </dialog>
     )
   }
 
   return (
-    <dialog ref={dialogRef} className={wide ? styles.panel : styles.full} aria-labelledby={titleId}
+    <dialog ref={dialogRef} className={wide ? styles[mode] : styles.full} aria-labelledby={titleId}
       onCancel={(event) => { event.preventDefault(); onEscape() }}>
+      {/* 보기를 바꿔도 같은 요소를 쓰도록 늘 두는 틀. 전체 화면에서는 노트가 숨으므로 이 틀이 main 영역이다(F6-3x). 안쪽 줄은 다른 작업과 겹치지 않게 들여쓰기를 바꾸지 않았다. */}
+      <div className={styles.frame} role={mode === 'fullscreen' ? 'main' : undefined}>
       {header}
       {context}
       {source
@@ -538,6 +576,7 @@ export function AgentPanel(props: AgentPanelProps) {
             : null}
           <button type="button" className={styles.send} aria-label={M.send} aria-disabled={canSend ? undefined : true} onClick={send}><SendIcon /></button>
         </div>
+      </div>
       </div>
     </dialog>
   )

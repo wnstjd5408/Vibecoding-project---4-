@@ -11,6 +11,10 @@ export const AGENT_MESSAGES = {
   title: 'AI에게 질문',
   newConversation: '새 대화',
   close: '닫기',
+  // 보기 전환(F6-3·F6-3f·F6-3x, 결정 25·44)
+  viewPanel: '패널로 보기',
+  viewFloating: '창으로 보기',
+  viewFullscreen: '전체 화면',
   backToNote: '노트로 돌아가기',
   topic: (label: string) => `현재 주제: ${label}`,
   contextWithSelection: '참고 문맥: 현재 노트 · 선택 영역',
