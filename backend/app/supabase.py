@@ -1,7 +1,7 @@
 """Supabase 호출 최소 래퍼. FastAPI만 secret key로 부른다(D-007).
 
 이 파일이 하는 일: 로그인·세션 갱신·로그아웃·세션 토큰 확인(Auth), profiles·과목·노트·사전 용어 조회와 열람 기록(REST),
-노트 이미지 서명 URL 발급과 사전 이미지 공개 주소(Storage), SQL 함수 호출(RPC).
+노트 이미지 서명 URL 발급과 사전 이미지 공개 주소(Storage), SQL 함수 호출(RPC), CS Agent 대화·턴 읽기와 쓰기(REST).
 """
 
 import hashlib
@@ -1165,6 +1165,297 @@ class SupabaseClient:
         if not separator or not query.startswith("token="):
             return None
         return f"{self._url}/storage/v1{quote(path, safe='/')}?{query}"
+
+    # --- CS Agent 대화·턴 (MEG-234, API spec v0.2 3·4·8절) ---
+    # 표는 20261118140000_cs_agent_conversations.sql이 만든다. 남의 행은 없는 행과 같게 None이다(user_id 필터).
+
+    _AGENT_CONVERSATION_COLUMNS = (
+        "id,user_id,origin,note_id,note_revision,wiki_ref,topic_label,created_at,"
+        'ai_conversation_selections(id,note_id,note_revision,start,"end",text_snapshot,excluded_at,created_at)'
+    )
+    # 응답과 가림 판정에 쓰는 열만 읽는다. 원장·실행 기록 열(ledger_id·model_id 등)과 출처 원문(paragraph_snapshot)은 읽지 않는다.
+    _AGENT_TURN_COLUMNS = (
+        "id,conversation_id,seq,question_kind,question_text,preset,from_turn_id,status,failure,step,"
+        "paragraph_count,result,lease_expires_at,created_at,finished_at,"
+        "ai_turn_sources(ref,source_kind,source_id,cited_revision,title,section,excerpt)"
+    )
+
+    def create_agent_conversation(self, fields: dict[str, Any]) -> dict[str, Any] | None:
+        """E27: 대화 행 하나를 넣고 넣은 행을 돌려준다. 참조한 노트가 그 사이 지워졌으면 None이다.
+
+        선택 문맥은 add_agent_selection으로 따로 넣는다.
+        """
+        response = self._request(
+            "POST",
+            "/rest/v1/ai_conversations",
+            params={"select": "id,user_id,origin,note_id,note_revision,wiki_ref,topic_label,created_at"},
+            json=fields,
+            headers={**self._headers(), "Prefer": "return=representation"},
+        )
+        if response.status_code == 409 and _error_field(response, "code") == "23503":
+            # 확인한 뒤 노트가 지워졌다(외래키 위반). 호출 쪽이 404로 낸다.
+            return None
+        if response.status_code != 201:
+            raise SupabaseConfigError(f"ai_conversations insert status {response.status_code}")
+        return response.json()[0]
+
+    def add_agent_selection(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """E27: 선택 문맥 행 하나(자른 원문과 그때의 개정)를 넣고 넣은 행을 돌려준다."""
+        response = self._request(
+            "POST",
+            "/rest/v1/ai_conversation_selections",
+            params={"select": 'id,note_id,note_revision,start,"end",text_snapshot,excluded_at,created_at'},
+            json=fields,
+            headers={**self._headers(), "Prefer": "return=representation"},
+        )
+        if response.status_code != 201:
+            raise SupabaseConfigError(f"ai_conversation_selections insert status {response.status_code}")
+        return response.json()[0]
+
+    def delete_agent_conversation(self, user_id: str, conversation_id: str) -> None:
+        """E27: 선택 문맥을 넣지 못한 대화를 지운다. 하위 행은 외래키 연쇄로 함께 지워진다."""
+        response = self._request(
+            "DELETE",
+            "/rest/v1/ai_conversations",
+            params={"id": f"eq.{uuid.UUID(conversation_id)}", "user_id": f"eq.{uuid.UUID(user_id)}"},
+            headers={**self._headers(), "Prefer": "return=minimal"},
+        )
+        if response.status_code not in (200, 204):
+            raise SupabaseConfigError(f"ai_conversations delete status {response.status_code}")
+
+    def get_agent_conversation(self, user_id: str, conversation_id: str) -> dict[str, Any] | None:
+        """E28~E31: 그 사용자의 대화 한 개와 선택 문맥 전부(제외한 것 포함, 넣은 순서). 없거나 남의 대화면 None이다."""
+        rows = self._select(
+            "ai_conversations",
+            {
+                "id": f"eq.{uuid.UUID(conversation_id)}",
+                "user_id": f"eq.{uuid.UUID(user_id)}",
+                "select": self._AGENT_CONVERSATION_COLUMNS,
+                "ai_conversation_selections.order": "created_at.asc,id.asc",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    def get_agent_turn(self, user_id: str, turn_id: str) -> dict[str, Any] | None:
+        """E30·E31: 그 사용자의 턴 한 개(대화 id·seq·상태·질문). 없거나 남의 턴이면 None이다."""
+        rows = self._select(
+            "ai_turns",
+            {
+                "id": f"eq.{uuid.UUID(turn_id)}",
+                "user_id": f"eq.{uuid.UUID(user_id)}",
+                "select": "id,conversation_id,seq,status,question_kind,question_text,preset,from_turn_id,created_at",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    def list_agent_turns(self, user_id: str, conversation_id: str, max_seq: int | None = None) -> list[dict[str, Any]]:
+        """E28·E30: 대화의 턴과 각 턴의 인용 출처를 seq 오름차순으로 준다. max_seq를 주면 그 seq까지만 읽는다.
+
+        가림 판정은 앞 턴의 출처를 봐야 하므로 E30도 앞 턴을 함께 읽는다. 한 대화의 턴 수는 7일 보관 안에서 작다고 보고 쪽을
+        나누지 않는다(API 최대 행 1,000을 넘으면 잘린다). 가림 함수가 다시 묻기 턴을 알아보도록 retry_of_turn_id도 읽는다.
+        """
+        params = {
+            "conversation_id": f"eq.{uuid.UUID(conversation_id)}",
+            "user_id": f"eq.{uuid.UUID(user_id)}",
+            "select": f"{self._AGENT_TURN_COLUMNS},retry_of_turn_id",
+            "order": "seq.asc",
+            "ai_turn_sources.order": "ref.asc",
+        }
+        if max_seq is not None:
+            params["seq"] = f"lte.{int(max_seq)}"
+        return self._select("ai_turns", params)
+
+    def expire_agent_turns(self, user_id: str, conversation_id: str, lapsed_before: str, now_iso: str) -> int:
+        """E28·E30·E31: 실행 만료 시각(lease_expires_at)이 lapsed_before 이전인 running 턴을 failed(interrupted)로 바꾼다(spec 3.1).
+
+        status = running이고 아직 만료된 턴만 바꾸는 조건부 갱신이다. 그 사이 실행이 갱신했거나 끝낸 턴은 건드리지 않는다.
+        바꾼 턴 수를 돌려준다.
+        """
+        response = self._request(
+            "PATCH",
+            "/rest/v1/ai_turns",
+            params={
+                "conversation_id": f"eq.{uuid.UUID(conversation_id)}",
+                "user_id": f"eq.{uuid.UUID(user_id)}",
+                "status": "eq.running",
+                "lease_expires_at": f"lte.{lapsed_before}",
+                "select": "id",
+            },
+            json={"status": "failed", "failure": "interrupted", "finished_at": now_iso},
+            headers={**self._headers(), "Prefer": "return=representation"},
+        )
+        if response.status_code != 200:
+            raise SupabaseConfigError(f"ai_turns expire status {response.status_code}")
+        return len(response.json())
+
+    def cancel_agent_turn(self, user_id: str, turn_id: str) -> bool:
+        """E31: running인 그 사용자의 턴만 cancelled로 바꾼다(agent_finish_turn, 조건부 전이). 바꿨으면 True다."""
+        return self.rpc(
+            "agent_finish_turn",
+            {"p_user_id": str(uuid.UUID(user_id)), "p_turn_id": str(uuid.UUID(turn_id)), "p_status": "cancelled"},
+        ) is True
+
+    # --- CS Agent 질문 실행 E29 (MEG-236, API spec v0.2 4절 E29, 기술 검토 v0.4 3절) ---
+
+    def claim_agent_turn(self, fields: dict[str, Any]) -> dict[str, Any] | None:
+        """E29 2단계: agent_claim_turn으로 턴을 선점한다. 결과 행(outcome·turn_id·seq·turn_status)을 돌려준다.
+
+        대화가 없거나 그 사용자의 것이 아니면(SQLSTATE MEG02) None이다. 호출 쪽이 404로 낸다.
+        """
+        response = self._request("POST", "/rest/v1/rpc/agent_claim_turn", json=fields, headers=self._headers())
+        if response.status_code != 200:
+            if _error_field(response, "code") == "MEG02":
+                return None
+            raise SupabaseConfigError(f"rpc agent_claim_turn status {response.status_code}")
+        rows = response.json()
+        return rows[0] if isinstance(rows, list) else rows
+
+    def find_agent_turn_by_key(self, user_id: str, idempotency_key: str) -> dict[str, Any] | None:
+        """E29 1단계: 같은 사용자·같은 Idempotency-Key의 턴(id·대화 id·seq·상태·실행 만료 시각). 없으면 None이다.
+
+        ai_turns의 unique(user_id, idempotency_key)라 많아야 한 행이다. 재전송을 상태 검사 전에 재생·거절하는 데 쓴다.
+        """
+        rows = self._select(
+            "ai_turns",
+            {
+                "user_id": f"eq.{uuid.UUID(user_id)}",
+                "idempotency_key": f"eq.{uuid.UUID(idempotency_key)}",
+                "select": "id,conversation_id,seq,status,lease_expires_at",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    def delete_running_agent_turn(self, user_id: str, turn_id: str) -> None:
+        """E29 3단계: 속도 제한·AI 한도에 걸린 선점 턴을 지운다. running인 그 사용자의 턴만 지운다."""
+        response = self._request(
+            "DELETE",
+            "/rest/v1/ai_turns",
+            params={"id": f"eq.{uuid.UUID(turn_id)}", "user_id": f"eq.{uuid.UUID(user_id)}", "status": "eq.running"},
+            headers={**self._headers(), "Prefer": "return=minimal"},
+        )
+        if response.status_code not in (200, 204):
+            raise SupabaseConfigError(f"ai_turns delete status {response.status_code}")
+
+    def touch_agent_turn(
+        self, user_id: str, turn_id: str, step: str, lease_expires_at: str, paragraph_count: int | None = None
+    ) -> bool:
+        """E29 실행: running인 턴의 단계와 실행 만료 시각을 갱신한다(조건부, status = running). 바꿨으면 True다.
+
+        False면 턴이 중단·만료·삭제된 것이다. 실행은 거기서 멈춘다.
+        """
+        fields: dict[str, Any] = {"step": step, "lease_expires_at": lease_expires_at}
+        if paragraph_count is not None:
+            fields["paragraph_count"] = paragraph_count
+        response = self._request(
+            "PATCH",
+            "/rest/v1/ai_turns",
+            params={
+                "id": f"eq.{uuid.UUID(turn_id)}",
+                "user_id": f"eq.{uuid.UUID(user_id)}",
+                "status": "eq.running",
+                "select": "id",
+            },
+            json=fields,
+            headers={**self._headers(), "Prefer": "return=representation"},
+        )
+        if response.status_code != 200:
+            raise SupabaseConfigError(f"ai_turns touch status {response.status_code}")
+        return len(response.json()) == 1
+
+    def finish_agent_turn(self, payload: dict[str, Any]) -> bool:
+        """E29 10단계: agent_finish_turn(조건부 전이). running이던 턴을 바꿨으면 True, 이미 끝났거나 없으면 False다."""
+        return self.rpc("agent_finish_turn", payload) is True
+
+    def exclude_agent_selections(self, conversation_id: str, selection_ids: list[str], now_iso: str) -> None:
+        """E29 exclude_selection_ids: 대화의 선택 문맥을 이번 턴부터 뺀다. 이미 뺀 선택은 그대로 둔다."""
+        if not selection_ids:
+            return
+        ids = ",".join(str(uuid.UUID(selection_id)) for selection_id in selection_ids)
+        response = self._request(
+            "PATCH",
+            "/rest/v1/ai_conversation_selections",
+            params={
+                "conversation_id": f"eq.{uuid.UUID(conversation_id)}",
+                "id": f"in.({ids})",
+                "excluded_at": "is.null",
+            },
+            json={"excluded_at": now_iso},
+            headers={**self._headers(), "Prefer": "return=minimal"},
+        )
+        if response.status_code not in (200, 204):
+            raise SupabaseConfigError(f"ai_conversation_selections exclude status {response.status_code}")
+
+    def set_agent_topic_label(self, user_id: str, conversation_id: str, topic_label: str) -> None:
+        """E29: 주제 이름이 비어 있는 대화(origin none)에 첫 질문으로 주제 이름을 넣는다(spec Q9). 이미 있으면 그대로 둔다."""
+        response = self._request(
+            "PATCH",
+            "/rest/v1/ai_conversations",
+            params={"id": f"eq.{uuid.UUID(conversation_id)}", "user_id": f"eq.{uuid.UUID(user_id)}", "topic_label": "eq."},
+            json={"topic_label": topic_label},
+            headers={**self._headers(), "Prefer": "return=minimal"},
+        )
+        if response.status_code not in (200, 204):
+            raise SupabaseConfigError(f"ai_conversations topic status {response.status_code}")
+
+    def get_note_for_agent(self, note_id: int, include_unpublished: bool) -> dict[str, Any] | None:
+        """E27이 읽는 노트의 열(id, revision, title, is_published, body_markdown). 없거나 볼 수 없으면 None이다.
+
+        include_unpublished가 False면 공개 노트만 DB에서 거른다(비공개 노트는 없는 노트와 같다).
+        """
+        params = {
+            "id": f"eq.{int(note_id)}",
+            "select": "id,revision,title,is_published,body_markdown",
+            "limit": "1",
+        }
+        if not include_unpublished:
+            params["is_published"] = "eq.true"
+        rows = self._select("notes", params)
+        return rows[0] if rows else None
+
+    def list_published_note_bodies(self) -> list[dict[str, Any]]:
+        """CS Agent 노트 임시 검색(MEG-237): 공개 노트 전부의 id, revision, title, body_markdown을 id 순으로 준다.
+
+        역할과 관계없이 공개 노트만 DB에서 거른다(운영자도 비공개 노트는 근거로 쓰지 않는다, 2026-11-18 결정).
+        쪽을 나누지 않는다. prd 공개 노트는 40건(2026-11-18)이고, API 최대 행(1,000)을 넘으면 잘린다. 노트가 늘면 T4에서
+        검색 방식과 함께 다시 정한다.
+        """
+        return self._select(
+            "notes",
+            {"is_published": "eq.true", "select": "id,revision,title,body_markdown", "order": "id.asc"},
+        )
+
+    def get_agent_turn_source(self, turn_id: str, ref: int) -> dict[str, Any] | None:
+        """E32: 턴의 인용 출처 한 개와 인용 당시 원문(paragraph_snapshot). 없으면 None이다.
+
+        ai_turn_sources에는 user_id가 없다. 호출하는 쪽(E32)이 같은 요청에서 load_turn으로 턴 주인을 먼저 확인한다.
+        """
+        rows = self._select(
+            "ai_turn_sources",
+            {
+                "turn_id": f"eq.{uuid.UUID(turn_id)}",
+                "ref": f"eq.{int(ref)}",
+                "select": "ref,source_kind,source_id,cited_revision,title,section,paragraph_snapshot",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    def get_note_states(self, note_ids: list[int]) -> dict[int, dict[str, Any]]:
+        """CS Agent 권한·가림 판정용 노트 상태(id, revision, title, is_published). 없는 노트는 결과에 없다.
+
+        공개 여부와 상관없이 읽는다. 누가 볼 수 있는지는 호출하는 쪽(agent_access)이 역할을 보고 정한다.
+        """
+        ids = sorted({int(note_id) for note_id in note_ids})
+        if not ids:
+            return {}
+        rows = self._select(
+            "notes",
+            {"id": f"in.({','.join(str(note_id) for note_id in ids)})", "select": "id,revision,title,is_published"},
+        )
+        return {row["id"]: row for row in rows}
 
     def keyed_hash(self, value: str) -> str:
         """이메일·IP 같은 원문 대신 저장할 키. secret key로 서명한 해시라 값을 되돌려 추측하기 어렵다."""
