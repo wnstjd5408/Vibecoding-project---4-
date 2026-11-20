@@ -1378,3 +1378,37 @@ def test_retrieval_gets_the_positions_of_the_selections_in_use(client, fake, ret
     context = retriever.calls[-1][2]
     assert context.selection_spans == ((PUBLIC, 3, 0, 3), (PUBLIC, 3, 4, 9))
     assert len(context.selection_spans) == len(context.selection_texts)
+
+
+def test_a_retry_without_a_question_still_goes_through_the_flag_and_reply_checks(client, fake, bedrock, monkeypatch):
+    """질문을 생략해도 확인 선택(reply) 검사는 저장된 질문으로 돈다. 노출 중단 플래그는 지금처럼 503이다."""
+    cid = fake.conversation(A)
+    topic = fake.turn(cid, 1)
+    fake.turns[topic]["result"] = {"state": "topic_check", "topic_check": {"current_topic": "멱등성"}}
+    hidden = fake.turn(cid, 2, sources=[("note", str(PRIVATE))])
+    body = {"retry_of_turn_id": hidden, "reply": {"turn_id": topic, "topic_choice": "continue"}}
+    assert_error(ask(client, cid, body=body), 409, "conflict", "choice_expired")
+    monkeypatch.setenv(agent.DISABLE_ENV, "1")
+    assert_error(ask(client, cid, body={"retry_of_turn_id": hidden}), 503, "service_unavailable")
+    assert "claim_agent_turn" not in fake.calls and bedrock.calls == 0
+
+
+def test_a_hidden_suggested_turn_whose_source_turn_is_hidden_cannot_be_retried(client, fake, bedrock):
+    """고른 턴 F가 가려져 있으면 X의 추천 질문 글도 회수된 출처에서 나왔다. 다시 묻기로 그 글을 새 턴에 싣지 않는다.
+
+    F(노트 A 인용)가 가려지고 다시 묻기 R로 연쇄가 끝난 뒤, F의 추천 질문을 고른 X(노트 B 인용)가 새 첫 가림 턴이 된 경우다.
+    """
+    fake.note(41, published=False)
+    fake.note(42, published=False)
+    cid = fake.conversation(A)
+    source = fake.turn(cid, 1, sources=[("note", "41")])
+    retry = fake.turn(cid, 2)
+    fake.turns[retry]["retry_of_turn_id"] = source
+    hidden = fake.turn(cid, 3, sources=[("note", "42")])
+    fake.turns[hidden].update(question_kind="suggested", question_text="다음 질문", from_turn_id=source)
+
+    turns = client.get(f"/api/ai/conversations/{cid}", headers=cookie("a-token")).json()["turns"]
+    assert turns[0]["hidden"]["retry_allowed"] is False and "hidden" not in turns[1]
+    assert turns[2]["hidden"] == {"reason": "source_revoked", "retry_allowed": False}
+    assert_error(ask(client, cid, body={"retry_of_turn_id": hidden}), 409, "conflict", "turn_not_retryable")
+    assert "claim_agent_turn" not in fake.calls and bedrock.calls == 0
