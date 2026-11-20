@@ -351,3 +351,32 @@ def test_rejected_e29_writes_are_config_errors(call):
     client, _ = recording_client([httpx.Response(400, json={"code": "23514"})])
     with pytest.raises(SupabaseConfigError):
         call(client)
+
+
+def test_wiki_entry_states_read_only_current_entries_without_their_body():
+    rows = [{"id": 3, "label": "DNS", "glossary_entries": {"term_id": 3}},
+            {"id": 7, "label": "멱등성", "glossary_entries": {"term_id": 7}}]
+    client, seen = recording_client([httpx.Response(200, json=rows)])
+    assert client.get_wiki_entry_states([7, 3, 7]) == {3: {"id": 3, "label": "DNS"}, 7: {"id": 7, "label": "멱등성"}}
+    request = seen[0]
+    assert request.method == "GET" and request.url.path == "/rest/v1/terms"
+    # 항목이 있다는 판정(MEG-252, 설계 3.2): glossary_entries 행(!inner)과 source = glossary. 본문은 읽지 않는다.
+    assert dict(request.url.params) == {
+        "id": "in.(3,7)", "source": "eq.glossary", "select": "id,label,glossary_entries!inner(term_id)",
+    }
+
+
+def test_wiki_entry_states_of_no_ids_do_not_call_the_db():
+    client, seen = recording_client([])
+    assert client.get_wiki_entry_states([]) == {} and seen == []
+
+
+def test_reading_one_wiki_entry_for_e32_reads_its_body_only_if_it_exists_now():
+    row = {"id": 7, "label": "멱등성", "glossary_entries": {"body_markdown": "b"}}
+    client, seen = recording_client([httpx.Response(200, json=[row]), httpx.Response(200, json=[])])
+    assert client.get_wiki_entry(7) == row
+    assert dict(seen[0].url.params) == {
+        "id": "eq.7", "source": "eq.glossary", "select": "id,label,glossary_entries!inner(body_markdown)",
+        "limit": "1",
+    }
+    assert client.get_wiki_entry(8) is None

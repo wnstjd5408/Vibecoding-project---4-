@@ -87,6 +87,15 @@ class WikiEntry:
     body: str
 
 
+def entry_body(row: dict[str, Any]) -> str | None:
+    """terms 행에 내장한 glossary_entries의 본문. 일대일 내장은 객체 하나다. 혹시 배열로 오면 한 행일 때만 받는다."""
+    entry = row.get("glossary_entries")
+    if isinstance(entry, list):
+        entry = entry[0] if len(entry) == 1 else None
+    body = entry.get("body_markdown") if isinstance(entry, dict) else None
+    return body if isinstance(body, str) else None
+
+
 def wiki_entries(rows: Iterable[dict[str, Any]]) -> tuple[list[WikiEntry], int]:
     """DB 행(terms + 내장 glossary_entries)에서 지금 있는 사전 항목만 고른다. (항목 목록, 뺀 행 수)를 준다.
 
@@ -98,11 +107,7 @@ def wiki_entries(rows: Iterable[dict[str, Any]]) -> tuple[list[WikiEntry], int]:
     skipped = 0
     for row in rows:
         term_id = row.get("id")
-        entry = row.get("glossary_entries")
-        # 일대일 내장은 객체 하나다. 혹시 배열로 오면 한 행일 때만 받는다.
-        if isinstance(entry, list):
-            entry = entry[0] if len(entry) == 1 else None
-        body = entry.get("body_markdown") if isinstance(entry, dict) else None
+        body = entry_body(row)
         revision = row.get("glossary_revision")
         label = row.get("label")
         key = row.get("key")

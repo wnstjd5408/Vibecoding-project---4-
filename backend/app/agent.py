@@ -13,7 +13,10 @@
 
 노출 중단(Q11): CS_AGENT_DISABLED를 켜면 E27(새 대화)과 E29(질문, agent_turns)가 503이 된다. E28·E30·E31은 그대로 동작한다.
 끄고 켜는 절차는 docs/deployment-guide.md "CS Agent 노출 중단" 절에 있다.
-T4(MEG-163) 전에는 위키 문맥이 없으므로 E27 origin wiki는 422다(기술 검토 4절).
+위키 플래그(CS_AGENT_WIKI_ENABLED, MEG-252, 기본 꺼짐): 꺼져 있으면 E27 origin wiki는 지금처럼 422다(기술 검토 4절).
+켜져 있으면 wiki_ref(`glossary:{term_id}`, MEG-163 W7)가 가리키는 사전 항목이 지금 있을 때 위키 대화를 만든다. 형식이나 필드
+조합이 틀리면 422, 항목이 없으면 404다. topic_label은 항목 제목이다(spec Q9). 위키 문단 선택은 받지 않는다(W7).
+절차는 docs/deployment-guide.md "CS Agent 위키 플래그" 절에 있다.
 로그에는 단계·오류 코드만 남기고 질문·답변·노트 원문은 남기지 않는다.
 """
 
@@ -37,6 +40,8 @@ from app.agent_access import (
     turn_payload,
     visible_turns,
 )
+from app.agent_retrieval import wiki_enabled
+from app.agent_wiki_search import parse_wiki_ref, wiki_source_id
 from app.auth import SessionUser, require_login
 from app.ai_explain import SelectionBody, _field_error
 from app.errors import ApiError
@@ -53,6 +58,8 @@ _OFF_VALUES = frozenset({"", "0", "false", "no", "off"})
 MAX_SELECTION_CHARS = 2000
 # 주제 이름은 선택 문장의 앞 20자다(spec Q9 권장안). 공백은 하나로 줄인다.
 TOPIC_LABEL_CHARS = 20
+# 위키 대화의 주제 이름(항목 제목) 상한. ai_conversations.topic_label 제약(300자)과 같다. 사전 제목은 200자 이하다.
+WIKI_TOPIC_LABEL_CHARS = 300
 
 _MAX_BIGINT = 2**63 - 1
 _MAX_INT = 2**31 - 1
@@ -75,10 +82,20 @@ class ConversationRequest(BaseModel):
 
 def _check_request_shape(body: ConversationRequest) -> None:
     """origin과 필드 조합(spec E27). 본문을 읽지 않고 판정한다. 맞지 않으면 422다."""
-    if body.origin == "wiki":
-        # T4 전에는 위키 문맥을 받지 않는다(기술 검토 4절 T4 전 동작).
-        raise _field_error("origin", "invalid_value")
     note_fields = {"note_id": body.note_id, "note_revision": body.note_revision, "selection": body.selection}
+    if body.origin == "wiki":
+        if not wiki_enabled():
+            # 위키 플래그가 꺼져 있으면 위키 문맥을 받지 않는다(기술 검토 4절 T4 전 동작, MEG-252 AC-1).
+            raise _field_error("origin", "invalid_value")
+        # 위키 문단 선택은 v1에서 받지 않는다(MEG-163 W7). 노트 필드는 모두 비어 있어야 한다.
+        for name, value in note_fields.items():
+            if value is not None:
+                raise _field_error(name, "invalid_value")
+        if body.wiki_ref is None:
+            raise _field_error("wiki_ref", "required")
+        if parse_wiki_ref(body.wiki_ref) is None:
+            raise _field_error("wiki_ref", "invalid_value")
+        return
     if body.wiki_ref is not None:
         raise _field_error("wiki_ref", "invalid_value")
     if body.origin == "none":
@@ -96,8 +113,8 @@ def _check_request_shape(body: ConversationRequest) -> None:
         raise _field_error("selection.end", "too_long")
 
 
-def topic_label_of(text: str) -> str:
-    return _SPACES.sub(" ", text).strip()[:TOPIC_LABEL_CHARS]
+def topic_label_of(text: str, limit: int = TOPIC_LABEL_CHARS) -> str:
+    return _SPACES.sub(" ", text).strip()[:limit]
 
 
 def _remove_conversation(supabase: SupabaseClient, user: SessionUser, conversation_id: str) -> None:
@@ -106,6 +123,33 @@ def _remove_conversation(supabase: SupabaseClient, user: SessionUser, conversati
         supabase.delete_agent_conversation(user.user_id, conversation_id)
     except (SupabaseUnavailable, SupabaseConfigError) as error:
         logger.warning("stage=db conversation not removed: %s", type(error).__name__)
+
+
+def _create_wiki_conversation(body: ConversationRequest, user: SessionUser, supabase: SupabaseClient) -> dict:
+    """E27 origin wiki(MEG-252). 요청 형식은 _check_request_shape가 이미 봤다(플래그 켜짐, wiki_ref 모양).
+
+    사전 항목이 지금 있어야 한다(설계 3.2, glossary_entries 행 + terms.source = 'glossary'). 없으면 404다. 사전은 모두
+    공개라(W5) 역할에 따라 다르지 않다.
+    """
+    term_id = parse_wiki_ref(body.wiki_ref)
+    entry = supabase.get_wiki_entry_states([term_id]).get(term_id)
+    if entry is None:
+        raise ApiError("not_found", stage="db")
+    row = supabase.create_agent_conversation(
+        {
+            "user_id": user.user_id,
+            "origin": "wiki",
+            "wiki_ref": wiki_source_id(term_id),
+            # 위키 대화의 주제 이름은 항목 제목이다(spec Q9). 상한은 ai_conversations.topic_label과 같다.
+            "topic_label": topic_label_of(entry["label"], WIKI_TOPIC_LABEL_CHARS),
+        }
+    )
+    if row is None:
+        raise ApiError("not_found", stage="db")
+    access = ConversationAccess(
+        conversation={**row, "ai_conversation_selections": []}, notes={}, wiki={term_id: entry}
+    )
+    return conversation_payload(access)
 
 
 @router.post("/ai/conversations", status_code=201, summary="E27 start a CS Agent conversation")
@@ -124,6 +168,9 @@ def create_conversation(
     if body.origin == "none":
         row = supabase.create_agent_conversation({"user_id": user.user_id, "origin": "none", "topic_label": ""})
         return conversation_payload(ConversationAccess(conversation={**row, "ai_conversation_selections": []}, notes={}))
+
+    if body.origin == "wiki":
+        return _create_wiki_conversation(body, user, supabase)
 
     # 노트 읽기 권한은 E05와 같다. 일반 사용자의 비공개 노트는 없는 노트와 같은 404다.
     note = supabase.get_note_for_agent(body.note_id, include_unpublished=user.is_operator)

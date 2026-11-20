@@ -57,6 +57,7 @@ from app.agent_access import (
     read_turns,
     source_checker,
     visible_turns,
+    wiki_source_term,
 )
 from app.agent_output import (
     MAX_QUESTION_CHARS,
@@ -560,12 +561,17 @@ def _execute(
         selection_texts=tuple(text for _, text in checked.selections),
         selection_spans=tuple(checked.selection_spans),
         recent_questions=tuple(question for question, _ in checked.recent),
+        # 위키에서 연 대화의 사전 항목. 위키 검색이 그 항목 문단에 가산점을 준다(MEG-251·MEG-252). 노트 검색은 쓰지 않는다.
+        wiki_ref=conversation.get("wiki_ref"),
     )
     emit(sse("step", {"step": "understand", "state": "done"}))
 
     _touch(job, supabase, "retrieve")
     emit(sse("step", {"step": "retrieve", "state": "current"}))
     paragraphs = usable_paragraphs(retriever.retrieve(job.user, checked.text, context))
+    if conversation["origin"] == "wiki":
+        # 위키에서 연 대화는 위키 문단만 근거로 쓴다(MEG-163 W2, 설계 독립 리뷰 R1). 검색 구현과 관계없이 여기서 거른다.
+        paragraphs = [paragraph for paragraph in paragraphs if paragraph.source_kind == "wiki"]
     _touch(job, supabase, "retrieve", len(paragraphs))
     done: dict[str, Any] = {"step": "retrieve", "state": "done", "paragraph_count": len(paragraphs)}
     # 화면이 "노트 문단 N개"와 "위키 문단 N개"를 고르는 값이다(spec 6절, 2026-11-18 결정).
@@ -666,7 +672,10 @@ def _execute(
 
 
 def _check_sources(job: TurnJob, supabase: SupabaseClient, sources: list[dict[str, Any]], ledger_id: int) -> None:
-    """인용한 문단이 지금도 볼 수 있는 출처인지 다시 본다(spec E29 9단계). 가림 함수와 같은 판정이다."""
+    """인용한 문단이 지금도 볼 수 있는 출처인지 다시 본다(spec E29 9단계). 가림 함수와 같은 판정이다.
+
+    노트 출처는 지금 공개이고 존재하는지, 위키 출처는 그 사전 항목이 지금 있는지 본다(MEG-252).
+    """
     if not sources:
         return
     note_ids = []
@@ -675,7 +684,11 @@ def _check_sources(job: TurnJob, supabase: SupabaseClient, sources: list[dict[st
         note_id = note_source_id(source) if source["source_kind"] == "note" else None
         if note_id is not None:
             note_ids.append(note_id)
-    visible = source_checker(supabase.get_note_states(note_ids) if note_ids else {})
+    term_ids = sorted({term_id for source in sources if (term_id := wiki_source_term(source)) is not None})
+    visible = source_checker(
+        supabase.get_note_states(note_ids) if note_ids else {},
+        supabase.get_wiki_entry_states(term_ids) if term_ids else {},
+    )
     if not all(visible(source) for source in sources):
         logger.warning("stage=sources turn_id=%s source_not_visible", job.turn_id)
         raise _Failed("error", "internal_error", ledger_id)

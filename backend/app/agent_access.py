@@ -2,14 +2,18 @@
 
 E28~E32와 E29 재생·스트림은 모두 이 모듈로 권한을 확인하고 턴을 내보낸다. 그래야 경로마다 규칙이 갈라지지 않는다.
 
-- 공통 권한 검사(load_conversation): (1) 세션 사용자의 대화인가, (2) 대화에 연결된 노트와 선택 문맥의 노트(제외한 것 포함)를
-  지금 읽을 수 있는가. 노트 읽기는 E05와 같다: 공개 노트는 누구나, 비공개 노트는 운영자만. 위키 문맥은 T4(MEG-163) 전에는
-  확인할 방법이 없어 읽을 수 없는 것으로 본다. 하나라도 아니면 404다(없음·남의 것·회수를 구분하지 않는다).
+- 공통 권한 검사(load_conversation): (1) 세션 사용자의 대화인가, (2) 대화에 연결된 노트와 선택 문맥의 노트(제외한 것 포함)와
+  위키 항목을 지금 읽을 수 있는가. 노트 읽기는 E05와 같다: 공개 노트는 누구나, 비공개 노트는 운영자만. 위키(사전 항목)는
+  모두 공개라(MEG-163 W5) 항목이 지금 있으면 읽을 수 있다. 위키에서 연 대화(origin wiki)는 위키 플래그(MEG-252)가 꺼져 있으면
+  닫는다. 꺼진 동안 그 대화에 질문하면 노트로 답하게 되기 때문이다(설계 독립 리뷰 R1). 하나라도 아니면 404다(없음·남의 것·
+  회수를 구분하지 않는다).
 - 가림 함수(hidden_marks): 지금 볼 수 없는 출처를 인용한 첫 턴부터 그 대화의 뒤쪽 턴을 모두 가린다. 첫 턴만 다시 묻기를
   허용한다(디자인 결정 7·11·15). 그 첫 턴을 대상으로 한 다시 묻기 턴에서 가림이 끝나고, 그 턴부터는 각자의 출처로 다시
   판정한다(2026-11-18 결정). 가림은 저장하지 않고 읽을 때마다 계산한다.
 - 노트 출처(source_kind note, D1 임시 근거)는 역할과 상관없이 지금 공개이고 존재해야 보인다(기술 검토 5.1). 운영자도 비공개
-  노트는 근거로 쓰지 않으므로 같은 기준이다. 위키 출처는 T4 전에는 확인할 수 없어 보이지 않는 것으로 본다.
+  노트는 근거로 쓰지 않으므로 같은 기준이다. 위키 출처(source_kind wiki, `glossary:{term_id}`)는 그 사전 항목이 지금 있어야
+  보인다(설계 3.2: glossary_entries 행이 있고 terms.source = 'glossary'). 항목을 지우면 회수이고, 다시 등록하면 다시 보인다
+  (가림은 저장하지 않으므로). 위키 출처의 판정은 위키 플래그와 관계없다. 모르는 종류와 모양이 틀린 source_id는 보이지 않는다.
 - 실행 만료(spec 3.1): 읽을 때 lease_expires_at이 지난 running 턴을 failed(interrupted)로 바꾼다(expire_running_turns).
 
 로그에는 턴 id·단계·오류 코드만 남긴다. 질문·답변·노트 원문은 남기지 않는다.
@@ -18,11 +22,13 @@ E28~E32와 E29 재생·스트림은 모두 이 모듈로 권한을 확인하고 
 import logging
 import re
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from app import session
+from app.agent_retrieval import wiki_enabled
+from app.agent_wiki_search import parse_wiki_ref
 from app.auth import SessionUser
 from app.errors import ApiError
 from app.supabase import SupabaseClient
@@ -55,10 +61,14 @@ def now_iso() -> str:
 
 @dataclass(frozen=True)
 class ConversationAccess:
-    """공통 권한 검사를 통과한 대화. notes는 대화·선택 문맥 노트의 지금 상태(id → revision·title·is_published)다."""
+    """공통 권한 검사를 통과한 대화. notes는 대화·선택 문맥 노트의 지금 상태(id → revision·title·is_published)다.
+
+    wiki는 위키에서 연 대화가 가리키는 사전 항목의 지금 상태(term_id → id·label)다. 지금 있는 항목만 담긴다.
+    """
 
     conversation: dict[str, Any]
     notes: dict[int, dict[str, Any]]
+    wiki: dict[int, dict[str, Any]] = field(default_factory=dict)
 
 
 def conversation_note_ids(conversation: dict[str, Any]) -> set[int]:
@@ -74,27 +84,47 @@ def note_readable(state: dict[str, Any] | None, user: SessionUser) -> bool:
     return state is not None and (state["is_published"] or user.is_operator)
 
 
+def conversation_wiki_term(conversation: dict[str, Any]) -> int | None:
+    """위키에서 연 대화(origin wiki)가 가리키는 사전 항목의 term_id. 위키 대화가 아니거나 wiki_ref 모양이 틀리면 None이다."""
+    if conversation.get("origin") != "wiki":
+        return None
+    return parse_wiki_ref(conversation.get("wiki_ref"))
+
+
 def check_conversation(
-    user: SessionUser, conversation: dict[str, Any] | None, notes: dict[int, dict[str, Any]]
+    user: SessionUser,
+    conversation: dict[str, Any] | None,
+    notes: dict[int, dict[str, Any]],
+    wiki: dict[int, dict[str, Any]] | None = None,
 ) -> ConversationAccess:
-    """공통 권한 검사의 판정 부분. DB를 읽지 않으므로 T3가 이미 읽은 행으로도 부를 수 있다. 아니면 404다."""
+    """공통 권한 검사의 판정 부분. DB를 읽지 않으므로 이미 읽은 행으로도 부를 수 있다. 아니면 404다.
+
+    wiki는 위키 대화가 가리키는 사전 항목의 지금 상태(get_wiki_entry_states, 있는 항목만)다.
+    """
     if conversation is None or conversation.get("user_id") != user.user_id:
         raise ApiError("not_found", stage="db")
+    wiki = wiki or {}
     if conversation.get("wiki_ref") is not None or conversation.get("origin") == "wiki":
-        # 위키 권한 모델은 MEG-163(T4)에서 정한다. 그 전에는 확인할 수 없으므로 닫는다.
-        raise ApiError("not_found", stage="db")
+        # 위키 대화는 플래그가 켜져 있고, wiki_ref가 `glossary:{term_id}`이고, 그 항목이 지금 있어야 열린다.
+        # origin이 wiki가 아닌데 wiki_ref가 있는 행(DB 제약상 없다)도 닫는다.
+        term_id = conversation_wiki_term(conversation)
+        if not wiki_enabled() or term_id is None or term_id not in wiki:
+            raise ApiError("not_found", stage="db")
     if not all(note_readable(notes.get(note_id), user) for note_id in conversation_note_ids(conversation)):
         raise ApiError("not_found", stage="db")
-    return ConversationAccess(conversation=conversation, notes=notes)
+    return ConversationAccess(conversation=conversation, notes=notes, wiki=wiki)
 
 
 def load_conversation(supabase: SupabaseClient, user: SessionUser, conversation_id: str) -> ConversationAccess:
-    """공통 권한 검사(spec 8절). 대화와 연결 노트를 읽고 check_conversation으로 판정한다. 아니면 404다."""
+    """공통 권한 검사(spec 8절). 대화와 연결 노트·위키 항목을 읽고 check_conversation으로 판정한다. 아니면 404다."""
     conversation = supabase.get_agent_conversation(user.user_id, conversation_id)
     if conversation is None:
         raise ApiError("not_found", stage="db")
     notes = supabase.get_note_states(sorted(conversation_note_ids(conversation)))
-    return check_conversation(user, conversation, notes)
+    term_id = conversation_wiki_term(conversation)
+    # 플래그가 꺼져 있으면 어차피 닫으므로 사전을 읽지 않는다.
+    wiki = supabase.get_wiki_entry_states([term_id]) if term_id is not None and wiki_enabled() else {}
+    return check_conversation(user, conversation, notes, wiki)
 
 
 def load_turn(supabase: SupabaseClient, user: SessionUser, turn_id: str) -> tuple[dict[str, Any], ConversationAccess]:
@@ -159,6 +189,23 @@ def note_source_id(source: dict[str, Any]) -> int | None:
     return int(value)
 
 
+def wiki_source_term(source: dict[str, Any]) -> int | None:
+    """위키 출처의 source_id(`glossary:{term_id}`, MEG-163 W7)를 term_id로 바꾼다. 위키 출처가 아니거나 모양이 틀리면 None이다."""
+    if source.get("source_kind") != "wiki":
+        return None
+    return parse_wiki_ref(source.get("source_id"))
+
+
+def source_wiki_terms(turns: Iterable[dict[str, Any]]) -> set[int]:
+    ids = set()
+    for turn in turns:
+        for source in turn.get("ai_turn_sources") or []:
+            term_id = wiki_source_term(source)
+            if term_id is not None:
+                ids.add(term_id)
+    return ids
+
+
 def source_note_ids(turns: Iterable[dict[str, Any]]) -> set[int]:
     ids = set()
     for turn in turns:
@@ -170,13 +217,21 @@ def source_note_ids(turns: Iterable[dict[str, Any]]) -> set[int]:
     return ids
 
 
-def source_checker(notes: dict[int, dict[str, Any]]) -> Callable[[dict[str, Any]], bool]:
-    """출처 한 개가 지금 보이는지 판정하는 함수를 만든다. notes는 출처 노트의 지금 상태다(get_note_states).
+def source_checker(
+    notes: dict[int, dict[str, Any]], wiki: dict[int, dict[str, Any]] | None = None
+) -> Callable[[dict[str, Any]], bool]:
+    """출처 한 개가 지금 보이는지 판정하는 함수를 만든다. notes는 출처 노트의 지금 상태(get_note_states), wiki는 출처 사전
+    항목의 지금 상태(get_wiki_entry_states, 있는 항목만)다.
 
-    노트 출처는 공개이고 존재할 때만 보인다(역할 무관). 위키 출처와 모르는 종류는 T4 전에는 보이지 않는다.
+    노트 출처는 공개이고 존재할 때만 보인다(역할 무관). 위키 출처는 그 사전 항목이 지금 있을 때만 보인다. 모르는 종류는
+    보이지 않는다.
     """
+    wiki = wiki or {}
 
     def visible(source: dict[str, Any]) -> bool:
+        if source.get("source_kind") == "wiki":
+            term_id = wiki_source_term(source)
+            return term_id is not None and term_id in wiki
         if source.get("source_kind") != "note":
             return False
         note_id = note_source_id(source)
@@ -241,14 +296,19 @@ def visible_turns(
 ) -> list[dict[str, Any]]:
     """턴 행 목록에 가림을 적용해 응답 모양(turn 객체)으로 바꾼다. 턴을 돌려주는 모든 경로가 이 함수를 쓴다.
 
-    출처 노트 상태는 대화 권한 검사에서 이미 읽은 노트를 빼고 한 번만 더 읽는다.
+    출처 노트·사전 항목 상태는 대화 권한 검사에서 이미 읽은 것을 빼고 한 번만 더 읽는다.
     """
     needed = source_note_ids(turns)
     states = {note_id: access.notes[note_id] for note_id in needed if note_id in access.notes}
     missing = sorted(needed - states.keys())
     if missing:
         states |= supabase.get_note_states(missing)
-    marks = hidden_marks(turns, source_checker(states))
+    wiki_needed = source_wiki_terms(turns)
+    wiki = {term_id: access.wiki[term_id] for term_id in wiki_needed if term_id in access.wiki}
+    wiki_missing = sorted(wiki_needed - wiki.keys())
+    if wiki_missing:
+        wiki |= supabase.get_wiki_entry_states(wiki_missing)
+    marks = hidden_marks(turns, source_checker(states, wiki))
     return [turn_payload(turn, marks.get(turn["id"])) for turn in sorted(turns, key=lambda row: row["seq"])]
 
 
@@ -339,6 +399,9 @@ def conversation_payload(access: ConversationAccess) -> dict[str, Any]:
         ],
         "created_at": conversation["created_at"],
     }
+    if conversation.get("wiki_ref") is not None:
+        # 위키에서 연 대화의 사전 항목(spec 3절 conversation.wiki_ref?). 권한 검사를 통과한 대화만 여기에 온다.
+        payload["wiki_ref"] = conversation["wiki_ref"]
     if conversation.get("note_id") is not None:
         state = access.notes[conversation["note_id"]]
         payload["note"] = {
