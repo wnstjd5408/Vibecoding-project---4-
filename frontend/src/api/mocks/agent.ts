@@ -4,6 +4,7 @@
 //  - 같은 키 재전송(재생·409 in_progress), 다른 대화의 키(409 idempotency_key_reused), 같은 대화의 진행 중 턴(409 turn_in_progress),
 //    E31 중단을 서버 규칙대로 돌려준다.
 // 시나리오는 setAgentMockScenario로 고른다. 다시 고르거나 resetAgentMock을 부를 때까지 다음 질문마다 같은 시나리오를 쓴다.
+// 다만 rate_limited와 turn_in_progress는 한 번 거절한 뒤 answered로 돌아간다(기다린 뒤 다시 보내면 성공하는 흐름).
 // 화면 개발 중에는 브라우저 콘솔이나 시험에서 `await import('/src/api/mocks/agent.ts')`로 불러 바꿀 수 있다.
 import { newIdempotencyKey } from '../../ai/explain.ts'
 import type {
@@ -33,9 +34,9 @@ export type AgentMockScenario =
   | 'limit_after_start' // 스트림 시작 뒤 한도 초과(error 이벤트 ai_limit_reached, 턴은 failed(limit))
   | 'disconnect' // 자료 찾기 단계 뒤 연결이 끊긴다. 서버 쪽 턴은 조금 뒤 answered로 끝난다
   | 'eof' // 자료 찾기 단계 뒤 스트림이 마지막 이벤트 없이 닫힌다. 서버 쪽 턴은 조금 뒤 answered로 끝난다
-  | 'rate_limited' // 스트림 전 429 rate_limited(retry_after_seconds 1)
+  | 'rate_limited' // 스트림 전 429 rate_limited(retry_after_seconds 1). 한 번만
   | 'ai_limit_reached' // 스트림 전 429 ai_limit_reached
-  | 'turn_in_progress' // 같은 대화에 다른 턴이 진행 중이다(409 turn_in_progress). 그 턴은 조금 뒤 answered로 끝난다
+  | 'turn_in_progress' // 같은 대화에 다른 턴이 진행 중이다(409 turn_in_progress). 그 턴은 조금 뒤 answered로 끝난다. 한 번만
   | 'service_unavailable' // E27·E29가 503(노출 중단 플래그)
 
 export type AgentMockRequest = { method: string; path: string; idempotencyKey?: string; body?: unknown }
@@ -392,7 +393,8 @@ export function openMockTurnStream(request: {
     })
   }
   if (scenario === 'turn_in_progress' && !runningTurnOf(conversation, now)) {
-    // 다른 탭에서 보낸 것처럼 같은 대화에 다른 키의 턴을 먼저 실행해 둔다.
+    // 다른 탭에서 보낸 것처럼 같은 대화에 다른 키의 턴을 먼저 실행해 둔다. 한 번만 쓰고 answered로 돌아간다.
+    scenario = 'answered'
     const other = createTurn(conversation, newIdempotencyKey(), { kind: 'free', text: '다른 곳에서 보낸 합성 질문' }, 'answered')
     other.finishAt = other.startedAt + AFTER_CUT_MS + stepMs
   }
@@ -405,6 +407,8 @@ export function openMockTurnStream(request: {
     })
   }
   if (scenario === 'rate_limited') {
+    // 한 번만 거절하고 answered로 돌아간다. 기다린 뒤 다시 보내면 성공하는 흐름을 화면에서 볼 수 있게 한다.
+    scenario = 'answered'
     return errorBody(429, 'rate_limited', 'Too many requests; retry later', { retry_after_seconds: POLL_SECONDS })
   }
   if (scenario === 'ai_limit_reached') return errorBody(429, 'ai_limit_reached', 'AI usage limit reached; retry later')

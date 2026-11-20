@@ -45,11 +45,17 @@ export class SseParser {
     return messages
   }
 
-  // 스트림이 끝났을 때 부른다. 빈 줄로 닫히지 않은 이벤트는 버린다.
-  end(): void {
+  // 스트림이 끝났을 때 부른다. 기다리던 CR은 줄 끝으로 보고 처리한 뒤, 빈 줄로 닫히지 않은 이벤트는 버린다.
+  end(): SseMessage[] {
+    const messages: SseMessage[] = []
+    if (this.buffer.endsWith('\r')) {
+      const message = this.line(this.buffer.slice(0, -1))
+      if (message) messages.push(message)
+    }
     this.buffer = ''
     this.event = ''
     this.data = []
+    return messages
   }
 
   private line(line: string): SseMessage | null {
@@ -85,7 +91,7 @@ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator
       const { done, value } = await reader.read()
       if (done) {
         yield* parser.push(decoder.decode())
-        parser.end()
+        yield* parser.end()
         return
       }
       yield* parser.push(decoder.decode(value, { stream: true }))

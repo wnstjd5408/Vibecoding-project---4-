@@ -81,6 +81,19 @@ test('SSE 파서: 줄 끝 세 종류, 조각 경계, 주석, 여러 data 줄, �
   expect(events).toEqual([{ type: 'delayed' }, { type: 'error', data: { code: 'ai_unavailable', message: 'm', request_id: 'r' } }, null])
 })
 
+test('SSE 파서: 스트림이 CR 하나로 끝나도 마지막 이벤트를 낸다', async ({ page }) => {
+  await setup(page)
+  const result = await page.evaluate(() => {
+    const w = window as any
+    const parser = new w.sse.SseParser()
+    const pushed = parser.push('event: result\rdata: {"a":1}\r\r')
+    const ended = parser.end()
+    return { pushed, ended }
+  })
+  expect(result.pushed).toEqual([])
+  expect(result.ended).toEqual([{ event: 'result', data: '{"a":1}' }])
+})
+
 test('AC-1 step·result가 대화 상태로 바뀐다: 단계 3개를 차례로 보이고 답변 턴을 대화에 넣는다', async ({ page }) => {
   await setup(page)
   const result = await page.evaluate(async (context) => {
@@ -192,16 +205,24 @@ test('AC-3 한 동작을 두 번 눌러도 Idempotency-Key는 하나다(진행 �
     w.mock.setAgentMockScenario('rate_limited')
     await controller.ask({ kind: 'free', text: '제한 뒤 질문' })
     const limited = controller.getSnapshot().failure
+    const canRetryBefore = w.agent.canRetry(limited)
     await controller.retry()
     const beforeWait = w.e29Keys().length
-    await new Promise((resolve) => setTimeout(resolve, limited.retryAt - Date.now() + 50))
-    w.mock.setAgentMockScenario('answered')
+    // 기다릴 시간이 끝나면 요청 없이도 상태 알림이 한 번 와서 화면이 '다시 시도'를 다시 켤 수 있다.
+    let notified = 0
+    const unsubscribe = controller.subscribe(() => (notified += 1))
+    await new Promise((resolve) => setTimeout(resolve, limited.retryAt - Date.now() + 100))
+    unsubscribe()
+    const canRetryAfter = w.agent.canRetry(controller.getSnapshot().failure)
     const retryA = controller.retry()
     const retryB = controller.retry()
     await Promise.all([retryA, retryB])
-    return { same, afterDouble, limited, beforeWait, keys: w.e29Keys(), state: controller.getSnapshot() }
+    return { same, afterDouble, limited, beforeWait, notified, canRetryBefore, canRetryAfter, keys: w.e29Keys(), state: controller.getSnapshot() }
   }, NOTE_CONTEXT)
   expect(result.same).toBe(true)
+  expect(result.canRetryBefore).toBe(false)
+  expect(result.notified).toBe(1)
+  expect(result.canRetryAfter).toBe(true)
   expect(result.afterDouble).toHaveLength(1)
   expect(result.limited).toMatchObject({ kind: 'rate_limited', question: { text: '제한 뒤 질문' } })
   expect(result.limited.retryAt).toBeGreaterThan(0)

@@ -81,14 +81,17 @@ export type AgentFailure = {
 
 export type AgentState = {
   conversation: AgentConversation | null
-  // 받은 턴(오래된 순). completed·cancelled 턴과 E28로 읽은 턴이다. 지금 진행 중인 턴은 pending에 있다.
+  // 받은 턴(오래된 순). completed·cancelled 턴과 E28로 읽은 턴이다. 이 객체가 진행 중인 턴은 pending에 있다.
+  // E28로 읽은 턴에는 다른 탭에서 보낸 running·failed 턴이 있을 수 있다. 이 객체는 그 running 턴을 따로 조회하지 않는다.
   turns: AgentTurn[]
   pending: PendingTurn | null
   failure: AgentFailure | null
   // 마지막으로 중단한 질문. '중단한 질문 다시 넣기'에 쓴다(E31 응답의 question).
   cancelled: { turnId: string; question: AgentTurn['question'] } | null
-  // E28로 대화를 다시 읽는 중
+  // E28로 대화를 다시 읽는 중(newConversation의 E27 포함)
   refreshing: boolean
+  // E28 다시 읽기나 newConversation의 E27이 실패했다. 질문의 실패(failure)와 따로 두어 남아 있던 질문의 다시 보내기를 지우지 않는다.
+  loadFailure: AgentFailure | null
 }
 
 export type AskOptions = Omit<AskTurnRequest, 'question'> & {
@@ -108,7 +111,15 @@ type Action = {
   keyRenewals: number
 }
 
-type Run = { action: Action; abort: AbortController; promise: Promise<void> }
+type Run = {
+  action: Action
+  abort: AbortController
+  promise: Promise<void>
+  // retry()가 실패한 이전 턴을 E30으로 확인하는 중이다. 이때는 중단할 이 동작의 턴이 아직 없다.
+  checking: boolean
+  // retry()를 부르기 전의 실패. 확인 중에 중단하면 이 실패로 돌아간다.
+  previousFailure: AgentFailure | null
+}
 
 // E30 조회 규칙. 서버 권장 간격이 없으면 DEFAULT_POLL_MS다. 연속 실패가 MAX_POLL_ERRORS를 넘거나
 // 전체 대기가 MAX_POLL_MS를 넘으면 network 실패로 멈춘다(서버는 실행이 만료되면 failed(interrupted)로 바꾸므로 보통 그 전에 끝난다).
@@ -204,7 +215,21 @@ function mergeTurn(turns: AgentTurn[], turn: AgentTurn): AgentTurn[] {
   return [...rest, turn].sort((a, b) => a.seq - b.seq)
 }
 
-const INITIAL: AgentState = { conversation: null, turns: [], pending: null, failure: null, cancelled: null, refreshing: false }
+function withoutPoll(turn: AgentTurnRead): AgentTurn {
+  const { retry_after_seconds: _poll, ...rest } = turn
+  void _poll
+  return rest
+}
+
+const INITIAL: AgentState = {
+  conversation: null,
+  turns: [],
+  pending: null,
+  failure: null,
+  cancelled: null,
+  refreshing: false,
+  loadFailure: null,
+}
 
 export class AgentConversationController {
   private state: AgentState = INITIAL
@@ -213,6 +238,8 @@ export class AgentConversationController {
   // 마지막으로 실패한 동작. retry()가 이어서 쓴다.
   private failedAction: Action | null = null
   private refreshAbort: AbortController | null = null
+  // 429의 기다릴 시간이 끝나면 화면이 다시 그리도록 알린다(canRetry가 시각에 따라 바뀌므로).
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
 
   // useSyncExternalStore에 넘길 수 있게 화살표 함수로 둔다.
   subscribe = (listener: () => void): (() => void) => {
@@ -268,7 +295,7 @@ export class AgentConversationController {
     if (this.state.failure !== null) this.set({ failure: null })
   }
 
-  // 응답 중단(E31). turn_id를 아직 모르면 turn 이벤트를 받는 즉시 부른다.
+  // 응답 중단(E31). 이 동작의 turn_id를 아직 모르면 알게 되는 즉시(turn 이벤트, 409 in_progress) 부른다.
   async cancel(): Promise<void> {
     const run = this.run
     const pending = this.state.pending
@@ -279,8 +306,30 @@ export class AgentConversationController {
       run.abort.abort()
       return
     }
+    if (pending.phase === 'following') {
+      // 이어 보던 턴은 이 동작의 턴이 아니다(다른 탭 등에서 보낸 질문). 중단하지 않고 기다림만 멈춘다. 질문은 남긴다.
+      this.fail(run, { kind: 'turn_in_progress', code: 'turn_in_progress', question: pending.question, turnId: null, retryAt: null })
+      run.abort.abort()
+      return
+    }
+    if (run.checking) {
+      // 실패한 이전 턴을 확인하는 중이라 새 질문은 아직 보내지 않았다. 확인을 멈추고 이전 실패로 돌아간다.
+      const previous = run.previousFailure
+      if (previous) this.fail(run, previous)
+      else this.finishRun(run, {})
+      run.abort.abort()
+      return
+    }
     this.setPending(run, { cancelRequested: true, cancelFailed: false })
-    if (pending.turnId !== null) await this.sendCancel(run, pending.turnId)
+    if (run.action.turnId !== null) await this.sendCancel(run, run.action.turnId)
+  }
+
+  // 이 동작의 턴 id를 알게 됐다. 그 전에 중단을 눌렀으면 지금 E31을 부른다.
+  private learnTurn(run: Run, turnId: string, from: 'event' | 'in_progress', seq?: number): void {
+    run.action.turnId = turnId
+    run.action.turnIdFrom = from
+    this.setPending(run, seq === undefined ? { turnId } : { turnId, seq })
+    if (this.state.pending?.cancelRequested && this.run === run) void this.sendCancel(run, turnId)
   }
 
   private async sendCancel(run: Run, turnId: string): Promise<void> {
@@ -298,26 +347,23 @@ export class AgentConversationController {
       return
     }
     if (this.run !== run) return
-    // 받다 만 답변은 보여 주지 않는다. 스트림·조회를 멈추고 E30으로 중단된 턴을 받아 넣는다.
+    // 받다 만 답변은 보여 주지 않는다. 스트림·조회를 멈추고 바로 끝낸다. 다음 질문을 막지 않기 위해 E30을 기다리지 않는다.
     run.abort.abort()
-    let turn: AgentTurn | null = null
-    try {
-      turn = await readTurn(turnId)
-    } catch {
-      turn = null
-    }
-    const pending = this.state.pending
-    const stored: AgentTurn = turn ?? {
-      turn_id: turnId,
-      seq: pending?.seq ?? Number.MAX_SAFE_INTEGER,
-      question: response.question,
-      status: 'cancelled',
-      created_at: new Date().toISOString(),
-    }
+    const seq = this.state.pending?.seq ?? Math.max(0, ...this.state.turns.map((turn) => turn.seq)) + 1
+    const conversationId = this.state.conversation?.conversation_id
     this.finishRun(run, {
-      turns: mergeTurn(this.state.turns, stored),
+      turns: mergeTurn(this.state.turns, { turn_id: turnId, seq, question: response.question, status: 'cancelled', created_at: new Date().toISOString() }),
       cancelled: { turnId, question: response.question },
     })
+    // 서버의 턴 기록(created_at·finished_at·seq)으로 바꿔 넣는다. 그사이 대화가 바뀌었으면 버린다.
+    readTurn(turnId).then(
+      (turn) => {
+        if (this.state.conversation?.conversation_id !== conversationId) return
+        if (!this.state.turns.some((item) => item.turn_id === turnId)) return
+        this.set({ turns: mergeTurn(this.state.turns, withoutPoll(turn)) })
+      },
+      () => {},
+    )
   }
 
   // 대화를 E28로 다시 읽는다('이전 대화 보기', 출처 화면에서 돌아올 때). 진행 중인 동작이 있으면 읽지 않는다.
@@ -330,11 +376,11 @@ export class AgentConversationController {
     try {
       const { turns, ...rest } = await readConversation(conversation.conversation_id, abort.signal)
       if (this.refreshAbort !== abort) return
-      this.set({ conversation: rest, turns: [...turns].sort((a, b) => a.seq - b.seq), refreshing: false })
+      this.set({ conversation: rest, turns: [...turns].sort((a, b) => a.seq - b.seq), refreshing: false, loadFailure: null })
     } catch (error) {
       if (this.refreshAbort !== abort) return
-      const failure = isApiError(error) ? failureOf(error, null, null) : failureOf(networkError(), null, null)
-      this.set({ refreshing: false, failure })
+      const loadFailure = isApiError(error) ? failureOf(error, null, null) : failureOf(networkError(), null, null)
+      this.set({ refreshing: false, loadFailure })
     } finally {
       if (this.refreshAbort === abort) this.refreshAbort = null
     }
@@ -351,12 +397,12 @@ export class AgentConversationController {
     try {
       const conversation = await createConversation(context, abort.signal)
       if (this.refreshAbort !== abort) return false
-      this.set({ conversation, turns: [], refreshing: false })
+      this.set({ conversation, turns: [], refreshing: false, loadFailure: null })
       return true
     } catch (error) {
       if (this.refreshAbort !== abort) return false
-      const failure = isApiError(error) ? failureOf(error, null, null) : failureOf(networkError(), null, null)
-      this.set({ refreshing: false, failure })
+      const loadFailure = isApiError(error) ? failureOf(error, null, null) : failureOf(networkError(), null, null)
+      this.set({ refreshing: false, loadFailure })
       return false
     } finally {
       if (this.refreshAbort === abort) this.refreshAbort = null
@@ -367,7 +413,15 @@ export class AgentConversationController {
   reset(): void {
     this.abort()
     this.failedAction = null
+    this.clearRetryTimer()
     this.set(INITIAL)
+  }
+
+  private clearRetryTimer(): void {
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer)
+      this.retryTimer = null
+    }
   }
 
   // 화면을 떠날 때 부른다. 진행 중인 읽기만 멈추고 대화는 남긴다(StrictMode의 두 번 마운트에도 안전하다).
@@ -389,7 +443,14 @@ export class AgentConversationController {
 
   private start(action: Action, mode: 'send' | 'check' = 'send'): Promise<void> {
     const abort = new AbortController()
-    const run: Run = { action, abort, promise: Promise.resolve() }
+    const run: Run = {
+      action,
+      abort,
+      promise: Promise.resolve(),
+      checking: mode === 'check',
+      previousFailure: this.state.failure,
+    }
+    this.clearRetryTimer()
     // 진행 중인 E28 다시 읽기는 멈춘다. 늦게 온 목록이 이번 턴을 덮어쓰지 않게 하기 위해서다.
     if (this.refreshAbort) {
       this.refreshAbort.abort()
@@ -429,6 +490,14 @@ export class AgentConversationController {
     if (this.run !== run) return
     this.failedAction = run.action
     this.finishRun(run, { failure })
+    if (failure.retryAt !== null) {
+      // 기다릴 시간이 끝나면 새 상태로 알려 화면이 '다시 시도'를 다시 켤 수 있게 한다.
+      this.clearRetryTimer()
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = null
+        if (this.state.failure === failure) this.set({ failure: { ...failure } })
+      }, Math.max(failure.retryAt - Date.now(), 0) + 10)
+    }
   }
 
   private async execute(run: Run, mode: 'send' | 'check'): Promise<void> {
@@ -436,6 +505,7 @@ export class AgentConversationController {
     if (mode === 'check' && action.turnId !== null) {
       // 실패 화면의 '다시 시도': 기존 턴의 상태를 먼저 확인한다(S8 "기존 요청 상태 확인 후 중복 방지").
       const outcome = await this.poll(run, action.turnId, 'recovering')
+      run.checking = false
       if (outcome.kind === 'turn' && outcome.turn.status === 'failed') {
         // 실패가 확인됐다. 새 키로 다시 보낸다(디자인 S8, 결정 41).
         action.key = newIdempotencyKey()
@@ -496,10 +566,7 @@ export class AgentConversationController {
     if (pending === null) return true
     switch (event.type) {
       case 'turn':
-        run.action.turnId = event.data.turn_id
-        run.action.turnIdFrom = 'event'
-        this.setPending(run, { turnId: event.data.turn_id, seq: event.data.seq })
-        if (pending.cancelRequested) void this.sendCancel(run, event.data.turn_id)
+        this.learnTurn(run, event.data.turn_id, 'event', event.data.seq)
         return false
       case 'step':
         this.setPending(run, { steps: withStep(pending.steps, event.data) })
@@ -552,9 +619,10 @@ export class AgentConversationController {
     if (outcome.kind === 'resend') return 'resend'
     if (outcome.kind === 'turn') this.settle(run, outcome.turn)
     if (outcome.kind === 'error') {
-      // 404는 턴이나 노트를 볼 수 없게 된 것이다(S9). 그 밖에는 처리 여부를 확인하지 못한 것이라 retry()가 E30부터 다시 본다.
+      // 다시 해도 같은 결과인 실패(404 S9, 401 로그인 필요, 503 등)는 그대로 둔다. 그 밖에는 처리 여부를 확인하지 못한 것이라
+      // network로 두고 retry()가 E30부터 다시 본다.
       const failure = failureOf(outcome.error, run.action.request.question, turnId)
-      this.fail(run, failure.kind === 'not_found' ? failure : { ...failure, kind: 'network' })
+      this.fail(run, FINAL_KINDS.has(failure.kind) ? failure : { ...failure, kind: 'network' })
     }
     return 'done'
   }
@@ -564,9 +632,7 @@ export class AgentConversationController {
     const { action } = run
     if (isApiError(error, 'conflict', 'in_progress') && error.turnId) {
       // 같은 키의 턴이 진행 중이다(앞서 보낸 요청이 서버에 닿았다). 그 턴을 이어 본다.
-      action.turnId = error.turnId
-      action.turnIdFrom = 'in_progress'
-      this.setPending(run, { turnId: error.turnId })
+      this.learnTurn(run, error.turnId, 'in_progress')
       return this.recover(run)
     }
     if (isApiError(error, 'conflict', 'turn_in_progress') && error.turnId) {
@@ -624,11 +690,7 @@ export class AgentConversationController {
       }
       if (this.run !== run) return { kind: 'stopped' }
       errors = 0
-      if (turn.status !== 'running') {
-        const { retry_after_seconds: _poll, ...finished } = turn
-        void _poll
-        return { kind: 'turn', turn: finished }
-      }
+      if (turn.status !== 'running') return { kind: 'turn', turn: withoutPoll(turn) }
       const pending = this.state.pending
       if (pending) this.setPending(run, { steps: stepsAt(pending.steps, turn.step) })
       const seconds = turn.retry_after_seconds
