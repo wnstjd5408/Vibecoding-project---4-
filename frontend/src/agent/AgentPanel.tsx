@@ -91,12 +91,15 @@ export function AgentPanel(props: AgentPanelProps) {
     const modal = !wide
     if (dialog.open && dialog.matches(':modal') === modal) return
     const first = !dialog.open
+    // 폭이 바뀌어 다시 열 때는 패널 안에서 포커스가 있던 곳(입력 칸 등)을 기억했다가 되돌린다. close()가 포커스를 패널 밖으로 옮기기 때문이다.
+    const focused = !first && document.activeElement instanceof HTMLElement && dialog.contains(document.activeElement) ? document.activeElement : null
     if (dialog.open) dialog.close()
     if (modal) dialog.showModal()
     else dialog.show()
     // 닫혀 있는 동안에는 높이를 잴 수 없으므로 연 뒤에 입력 칸 높이를 다시 맞춘다.
     resizeInput(inputRef.current)
     if (first) titleRef.current?.focus({ preventScroll: true })
+    else focused?.focus({ preventScroll: true })
   }, [open, wide])
 
   // Esc: 출처 보기면 대화로 돌아가고, 아니면 패널을 닫는다. 모달(모바일)은 cancel 이벤트로, PC는 문서의 keydown으로 듣는다.
@@ -117,6 +120,7 @@ export function AgentPanel(props: AgentPanelProps) {
   }, [open, wide])
 
   const failure = state.failure
+  const limitLike = isLimitLike(failure)
 
   // 출처 보기로 바꿀 때 대화 스크롤 위치를 기억했다가 돌아오면 되살린다(9절 '복귀 시 답변 스크롤과 질문 초안을 복원').
   const savedScroll = useRef(0)
@@ -138,7 +142,6 @@ export function AgentPanel(props: AgentPanelProps) {
   const selectionText = conversation ? (contextSelection?.text_preview ?? null) : (ui.selection?.text ?? null)
   const hasSelection = selectionText !== null && !ui.excluded
   const topic = conversation?.topic_label || (ui.selection && !ui.excluded ? topicLabelOf(ui.selection.text) : '')
-  const limitLike = isLimitLike(failure)
   // 보내기 잠금: 생성 중, 다시 시도 전의 요청 실패(F6-6p), 다시 확인 전의 사용 제한(F6-17, 모바일 보드 없음)
   const failureLock = failure !== null && (limitLike ? wide : isRetryable(failure))
   const locked = pending !== null || failureLock
@@ -146,7 +149,8 @@ export function AgentPanel(props: AgentPanelProps) {
 
   const entries: Entry[] = state.turns.map((turn) => ({ kind: 'turn', key: turn.turn_id, turn }))
   if (pending) entries.push({ kind: 'pending', key: 'pending', pending })
-  else if (failure?.question) entries.push({ kind: 'failure', key: 'failure', failure })
+  // 모바일 사용 제한 보드가 없어(결정 8) 모바일에서는 사용 제한을 대화 항목으로 넣지 않는다. 넣으면 빈 항목이 앞 답변을 가린다.
+  else if (failure?.question && !(limitLike && !wide)) entries.push({ kind: 'failure', key: 'failure', failure })
   const collapsed = !ui.expanded && entries.length > 1
   const shown = collapsed ? entries.slice(-1) : entries
   const lastKey = entries.at(-1)?.key ?? null
@@ -161,14 +165,6 @@ export function AgentPanel(props: AgentPanelProps) {
     const last = body?.querySelector<HTMLElement>('[data-entry]:last-of-type')
     if (body && last) body.scrollTop = Math.max(0, last.offsetTop - body.offsetTop)
   }
-  useLayoutEffect(() => {
-    if (previousKey.current === lastKey) return
-    previousKey.current = lastKey
-    if (lastKey === null) return
-    // 질문을 보낸 직후(pending)이거나 맨 아래를 보고 있었으면 새 항목의 시작으로 옮긴다. 답변은 한 번에 오므로 끝이 아니라 시작을 보여 준다.
-    if (lastKey === 'pending' || bottomRef.current) scrollToLatest()
-    else setUnseen(true)
-  }, [lastKey])
   const onScroll = () => {
     const body = bodyRef.current
     if (!body) return
@@ -177,6 +173,15 @@ export function AgentPanel(props: AgentPanelProps) {
     setAtBottom(bottom)
     if (bottom) setUnseen(false)
   }
+  useLayoutEffect(() => {
+    if (previousKey.current === lastKey) return
+    previousKey.current = lastKey
+    // 질문을 보낸 직후(pending)이거나 맨 아래를 보고 있었으면 새 항목의 시작으로 옮긴다. 답변은 한 번에 오므로 끝이 아니라 시작을 보여 준다.
+    if (lastKey !== null && lastKey !== 'pending' && !bottomRef.current) setUnseen(true)
+    else if (lastKey !== null) scrollToLatest()
+    // 내용이 줄어 스크롤 이벤트 없이 맨 아래가 된 경우(새 대화 등)에도 위치를 다시 잰다.
+    onScroll()
+  }, [lastKey])
   const showNewAnswer = wide && !sourceOpen && !atBottom && (unseen || (pending !== null && !collapsed))
 
   // --- 동작 ---
@@ -191,24 +196,32 @@ export function AgentPanel(props: AgentPanelProps) {
   }
   // 질문 하나가 끝난 뒤(성공·실패 모두). 로그인이 끊겼으면 노트 화면에 알리고,
   // 사용 제한(S12)이면 보내려던 질문 글을 비어 있는 입력 칸에 되돌려 놓는다(F6-17 '쓰던 내용은 아래 칸에 남겨 두었어요').
+  // 세션이 끊긴 경우(401)도 질문 글을 비어 있는 입력 칸에 남긴다. 로그인 뒤 다시 열면 이어서 보낼 수 있다.
   const afterRun = () => {
     const ended = controller.getSnapshot().failure
-    if (ended?.kind === 'login_required') {
+    const login = ended?.kind === 'login_required'
+    if ((login || isLimitLike(ended)) && ended?.question && ended.question.kind !== 'preset') {
+      const restore = ended.question.text ?? ''
+      onUi((current) => (current.draft.trim() === '' ? { draft: restore } : {}))
+    }
+    if (login) {
       controller.dismissFailure()
       props.onLoginRequired()
-      return
     }
-    if (!isLimitLike(ended) || !ended?.question || ended.question.kind === 'preset') return
-    const restore = ended.question.text ?? ''
-    onUi((current) => (current.draft.trim() === '' ? { draft: restore } : {}))
   }
+  const focusInput = () => inputRef.current?.focus({ preventScroll: true })
+  // 누른 버튼(빠른 질문, 추천 질문, 다시 시도, 중단)은 누른 뒤 사라지므로 포커스를 입력 칸으로 옮긴다.
   const ask = (question: AskQuestion) => {
     if (locked) return
     if (source) onCloseSource()
     const excludes = conversation && ui.excluded ? conversation.context_selections.map((item) => item.selection_id) : []
     controller.ask(question, { context: contextFor(), ...(excludes.length > 0 ? { exclude_selection_ids: excludes } : {}) }).then(afterRun, () => {})
+    focusInput()
   }
-  const retry = () => { void controller.retry().then(afterRun) }
+  const retry = () => {
+    void controller.retry().then(afterRun)
+    focusInput()
+  }
   const text = ui.draft.trim()
   const canSend = !locked && text !== '' && [...text].length <= MAX_QUESTION
   const send = () => {
@@ -218,7 +231,8 @@ export function AgentPanel(props: AgentPanelProps) {
   }
   const onKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     // PC는 Enter로 보내고 Shift+Enter로 줄을 바꾼다. 모바일은 보내기 버튼만 쓴다(10절).
-    if (!wide || event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+    // 보낼 수 없는 동안(생성 중, 다시 시도·다시 확인 전)에는 Enter를 막지 않아 초안에 줄을 바꿀 수 있다.
+    if (!wide || locked || event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
     event.preventDefault()
     send()
   }
@@ -226,14 +240,13 @@ export function AgentPanel(props: AgentPanelProps) {
     if (pending) return // 생성 중에는 잠근다(2026-11-20 결정 11). 먼저 중단하면 다시 열린다.
     controller.reset()
     onUi({ excluded: false, expanded: false })
+    setUnseen(false)
     titleRef.current?.focus({ preventScroll: true })
   }
   const expand = () => {
     onUi({ expanded: true })
     void controller.refresh()
   }
-  const focusInput = () => inputRef.current?.focus({ preventScroll: true })
-
   useLayoutEffect(() => resizeInput(inputRef.current), [ui.draft, open, wide])
 
   const label = sourceOpen || pending ? M.labelKeep
@@ -268,7 +281,7 @@ export function AgentPanel(props: AgentPanelProps) {
   const context = source ? null
     : <div className={wide ? styles.context : styles.mobileContext}>
         {topic ? <div className={styles.topic}>{M.topic(topic)}</div> : null}
-        {wide && (conversation?.origin === 'note' || ui.selection) ? <div className={styles.muted}>{hasSelection ? M.contextWithSelection : M.contextNoteOnly}</div> : null}
+        {wide && (conversation ? conversation.origin === 'note' : ui.selection !== null) ? <div className={styles.muted}>{hasSelection ? M.contextWithSelection : M.contextNoteOnly}</div> : null}
         {hasSelection
           ? <button type="button" className={styles.underline} aria-expanded={showSelection} aria-controls={selectionId} onClick={() => setShowSelection((value) => !value)}>{M.showSelection}</button>
           : null}
@@ -327,7 +340,7 @@ export function AgentPanel(props: AgentPanelProps) {
             onChange={(event) => onUi({ draft: event.target.value })} onKeyDown={onKeyDown} />
           {pending
             ? <button type="button" className={styles.stop} aria-label={M.stop} aria-disabled={pending.cancelRequested ? true : undefined}
-                onClick={() => { if (!pending.cancelRequested) void controller.cancel() }}><StopIcon /></button>
+                onClick={() => { if (!pending.cancelRequested) { void controller.cancel(); focusInput() } }}><StopIcon /></button>
             : null}
           <button type="button" className={styles.send} aria-label={M.send} aria-disabled={canSend ? undefined : true} onClick={send}><SendIcon /></button>
         </div>
@@ -548,7 +561,14 @@ function StoppedView({ turn, latest, wide, state, draft, onDraft, onClose, onFoc
         : null}
     </div>
     {canReinsert && confirm
-      ? <div role="group" aria-labelledby={confirmId} className={styles.confirmBox}>
+      ? <div role="group" aria-labelledby={confirmId} className={styles.confirmBox}
+          onKeyDown={(event) => {
+            // Esc는 패널이 아니라 확인 카드만 닫는다(취소와 같다). 문서의 Esc 처리는 defaultPrevented를 보고 건너뛴다.
+            if (event.key !== 'Escape' || event.nativeEvent.isComposing) return
+            event.preventDefault()
+            setConfirm(false)
+            onFocusInput()
+          }}>
           <p id={confirmId} ref={confirmTitle} tabIndex={-1} className={styles.noticeTitleSmall}>{M.replaceTitle}</p>
           <div className={styles.caption}>{M.replaceCurrent}</div>
           <p className={styles.confirmText}>‘{draft}’</p>
