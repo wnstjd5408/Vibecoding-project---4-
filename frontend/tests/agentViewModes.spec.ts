@@ -46,7 +46,7 @@ async function selectText(page: Page, needle: string) {
   }, needle)
 }
 
-async function login(page: Page, viewport = PC, path = '/notes/11?cs-agent=1') {
+async function login(page: Page, viewport = PC, path = '/notes/11') {
   await page.setViewportSize(viewport)
   await page.goto('/login')
   await page.getByLabel('이메일').fill('member@example.test')
@@ -194,7 +194,7 @@ test('마지막 보기 방식을 기억해 닫았다 열거나 다른 노트로 
   // 노트 목록을 거쳐 돌아오면 노트 화면을 새로 만든다. 목록이 그려진 것을 본 뒤에 돌아가야 앞 화면과 헷갈리지 않는다
   await goInApp(page, '/')
   await expect(page.getByText('예시 노트 · 프로세스가 번갈아 실행되는 이유')).toBeVisible()
-  await goInApp(page, '/notes/11?cs-agent=1')
+  await goInApp(page, '/notes/11')
   await expect(page.getByRole('heading', { level: 1, name: 'Example Note' })).toBeVisible()
   panel = await openPanel(page)
   await expect(agentMain(page).getByRole('heading', { level: 1, name: 'AI에게 질문' })).toBeVisible()

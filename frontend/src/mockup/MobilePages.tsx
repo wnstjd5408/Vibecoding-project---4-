@@ -5,6 +5,7 @@ import { usePreview } from './model.ts'
 import { useGo } from './useGo.ts'
 import type { ScreenId } from './screens.ts'
 import { Badge, Button, Card, Dialog, Field, IconButton, ImagePlaceholder } from './ui.tsx'
+import { LOGIN_PROMPT_MESSAGES } from '../loginPrompt/messages.ts'
 import styles from './mockup.module.css'
 
 export function Header({ back, signed = false, operator = false, noAccount = false, menuInitiallyOpen = false, actions, operatorLink = false }: { back?: { label: string; id: ScreenId }; signed?: boolean; operator?: boolean; noAccount?: boolean; menuInitiallyOpen?: boolean; actions?: ReactNode; operatorLink?: boolean }) {
@@ -29,7 +30,7 @@ export function LoginPrompt({ quiz = false, close }: { quiz?: boolean; close: ()
   const go = useGo()
   return <Dialog title={'로그인이 필요해요'} close={close}>
     <div className={styles.stack}><h2>{'로그인이 필요해요'}</h2>
-      <p className={styles.muted}>{quiz ? '오늘의 퀴즈는 로그인한 뒤에 볼 수 있어요. 계정은 운영자가 만들어 줘요.' : '로그인하면 AI 설명, 즐겨찾기, 오늘의 퀴즈를 쓸 수 있어요. 계정은 운영자가 만들어 줘요.'}</p>
+      <p className={styles.muted}>{quiz ? LOGIN_PROMPT_MESSAGES.quizBody : LOGIN_PROMPT_MESSAGES.body}</p>
       <Button variant="solid" onClick={() => go('F4-1')}>로그인</Button></div>
   </Dialog>
 }

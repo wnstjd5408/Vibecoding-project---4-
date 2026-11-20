@@ -116,6 +116,7 @@ Vercel의 Git 연동 배포와 GitHub Actions 검사는 서로 다른 작업이�
 ### 켜는 순서(노출 중단)
 
 1. Vercel 프로젝트의 **Settings → Environment Variables**에서 `CS_AGENT_DISABLED`를 `1`로 등록한다. 비밀값이 아니므로 타입은 Config로 둔다.
+   - 같은 환경에 화면용 `VITE_CS_AGENT_DISABLED`도 `1`로 등록한다(MEG-259). 노트 선택 버튼이 "AI 설명"으로 돌아가고, 다시 열 때도 두 값을 함께 바꾼다. 화면 값을 빠뜨려도 E27·E29의 503을 받으면 화면이 새 질문 입구를 닫는다.
 2. 막을 환경을 고른다. 운영은 **Production**, 스테이징은 **Preview**의 Git Branch `staging`이다. 두 환경은 따로 켜고 끈다. Preview 공통값만 바꾸면 운영에는 반영되지 않는다.
 3. 그 환경의 새 배포를 만든다. 환경변수 변경은 기존 배포에 소급 적용되지 않는다(위 "환경변수 설정" 4번).
    - Production: 지금 운영 중인 배포와 같은 커밋으로 다시 배포한다.
@@ -126,7 +127,7 @@ Vercel의 Git 연동 배포와 GitHub Actions 검사는 서로 다른 작업이�
 ### 끄는 순서(다시 열기)
 
 1. 사람이 다시 열기로 정한다.
-2. 같은 환경에서 `CS_AGENT_DISABLED`를 지우거나 `0`으로 바꾼다.
+2. 같은 환경에서 `CS_AGENT_DISABLED`와 `VITE_CS_AGENT_DISABLED`를 지우거나 `0`으로 바꾼다.
 3. 켜는 순서의 3~5번을 똑같이 한다. 이번에는 아래 확인에서 꺼짐 결과가 나와야 한다.
 
 ### 적용 확인

@@ -144,6 +144,10 @@ export const AGENT_MESSAGES = {
   accessHelp: '볼 수 있는 노트를 골라 다시 읽거나 새로 질문할 수 있어요.',
   accessToList: '노트 목록으로 가기',
   accessList: '노트 목록',
+  // 새 질문 입구가 닫힘(노출 중단 플래그·503, MEG-259). 모두 임시: 캔버스에 보드가 없다.
+  unavailable: '오류: 지금은 새 질문을 받을 수 없어요.',
+  unavailableHelp: '노트는 계속 읽을 수 있어요.',
+  closedNotice: '지금은 새 질문을 받을 수 없어요. 이 대화와 출처는 계속 볼 수 있어요.',
 
   // S10 출처 보기(F6-4·F6-9, 14.5 노트 근거 기간. '노트 열기'는 넣지 않는다: 2026-11-20 결정 9)
   sourceTitle: (ref: number) => `출처 ${ref}`,

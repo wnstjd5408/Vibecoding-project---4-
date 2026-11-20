@@ -66,6 +66,7 @@ test('AC-2 방문자가 단어를 고르고 AI 설명 버튼을 누르면 로그
   await selectText(page, 'UnknownWord')
   await aiButton(page).click()
   await expect(loginSheet(page)).toBeVisible()
+  // 노출 중단 플래그를 켠 빌드의 본문이다. 끈 빌드의 캔버스 문구('AI에게 질문')는 agentEntry.spec.ts가 시험한다(MEG-259).
   await expect(loginSheet(page).getByText('로그인하면 AI 설명, 즐겨찾기, 오늘의 퀴즈를 쓸 수 있어요. 계정은 운영자가 만들어 줘요.')).toBeVisible()
   await expect(page.getByRole('dialog', { name: 'UnknownWord' })).toHaveCount(0)
   await testInfo.attach('F2-2b 방문자 로그인 안내', { body: await page.screenshot(), contentType: 'image/png' })

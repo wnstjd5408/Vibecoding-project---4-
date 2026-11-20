@@ -6,6 +6,7 @@ import { goInApp } from './inApp.ts'
 
 // MEG-260 CS Agent 예외 상태 화면(T6d). 화면 목록 13~20번을 가짜 API(src/api/mocks/agent.ts)로 띄운다. 모델은 부르지 않는다.
 // 모바일은 기존 보드가 있던 상태(F6-8m·F6-11m·F6-13m·F6-15m)만 본다. MEG-262에서 새로 그린 모바일 보드의 상태는 T6g(MEG-263)다.
+// 노출 중단 플래그를 끈 빌드(playwright.config.ts의 agent-enabled)에서 돈다. 노트 선택 버튼이 'AI에게 질문'이다(MEG-259).
 // AGENT_SHOT_DIR을 주면 스크린샷을 '보드 ID.png'로 저장한다(AC-1, 캔버스 보드와 나란히 PR에 붙인다).
 
 const PC = { width: 1280, height: 800 }
@@ -67,7 +68,7 @@ async function login(page: Page, viewport = PC) {
     const m = await import(/* @vite-ignore */ '/src/api/mocks/agent.ts')
     m.resetAgentMock()
   })
-  await goInApp(page, '/notes/11?cs-agent=1')
+  await goInApp(page, '/notes/11')
   await expect(page.getByRole('heading', { level: 1, name: 'Example Note' })).toBeVisible()
 }
 
@@ -467,4 +468,20 @@ test('리뷰: 의미 확인의 직접 보충은 500자를 넘으면 보내지 �
   await send(panel).click({ force: true })
   expect(await turnBodies(page)).toHaveLength(1)
   await expect(input(panel)).toHaveValue(long)
+})
+
+test('병합: 503으로 새 질문 입구가 닫히면 주제 전환 카드의 선택지와 보내기 입력 칸을 숨긴다(MEG-259와 함께)', async ({ page }) => {
+  await login(page)
+  const panel = await openPanel(page)
+  await firstAnswer(page, panel)
+  await expect(aiBox(panel)).toBeVisible({ timeout: 10_000 })
+  await mock(page, 'topic_check')
+  await sendFree(panel, '운영체제의 교착 상태는 뭐야?')
+  await expect(panel.getByRole('button', { name: '이 대화에서 계속' })).toBeVisible({ timeout: 10_000 })
+  await mock(page, 'service_unavailable')
+  await panel.getByRole('button', { name: '이 대화에서 계속' }).click()
+  await expect(panel.getByText('오류: 지금은 새 질문을 받을 수 없어요.')).toBeVisible({ timeout: 10_000 })
+  await expect(panel.getByRole('button', { name: '이 대화에서 계속' })).toHaveCount(0)
+  await expect(panel.getByRole('button', { name: '새 대화로 질문' })).toHaveCount(0)
+  await expect(panel.getByRole('textbox')).toHaveCount(0)
 })
