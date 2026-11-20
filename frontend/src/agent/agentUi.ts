@@ -39,6 +39,10 @@ export function agentAccessLost(state: AgentState): boolean {
 
 // 서버의 질문 글 한도(ai_turns 질문 글 1~1000자).
 export const MAX_QUESTION = 1000
+// 의미 확인 직접 보충(reply.text) 한도(agent_output.MAX_REPLY_TEXT_CHARS)
+export const MAX_REPLY = 500
+// 한 질문에 붙일 수 있는 추가 선택 수(agent_turns.MAX_ADD_SELECTIONS)
+export const MAX_ADD_SELECTIONS = 5
 
 // 본문 절이 있는 결과(answered·partial·correction). partial의 한계와 correction의 교정은 AgentPanel이 따로 그린다(MEG-260).
 export function sectionsOf(result: AgentResult | undefined) {

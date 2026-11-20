@@ -491,7 +491,13 @@ export function openMockTurnStream(request: {
   const answeredBefore = conversation.turnIds.some((turnId) => statusAt(turns.get(turnId)!, now).status === 'completed')
   const confirmed = body.reply || retryOf
   const kind = (confirmed && (scenario === 'clarify' || scenario === 'topic_check')) || (scenario === 'topic_check' && !answeredBefore) ? 'answered' : scenario
-  // 선택 문맥 제외·추가(agent_turns._check_selections). 제외한 문맥은 E28 context_selections에서 빠지고, 추가한 문장은 들어간다.
+  // 서버 검사(agent_turns._check_reply·_check_selections): 직접 보충은 500자까지, 선택 추가는 노트에서 연 대화에만 5개까지다.
+  const invalid = (name: string, reason: string) =>
+    errorBody(422, 'validation_failed', 'Request validation failed', { fields: [{ name, reason, message: 'Value is not allowed' }] })
+  if (body.reply && 'text' in body.reply && [...body.reply.text].length > 500) return invalid('reply.text', 'too_long')
+  if ((body.add_selections ?? []).length > 0 && conversation.conversation.origin !== 'note') return invalid('add_selections.note_id', 'invalid_value')
+  if ((body.add_selections ?? []).length > 5) return invalid('add_selections', 'too_long')
+  // 선택 문맥 제외·추가. 제외한 문맥은 E28 context_selections에서 빠지고, 추가한 문장은 들어간다. 턴이 실패해도 남는다(선점 직후 반영).
   const context = conversation.conversation
   const excluded = new Set(body.exclude_selection_ids ?? [])
   context.context_selections = context.context_selections.filter((item) => !excluded.has(item.selection_id))

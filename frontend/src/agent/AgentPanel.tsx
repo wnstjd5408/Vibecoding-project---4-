@@ -20,7 +20,7 @@ import { userPaths } from '../routes/paths.ts'
 import { canRetry } from './conversation.ts'
 import type { AgentConversationController, AgentFailure, AgentState, AskOptions, PendingTurn, StepView } from './conversation.ts'
 import { AGENT_MESSAGES as M, PRESETS, questionLabel, questionText, topicLabelOf } from './messages.ts'
-import { FRESH_CONTEXT, MAX_QUESTION, agentAccessLost, quoteOf, sectionsOf } from './agentUi.ts'
+import { FRESH_CONTEXT, MAX_ADD_SELECTIONS, MAX_QUESTION, MAX_REPLY, agentAccessLost, quoteOf, sectionsOf } from './agentUi.ts'
 import type { AgentContextSelection, AgentUi } from './agentUi.ts'
 import type {
   AgentFigure,
@@ -371,7 +371,7 @@ export function AgentPanel(props: AgentPanelProps) {
   // 의미 확인(F6-11)이 마지막 턴이면 입력 칸의 글은 직접 보충(reply.text)으로 보낸다.
   const clarifyTurn = latestState === 'clarify' ? latestTurn : null
   const text = ui.draft.trim()
-  const canSend = !locked && text !== '' && [...text].length <= MAX_QUESTION
+  const canSend = !locked && text !== '' && [...text].length <= (clarifyTurn ? MAX_REPLY : MAX_QUESTION)
   const send = () => {
     if (!canSend) return
     ask({ kind: 'free', text }, clarifyTurn ? { reply: { turn_id: clarifyTurn.turn_id, text } } : {})
@@ -506,7 +506,8 @@ export function AgentPanel(props: AgentPanelProps) {
               </div>)}
               {candidate
                 ? <div data-entry="" className={styles.entry}>
-                    <CandidateCard candidate={candidate} newLocked={pending !== null} onAdd={addCandidate} onNew={newWithCandidate} wide={wide} />
+                    <CandidateCard candidate={candidate} newLocked={pending !== null} onAdd={addCandidate} onNew={newWithCandidate} wide={wide}
+                      canAdd={conversation?.origin === 'note' && ui.added.length < MAX_ADD_SELECTIONS} />
                   </div>
                 : null}
             </>}
@@ -865,7 +866,8 @@ function HiddenView({ turn, wide, locked, firstHidden, onAskAgain }: EntryProps 
 }
 
 // W5 다른 영역 선택(F6-8·F6-8m, 결정 20). 고르기 전까지 다음 질문의 문맥은 바뀌지 않고 보내기를 잠근다(AC-3).
-function CandidateCard({ candidate, newLocked, onAdd, onNew, wide }: { candidate: AgentContextSelection; newLocked: boolean; onAdd: () => void; onNew: () => void; wide: boolean }) {
+// canAdd: 노트에서 연 대화이고 추가 수가 한도 안일 때만 '현재 대화에 추가'를 둔다. 노트 없이 시작한 대화(origin none)는 서버가 추가를 거절한다.
+function CandidateCard({ candidate, newLocked, onAdd, onNew, wide, canAdd }: { candidate: AgentContextSelection; newLocked: boolean; onAdd: () => void; onNew: () => void; wide: boolean; canAdd: boolean }) {
   const titleRef = useRef<HTMLHeadingElement>(null)
   const titleId = useId()
   const Heading = wide ? 'h3' : 'h2'
@@ -876,8 +878,8 @@ function CandidateCard({ candidate, newLocked, onAdd, onNew, wide }: { candidate
     <Heading id={titleId} ref={titleRef} tabIndex={-1} className={styles.choiceTitle}>{M.addTitle}</Heading>
     <p className={styles.choiceQuote}>{M.addQuote(candidate.text)}</p>
     <div className={styles.choiceActions}>
-      <Button variant="primary" onClick={onAdd}>{M.addToConversation}</Button>
-      <Button aria-disabled={newLocked ? true : undefined} onClick={onNew}>{M.addNewConversation}</Button>
+      {canAdd ? <Button variant="primary" onClick={onAdd}>{M.addToConversation}</Button> : null}
+      <Button variant={canAdd ? undefined : 'primary'} aria-disabled={newLocked ? true : undefined} onClick={onNew}>{M.addNewConversation}</Button>
     </div>
     <p className={styles.hintSmall}>{M.addHint}</p>
   </div>
