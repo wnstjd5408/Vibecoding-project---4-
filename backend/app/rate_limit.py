@@ -41,6 +41,11 @@ AI_EXPLAIN = RateRule("ai_explain", 10, 60)
 # E13 꼬리 질문(MEG-93). E09와 같은 이유다: 한 요청이 Bedrock을 최대 두 번 부르고, 연결·인증 실패는 원장 한도에 안 잡힌다.
 # 숫자는 제안값이다(spec 1.8 "숫자는 모두 임시").
 AI_FOLLOWUP = RateRule("ai_followup", 10, 60)
+# CS Agent 읽기 E28·E30(MEG-234, CS Agent spec v0.2 2.2). 사용자당 분당 120이다. 숫자는 제안값이다.
+# E27·E31은 WRITE를 쓴다.
+AI_AGENT_READ = RateRule("ai_agent_read", 120, 60)
+# CS Agent 질문 E29(MEG-236, CS Agent spec v0.2 2.2). 사용자당 60초에 10회다. 원장 한도와 별개다. 숫자는 제안값이다.
+AI_AGENT = RateRule("ai_agent", 10, 60)
 
 
 @dataclass(frozen=True)

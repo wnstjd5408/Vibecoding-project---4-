@@ -48,7 +48,7 @@ MAX_SENTENCE_CHARS = 500
 # 같은 요청이 최대 약 60초 걸린다(호출 30초 × 2). 진행 중 응답의 재시도 시간은 이 이상이다(1.3, 1.4.5).
 IN_PROGRESS_RETRY_SECONDS = 60
 # reserved로 이 시간 넘게 남은 행은 죽은 요청이다. 다음 예약이 reserved_fallback으로 정산한다(5.3 6번).
-# supabase/migrations/20261102120000_ai_ledger_functions.sql의 ai_reserve(interval '10 minutes')와 같은 값이어야 한다.
+# supabase/migrations/20261118140000_cs_agent_conversations.sql의 ai_reserve(interval '10 minutes')와 같은 값이어야 한다.
 STALE_RESERVED_SECONDS = 10 * 60
 # 프롬프트 형식 버전. 설명 행에 남겨 프롬프트를 바꿨을 때 이전 설명을 가려낼 수 있게 한다.
 PROMPT_VERSION = "explain-v1"
@@ -245,23 +245,55 @@ def _replay_error(rows: list[dict]) -> ApiError | None:
     return ApiError("conflict", "result_unavailable", stage="validate")
 
 
-def _record_view(supabase: SupabaseClient, user_id: str, term_id: int) -> None:
-    """열람 기록(13단계). 실패해도 응답은 그대로다. 기록 한 건이 빠질 뿐이다."""
+def record_view(supabase: SupabaseClient, user_id: str, term_id: int) -> None:
+    """열람 기록(13단계). 실패해도 응답은 그대로다. 기록 한 건이 빠질 뿐이다.
+
+    E29의 퀴즈 자료 처리(agent_quiz_material, MEG-243)도 같은 함수로 기록한다.
+    """
     try:
         supabase.record_term_view(user_id, term_id, study_date())
     except (SupabaseUnavailable, SupabaseConfigError) as error:
         logger.warning("stage=db term view not recorded: %s", type(error).__name__)
 
 
+def known_term(row: dict | None) -> bool:
+    """사전 용어(7단계)이거나 유효한 AI 설명이 있는(8단계) 용어인가. 그러면 AI를 부르지 않는다."""
+    return row is not None and (row.get("glossary_entries") is not None or bool(row.get("ai_explanations")))
+
+
+def store_explanation(
+    supabase: SupabaseClient, *, user_id: str, note_id: int, note_revision: int, picked: Picked, text: str, model: str
+) -> tuple[dict, dict | None]:
+    """11·12단계: 공개 노트에서 만든 설명을 공유 캐시에 저장하고, 용어를 내 즐겨찾기와 함께 다시 읽는다.
+
+    저장 함수가 one_off(노트가 바뀌었거나 비공개로 바뀜)를 주면 다시 읽지 않고 (결과, None)이다. Supabase 오류는 그대로 낸다.
+    E09와 E29의 퀴즈 자료 처리(MEG-243)가 함께 쓴다.
+    """
+    stored = supabase.store_ai_explanation(
+        note_id=note_id,
+        note_revision=note_revision,
+        term_key=picked.key,
+        term_label=picked.label,
+        sentence_hash=sentence_hash(picked.sentence),
+        body=text,
+        model=model,
+        prompt_version=PROMPT_VERSION,
+    )
+    if stored["outcome"] == "one_off":
+        return stored, None
+    # 방금 만든 설명도, 먼저 저장된 설명도 같은 방법으로 다시 읽는다.
+    return stored, supabase.find_term_for_explain(picked.key, user_id)
+
+
 def _known_term_response(supabase: SupabaseClient, user: SessionUser, row: dict) -> dict | None:
     """사전 용어면 사전 설명(7단계), 유효한 AI 설명이 있으면 캐시(8단계)를 돌려준다. 둘 다 아니면 None이다."""
+    if not known_term(row):
+        return None
     if row.get("glossary_entries") is not None:
         response = _glossary_response(row, supabase)
-    elif row.get("ai_explanations"):
-        response = _shared_response(row, row["ai_explanations"][0], cached=True)
     else:
-        return None
-    _record_view(supabase, user.user_id, row["id"])
+        response = _shared_response(row, row["ai_explanations"][0], cached=True)
+    record_view(supabase, user.user_id, row["id"])
     return response
 
 
@@ -345,23 +377,20 @@ def explain(
         # 비공개 노트(운영자)에서 온 설명은 공유 캐시에 넣지 않는다(5.7).
         return _one_off_response(explanation_text)
     try:
-        stored = supabase.store_ai_explanation(
+        stored, row = store_explanation(
+            supabase,
+            user_id=user.user_id,
             note_id=body.note_id,
             note_revision=body.note_revision,
-            term_key=picked.key,
-            term_label=picked.label,
-            sentence_hash=sentence_hash(picked.sentence),
-            body=explanation_text,
+            picked=picked,
+            text=explanation_text,
             model=settings.model_id,
-            prompt_version=PROMPT_VERSION,
         )
-        if stored["outcome"] == "one_off":
-            return _one_off_response(explanation_text)
-        # 저장된 용어·설명을 내 즐겨찾기와 함께 다시 읽는다(방금 만든 설명도, 먼저 저장된 설명도 같다).
-        row = supabase.find_term_for_explain(picked.key, user.user_id)
     except (SupabaseUnavailable, SupabaseConfigError) as error:
         logger.error("stage=db ai explanation not stored: %s", type(error).__name__)
         raise ApiError("internal_error", stage="db") from None
+    if stored["outcome"] == "one_off":
+        return _one_off_response(explanation_text)
     if row is None:
         # 저장 직후 지워졌다. 비용은 정산돼 있으니 결과만 1회용으로 준다.
         return _one_off_response(explanation_text)
@@ -378,5 +407,5 @@ def explain(
         response = _shared_response(
             row, active, cached=stored["outcome"] == "existing" or active["id"] != stored["explanation_id"]
         )
-    _record_view(supabase, user.user_id, row["id"])
+    record_view(supabase, user.user_id, row["id"])
     return response
