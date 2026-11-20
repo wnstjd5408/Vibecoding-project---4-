@@ -29,6 +29,11 @@ GLOSSARY_PAGE_SIZE = 1000
 # 노트를 열 때마다 이만큼 읽으면 응답이 이미 느려지는 규모라 "그 전에 설계를 다시 보라"는 경보 겸 한도다(근거: MEG-141 측정, 5,000개에서 쪽당 약 35ms).
 # 넘으면 일부만 돌려주지 않고 오류로 낸다(링크가 조용히 빠지지 않게).
 GLOSSARY_MAX_PAGES = 50
+# CS Agent 위키 검색(MEG-251)이 사전 본문을 읽는 한 번의 크기와 최대 쪽 수. 본문(최대 200,000자)을 함께 읽으므로 E05보다
+# 작게 읽는다. 20쪽 = 2,000항목은 지금 사전 규모(수십 건)보다 훨씬 크다. 넘으면 일부만 돌려주지 않고 오류로 낸다.
+# 제안값이며, 턴마다 전부 읽는 방식은 검색 평가(T4d) 뒤 다시 본다(설계 3.5·4.2).
+WIKI_PAGE_SIZE = 100
+WIKI_MAX_PAGES = 20
 
 # Supabase 액세스 토큰(JWT) 모양: base64url 세 구간을 점으로 이은 것. 이 밖의 쿠키 값은 Auth를 부르기 전에
 # 무효로 본다. 비ASCII 값은 HTTP 헤더로 만들 수 없어 예외가 되고, 쓰레기 값마다 Auth 왕복이 생기는 것도 막는다.
@@ -1426,6 +1431,32 @@ class SupabaseClient:
             "notes",
             {"is_published": "eq.true", "select": "id,revision,title,body_markdown", "order": "id.asc"},
         )
+
+    def list_wiki_entries(self) -> list[dict[str, Any]]:
+        """CS Agent 위키 검색(MEG-251): 지금 있는 사전 항목의 id, key, label, source, glossary_revision과 본문을 id 순으로 준다.
+
+        항목이 있다는 판정(설계 3.2): glossary_entries 행이 있고(!inner) terms.source = 'glossary'다. 사전 삭제(E21)로
+        terms 행만 남은 용어와 AI로만 설명된 용어는 DB에서 거른다. glossary_revision은 T4a(MEG-249) 마이그레이션이 더하는
+        열이다. 그 마이그레이션이 적용되지 않은 DB에서는 이 조회가 실패하므로, 위키 플래그(T4c)는 T4a 적용 뒤에 켠다.
+        id 기준 키셋 페이지네이션이며, WIKI_MAX_PAGES를 넘게 남아 있으면 일부만 돌려주지 않고 SupabaseConfigError로 낸다.
+        """
+        select = "id,key,label,source,glossary_revision,glossary_entries!inner(body_markdown)"
+        base = {"select": select, "source": "eq.glossary", "order": "id.asc"}
+        rows: list[dict[str, Any]] = []
+        for _ in range(WIKI_MAX_PAGES):
+            params = {**base, "limit": str(WIKI_PAGE_SIZE)}
+            if rows:
+                params["id"] = f"gt.{rows[-1]['id']}"
+            page = self._select("terms", params)
+            rows.extend(page)
+            if len(page) < WIKI_PAGE_SIZE:
+                return rows
+        # 뒤에 항목이 더 있는지 한 건만 확인한다. 같은 내장 필터(!inner)를 써야 본문 없는 terms 행을 세지 않는다.
+        probe = self._select("terms", {**base, "limit": "1", "id": f"gt.{rows[-1]['id']}"})
+        if not probe:
+            return rows
+        logger.error("stage=db wiki_entries=%d read %d pages and more entries remain; refusing a partial list", len(rows), WIKI_MAX_PAGES)
+        raise SupabaseConfigError(f"wiki entries exceed {WIKI_MAX_PAGES * WIKI_PAGE_SIZE}")
 
     def get_agent_turn_source(self, turn_id: str, ref: int) -> dict[str, Any] | None:
         """E32: 턴의 인용 출처 한 개와 인용 당시 원문(paragraph_snapshot). 없으면 None이다.

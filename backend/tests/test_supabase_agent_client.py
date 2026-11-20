@@ -8,7 +8,7 @@ import json
 import httpx
 import pytest
 
-from app.supabase import SupabaseClient, SupabaseConfigError, SupabaseUnavailable
+from app.supabase import WIKI_PAGE_SIZE, SupabaseClient, SupabaseConfigError, SupabaseUnavailable
 
 USER_ID = "00000000-0000-4000-8000-00000000000a"
 CONVERSATION = "11111111-1111-4111-8111-111111111111"
@@ -161,6 +161,38 @@ def test_note_search_reads_only_published_note_bodies():
     assert dict(request.url.params) == {
         "is_published": "eq.true", "select": "id,revision,title,body_markdown", "order": "id.asc",
     }
+
+
+def test_wiki_search_reads_only_current_dictionary_entries_with_their_revision():
+    rows = [{"id": 1, "key": "dns", "label": "DNS", "source": "glossary", "glossary_revision": 3,
+             "glossary_entries": {"body_markdown": "b"}}]
+    client, seen = recording_client([httpx.Response(200, json=rows)])
+    assert client.list_wiki_entries() == rows
+    request = seen[0]
+    assert request.method == "GET" and request.url.path == "/rest/v1/terms"
+    # 항목이 있다는 판정(MEG-251 AC-1): glossary_entries 행(!inner)과 source = glossary. 개정은 T4a 열이다.
+    assert dict(request.url.params) == {
+        "select": "id,key,label,source,glossary_revision,glossary_entries!inner(body_markdown)",
+        "source": "eq.glossary", "order": "id.asc", "limit": str(WIKI_PAGE_SIZE),
+    }
+
+
+def test_wiki_search_pages_by_id_and_refuses_a_partial_list(monkeypatch):
+    monkeypatch.setattr("app.supabase.WIKI_PAGE_SIZE", 2)
+    monkeypatch.setattr("app.supabase.WIKI_MAX_PAGES", 2)
+    page = lambda *ids: httpx.Response(200, json=[{"id": i} for i in ids])  # noqa: E731
+    client, seen = recording_client([page(1, 2), page(3)])
+    assert [row["id"] for row in client.list_wiki_entries()] == [1, 2, 3]
+    assert dict(seen[1].url.params)["id"] == "gt.2"
+
+    client, seen = recording_client([page(1, 2), page(3, 4), page()])
+    assert [row["id"] for row in client.list_wiki_entries()] == [1, 2, 3, 4]
+    probe = dict(seen[2].url.params)
+    assert probe["id"] == "gt.4" and probe["limit"] == "1" and "glossary_entries!inner" in probe["select"]
+
+    client, _ = recording_client([page(1, 2), page(3, 4), page(5)])
+    with pytest.raises(SupabaseConfigError):
+        client.list_wiki_entries()
 
 
 def test_reading_a_cited_source_reads_the_snapshot_of_that_turn_and_ref():

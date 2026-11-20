@@ -2,8 +2,9 @@
 
 검색은 `retrieve(user, question, context) -> [Paragraph]` 하나로 둔다. 실행 파이프라인(agent_turns)은 이 인터페이스만 안다.
 
-- 앱 기본값은 노트 임시 검색(D1, T3b MEG-237, agent_note_search.NoteRetriever)이다. 위키 검색은 T4(MEG-238)가 이
-  인터페이스로 구현을 바꿔 끼운다. 그때 retrieve의 모양과 E32 응답 모양은 바꾸지 않는다(기술 검토 4절).
+- 앱 기본값은 노트 임시 검색(D1, T3b MEG-237, agent_note_search.NoteRetriever)이다. 위키 검색
+  (agent_wiki_search.WikiRetriever, T4b MEG-251)은 만들어 두었고, 위키 플래그(T4c MEG-252)가 이 인터페이스로 바꿔
+  끼운다. 그때 retrieve의 모양과 E32 응답 모양은 바꾸지 않는다(기술 검토 4절).
 - NoEvidenceRetriever는 문단을 돌려주지 않는 구현이다(모든 질문이 모델 호출 없이 no_evidence로 끝난다). 시험용 고정 문단
   (FixedRetriever)을 운영에 쓰면 근거 없는 답이 근거 있는 것처럼 보이므로 기본값으로 두지 않는다.
 - 검색은 사용자 권한 안에서만 한다(spec 8절 "위키 근거"). 권한 확인은 구현의 책임이다. 파이프라인은 인용 직전에
@@ -55,6 +56,9 @@ class RetrievalContext:
     # 선택 문맥의 위치: (노트 id, 저장한 노트 개정, 시작, 끝). selection_texts와 같은 순서다. 노트 근거 기간에 선택 문장이 든
     # 문단을 위치로 빼는 데 쓴다(MEG-237). 모르면 비워 둔다(그때는 원문 포함 여부로 본다).
     selection_spans: tuple[tuple[int, int, int, int], ...] = ()
+    # 위키에서 연 대화(origin wiki)가 가리키는 사전 항목. `glossary:{term_id}` 형식이다(MEG-163 W7). 위키 검색
+    # (agent_wiki_search)은 이 항목의 문단에 가산점을 준다. 노트 검색은 쓰지 않는다. 모르면 None이다(MEG-251).
+    wiki_ref: str | None = None
 
 
 class Retriever(Protocol):
