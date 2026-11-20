@@ -137,7 +137,7 @@ Vercel의 Git 연동 배포와 GitHub Actions 검사는 서로 다른 작업이�
 const post = (path, body) =>
   fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     .then((r) => r.status)
-// E27: 켜짐이면 503, 꺼짐이면 422(T4 전에는 origin wiki를 받지 않는다)
+// E27: 켜짐이면 503, 꺼짐이면 422(wiki_ref 없는 origin wiki는 위키 플래그와 관계없이 형식 오류다)
 await post('/api/ai/conversations', { origin: 'wiki' })
 // E29: 없는 대화 id에 Idempotency-Key 없이 보낸다. 켜짐이면 503, 꺼짐이면 400(idempotency_key_required)
 await post('/api/ai/conversations/00000000-0000-4000-8000-000000000000/turns', { question: { kind: 'free', text: '확인' } })
@@ -148,6 +148,72 @@ await post('/api/ai/conversations/00000000-0000-4000-8000-000000000000/turns', {
 - `/api/health` 200은 플래그 적용의 근거가 아니다.
 
 **검증 상태:** 플래그 동작은 단위 테스트(`backend/tests/test_agent.py`, `backend/tests/test_agent_turns.py`)로만 확인했다. 실제 Vercel 배포에서 켜고 끈 기록은 아직 없다.
+
+## CS Agent 위키 플래그 (MEG-252)
+
+CS Agent "AI에게 질문"의 근거를 노트 임시 검색(D1)에서 위키(사전 항목) 검색으로 바꾸는 환경변수 `CS_AGENT_WIKI_ENABLED`다. **기본은 꺼짐이고, 꺼진 동안은 지금 동작 그대로다.** 위키 경로 전체(E27 `origin: wiki`, 위키에서 연 대화, 위키 검색)를 이 플래그 하나로 함께 켜고 끈다(MEG-163 내부 위키 우선 RAG 설계 4.1절, 독립 리뷰 R1).
+
+- **켤지 정하는 곳:** MEG-253(T4d). 사람이 검색 평가 결과를 보고 정한다(MEG-163 W3). 그 결정 없이 켜지 않는다.
+- **바꾸는 사람:** Vercel 프로젝트의 환경변수를 바꾸고 새 배포를 만들 수 있는 사람.
+- **기준 구현:** [`backend/app/agent_retrieval.py`](../backend/app/agent_retrieval.py)의 `wiki_enabled()`. E27, 공통 권한 검사(`agent_access.check_conversation`), 검색 선택(`get_retriever`)이 요청마다 이 함수를 본다.
+
+### 켜기 전 조건
+
+1. 그 환경의 DB에 T4a 마이그레이션 `20261119180000_glossary_revision.sql`(MEG-249)이 적용돼 있다. 없으면 위키 검색의 사전 조회가 실패해 질문이 모두 `failed`(`internal_error`)가 된다.
+2. 사전 항목은 E20(사전 저장 함수)으로만 등록했다(PR #188 결정). E20을 거치지 않고 넣은 항목은 개정 번호가 오르지 않는다.
+3. MEG-253에서 사람이 켜기로 정했다.
+
+### 켜면 바뀌는 것
+
+| 대상 | 꺼짐(기본) | 켜짐 |
+|---|---|---|
+| E27 `origin: wiki` | 422 `origin` `invalid_value` | `wiki_ref`가 `glossary:{term_id}`이고 그 항목이 지금 있으면 대화를 만든다. 형식·필드 조합이 틀리면 422, 항목이 없으면 404 |
+| E29 근거 검색 | 공개 노트 임시 검색(`note-keyword-v1`) | 위키 검색(`wiki-keyword-v1`). 모든 대화(`note`·`wiki`·`none`)에 적용한다. 노트는 질문 문맥으로만 쓴다(W2) |
+| 위키에서 연 대화(`origin: wiki`)의 E28~E32 | 404(대화 전체를 닫는다) | 그 항목이 지금 있으면 열린다. 항목을 지우면 404 |
+| 위키 출처(`source_kind: "wiki"`)의 가림·E32 | 플래그와 관계없이 항목이 지금 있으면 보인다 | 같다 |
+| 용어 시트의 'AI에게 질문' 진입점(화면) | 보이지 않는다 | MEG-254에서 같은 플래그를 따르게 만든다(이 PR 범위 밖) |
+
+- 노출 중단 `CS_AGENT_DISABLED`가 먼저다. 그것이 켜져 있으면 위키 플래그와 관계없이 E27·E29가 503이다.
+- 끄면(되돌리면) 위키에서 연 대화는 다시 404가 된다. 꺼진 동안 그 대화에 질문하면 노트로 답하게 되기 때문이다. 노트에서 연 대화가 위키를 인용한 턴은 항목이 있는 한 계속 보인다.
+- 플래그는 요청마다 본다. 바꾼 값은 새 배포부터 반영된다.
+
+### 값 규칙
+
+- `1`·`true`·`yes`·`on`일 때만 켜짐이다. 대소문자와 앞뒤 공백은 무시한다. 켤 때는 `1`을 쓴다.
+- 비우거나 그 밖의 값(잘못 쓴 값 포함)은 모두 꺼짐이다. 꺼진 쪽이 지금 동작이라 잘못 쓴 값이 위키 경로를 열지 않는다. 노출 중단 플래그와 방향이 반대다.
+
+### 켜는 순서
+
+1. 위 "켜기 전 조건"을 확인한다.
+2. Vercel 프로젝트의 **Settings → Environment Variables**에서 `CS_AGENT_WIKI_ENABLED`를 `1`로 등록한다. 비밀값이 아니므로 타입은 Config로 둔다.
+3. 환경을 고른다. 운영은 **Production**, 스테이징은 **Preview**의 Git Branch `staging`이다. 두 환경은 따로 켜고 끈다. 스테이징에서 먼저 켜고 확인한다.
+4. 그 환경의 새 배포를 만든다(위 "CS Agent 노출 중단"의 켜는 순서 3번과 같다).
+5. 아래 "적용 확인"을 한다.
+6. 환경, 시각, 배포 ID, 확인 결과를 내부 배포 기록과 MEG-253에 남긴다. 값과 쿠키는 기록하지 않는다.
+
+### 끄는 순서
+
+1. 같은 환경에서 `CS_AGENT_WIKI_ENABLED`를 지우거나 `0`으로 바꾼다.
+2. 켜는 순서의 4~6번을 똑같이 한다. 이번에는 아래 확인에서 꺼짐 결과가 나와야 한다.
+
+### 적용 확인
+
+새 배포가 그 환경의 현재 배포가 됐는지 Vercel에서 먼저 확인한다. 그다음 그 환경에 로그인한 브라우저의 개발자 도구 콘솔에서 아래 요청을 보낸다. `glossary:0`은 형식이 틀린 값(term_id는 1부터)이라 대화를 만들지 않고 DB와 모델도 부르지 않는다.
+
+```js
+const r = await fetch('/api/ai/conversations', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ origin: 'wiki', wiki_ref: 'glossary:0' }),
+})
+// 둘 다 422다. 켜짐이면 "wiki_ref", 꺼짐이면 "origin"이 나온다.
+console.log(r.status, (await r.json()).error.fields.map((f) => f.name))
+```
+
+- 503이면 노출 중단 플래그가 켜져 있는 것이다. 401·403은 로그인·접속 주소 문제이고 플래그 확인 결과가 아니다.
+- 켠 뒤에는 공개 사전 항목 하나로 위키 대화를 만들고 질문해, 출처가 모두 `source_kind: "wiki"`인지 본다. 이 확인은 모델을 한 번 부르므로 AI 사용 한도를 쓴다.
+
+**검증 상태:** 플래그 동작은 단위 테스트(`backend/tests/test_agent_wiki.py`)로만 확인했다. 실제 Vercel 배포와 실제 DB에서 켜고 끈 기록은 아직 없다.
 
 ## 프론트 헬스체크 사용법
 
