@@ -203,9 +203,11 @@ function NoteRead({ noteId }: { noteId: string }) {
     const selection = { noteId: note.id, revision: note.revision, ...toCodePointRange(note.body_markdown, pick.start, pick.end), text }
     if (!started) setAgentUi((previous) => ({ ...previous, selection, excluded: false, expanded: false }))
     else {
-      // 이미 문맥에 있는 문장을 다시 골랐으면 묻지 않고 대화만 연다.
+      // 이미 문맥에 있는 문장(제외한 것은 빼고)을 다시 골랐으면 묻지 않고 대화만 연다.
       const known = agentState.conversation
-        ? [...agentState.conversation.context_selections.map((item) => ({ noteId: item.note_id, start: item.start, end: item.end })), ...agentUi.added]
+        ? [...agentState.conversation.context_selections
+            .filter((item) => !agentUi.excludedIds.includes(item.selection_id))
+            .map((item) => ({ noteId: item.note_id, start: item.start, end: item.end })), ...agentUi.added]
         : agentUi.selection ? [agentUi.selection] : []
       const same = known.some((item) => item.noteId === selection.noteId && item.start === selection.start && item.end === selection.end)
       if (!same) setAgentUi((previous) => ({ ...previous, candidate: selection }))

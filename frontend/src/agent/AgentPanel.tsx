@@ -288,8 +288,18 @@ export function AgentPanel(props: AgentPanelProps) {
   // 질문 하나가 끝난 뒤(성공·실패 모두). 로그인이 끊겼으면 노트 화면에 알리고,
   // 사용 제한(S12)이면 보내려던 질문 글을 비어 있는 입력 칸에 되돌려 놓는다(F6-17 '쓰던 내용은 아래 칸에 남겨 두었어요').
   // 세션이 끊긴 경우(401)도 질문 글을 비어 있는 입력 칸에 남긴다. 로그인 뒤 다시 열면 이어서 보낼 수 있다.
+  // 마지막으로 보낸 질문에 실은 '현재 대화에 추가' 문장. 다시 시도로 성공해도 같은 곳(afterRun)에서 정리한다.
+  const sentAdded = useRef<AgentContextSelection[]>([])
   const afterRun = () => {
     const ended = controller.getSnapshot().failure
+    if ((ended === null || ended.turnId !== null) && sentAdded.current.length > 0) {
+      // 턴이 생겼으면(실패한 턴 포함) 추가한 문장이 대화의 선택 문맥이 됐다. 칩을 서버의 선택 문맥으로 바꾼다(E28).
+      // 다시 시도는 이 문장을 다시 싣지 않는다(conversation.learnTurn).
+      const sent = sentAdded.current
+      sentAdded.current = []
+      onUi((current) => ({ added: current.added.filter((item) => !sent.includes(item)) }))
+      void controller.refresh()
+    }
     const login = ended?.kind === 'login_required'
     if ((login || isLimitLike(ended)) && ended?.question && ended.question.kind !== 'preset') {
       const restore = ended.question.text ?? ''
@@ -314,15 +324,8 @@ export function AgentPanel(props: AgentPanelProps) {
   const ask = (question: AskQuestion, extra: Pick<AskOptions, 'reply'> = {}, force = false) => {
     if (pending || (locked && !force)) return
     if (source) onCloseSource()
-    const sentAdded = ui.added
-    controller.ask(question, { context: contextFor(), ...contextChanges(), ...extra }).then(() => {
-      afterRun()
-      // 추가한 문장이 대화의 선택 문맥이 됐다. 칩을 서버의 선택 문맥으로 바꾼다(E28).
-      if (sentAdded.length > 0 && controller.getSnapshot().failure === null) {
-        onUi((current) => ({ added: current.added.filter((item) => !sentAdded.includes(item)) }))
-        void controller.refresh()
-      }
-    }, () => {})
+    sentAdded.current = conversation ? ui.added : []
+    controller.ask(question, { context: contextFor(), ...contextChanges(), ...extra }).then(afterRun, () => {})
     focusInput()
   }
   const retry = () => {
@@ -332,7 +335,8 @@ export function AgentPanel(props: AgentPanelProps) {
   // '같은 질문 다시 하기'(F6-15b). 질문 없이 retry_of_turn_id만 보낸다(MEG-257).
   const askAgain = (turn: AgentTurn) => {
     if (locked) return
-    void controller.askAgain(turn).then(afterRun)
+    sentAdded.current = ui.added
+    void controller.askAgain(turn, contextChanges()).then(afterRun)
     focusInput()
   }
   // 주제 전환 확인(F6-20, 결정 40): '새 대화로 질문'은 앞 대화와 선택한 문장을 모두 빼고 이 질문만으로 새 대화를 시작한다.
@@ -349,6 +353,10 @@ export function AgentPanel(props: AgentPanelProps) {
     onUi((current) => {
       const next = current.candidate
       if (!next) return {}
+      // 제외해 둔 대화 문맥을 다시 고른 경우는 새로 붙이지 않고 제외만 푼다(다음 질문 전이라 서버 문맥에 아직 있다).
+      const excludedMatch = conversation?.context_selections.find((item) =>
+        current.excludedIds.includes(item.selection_id) && item.note_id === next.noteId && item.start === next.start && item.end === next.end)
+      if (excludedMatch) return { candidate: null, excludedIds: current.excludedIds.filter((id) => id !== excludedMatch.selection_id) }
       return { candidate: null, added: current.added.some((item) => sameRange(item, next)) ? current.added : [...current.added, next] }
     })
     focusInput()

@@ -244,6 +244,8 @@ export class AgentConversationController {
   private refreshAbort: AbortController | null = null
   // 429의 기다릴 시간이 끝나면 화면이 다시 그리도록 알린다(canRetry가 시각에 따라 바뀌므로).
   private retryTimer: ReturnType<typeof setTimeout> | null = null
+  // 동작이 진행 중일 때 refresh()를 불렀다. 동작이 끝나면 E28로 다시 읽는다.
+  private refreshAfterRun = false
 
   // useSyncExternalStore에 넘길 수 있게 화살표 함수로 둔다.
   subscribe = (listener: () => void): (() => void) => {
@@ -285,11 +287,12 @@ export class AgentConversationController {
 
   // '같은 질문 다시 하기'(F6-15b, spec E29 retry_of_turn_id). 질문은 보내지 않고 서버가 대상 턴에 저장된 질문을 쓴다(MEG-257).
   // 대상은 hidden.retry_allowed가 true인 턴이다. 뒤쪽 가린 턴은 자동으로 다시 보내지 않는다(결정 17).
-  askAgain(turn: AgentTurn): Promise<void> {
+  // options는 다음 질문의 선택 문맥 변경(제외·추가)이다. 다른 질문과 같이 다시 묻기에도 싣는다.
+  askAgain(turn: AgentTurn, options: Pick<AskOptions, 'exclude_selection_ids' | 'add_selections'> = {}): Promise<void> {
     if (this.run) return this.run.promise
     if (this.state.conversation === null || !turn.hidden?.retry_allowed) return Promise.resolve()
     const action: Action = {
-      request: { retry_of_turn_id: turn.turn_id },
+      request: { ...options, retry_of_turn_id: turn.turn_id },
       display: turn.question,
       context: undefined,
       key: newIdempotencyKey(),
@@ -348,6 +351,12 @@ export class AgentConversationController {
 
   // 이 동작의 턴 id를 알게 됐다. 그 전에 중단을 눌렀으면 지금 E31을 부른다.
   private learnTurn(run: Run, turnId: string, from: 'event' | 'in_progress', seq?: number): void {
+    // 턴이 생겼으면 서버가 선택 문맥 제외·추가를 이미 반영했다(agent_turns: 선점 직후 반영, 턴이 실패해도 남는다).
+    // 이 동작을 새 키로 다시 보낼 때(다시 시도) 같은 문장을 두 번 붙이지 않게 요청에서 뺀다.
+    const { add_selections: _add, exclude_selection_ids: _exclude, ...rest } = run.action.request
+    void _add
+    void _exclude
+    run.action.request = rest
     run.action.turnId = turnId
     run.action.turnIdFrom = from
     this.setPending(run, seq === undefined ? { turnId } : { turnId, seq })
@@ -388,10 +397,15 @@ export class AgentConversationController {
     )
   }
 
-  // 대화를 E28로 다시 읽는다('이전 대화 보기', 출처 화면에서 돌아올 때). 진행 중인 동작이 있으면 읽지 않는다.
+  // 대화를 E28로 다시 읽는다('이전 대화 보기', 출처 화면에서 돌아올 때). 진행 중인 동작이 있으면 그 동작이 끝난 뒤에 읽는다.
+  // (출처가 404면 가린 턴을 보여 주려고 다시 읽는다. 생성 중이라고 건너뛰면 가림 안내가 나오지 않는다.)
   async refresh(): Promise<void> {
     const conversation = this.state.conversation
-    if (conversation === null || this.run || this.refreshAbort) return
+    if (conversation !== null && this.run) {
+      this.refreshAfterRun = true
+      return
+    }
+    if (conversation === null || this.refreshAbort) return
     const abort = new AbortController()
     this.refreshAbort = abort
     this.set({ refreshing: true })
@@ -433,6 +447,7 @@ export class AgentConversationController {
 
   // 대화를 비운다. 진행 중인 요청의 응답은 버린다(서버 실행은 끝까지 간다).
   reset(): void {
+    this.refreshAfterRun = false
     this.abort()
     this.failedAction = null
     this.clearRetryTimer()
@@ -506,6 +521,10 @@ export class AgentConversationController {
     if (this.run !== run) return
     this.run = null
     this.set({ ...patch, pending: null })
+    if (this.refreshAfterRun) {
+      this.refreshAfterRun = false
+      void this.refresh()
+    }
   }
 
   private fail(run: Run, failure: AgentFailure): void {

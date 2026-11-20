@@ -491,6 +491,23 @@ export function openMockTurnStream(request: {
   const answeredBefore = conversation.turnIds.some((turnId) => statusAt(turns.get(turnId)!, now).status === 'completed')
   const confirmed = body.reply || retryOf
   const kind = (confirmed && (scenario === 'clarify' || scenario === 'topic_check')) || (scenario === 'topic_check' && !answeredBefore) ? 'answered' : scenario
+  // 선택 문맥 제외·추가(agent_turns._check_selections). 제외한 문맥은 E28 context_selections에서 빠지고, 추가한 문장은 들어간다.
+  const context = conversation.conversation
+  const excluded = new Set(body.exclude_selection_ids ?? [])
+  context.context_selections = context.context_selections.filter((item) => !excluded.has(item.selection_id))
+  for (const add of body.add_selections ?? []) {
+    const note = readMockNote(add.note_id)
+    const text = note ? [...note.body_markdown].slice(add.start, add.end).join('') : ''
+    context.context_selections.push({
+      selection_id: newIdempotencyKey(),
+      note_id: add.note_id,
+      note_revision: add.note_revision,
+      start: add.start,
+      end: add.end,
+      text_preview: text.slice(0, 100),
+      revision_changed: false,
+    })
+  }
   const turn = createTurn(conversation, key, question, kind, retryOf)
   return { stream: liveStream(turn, signal) }
 }
