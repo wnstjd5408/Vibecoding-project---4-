@@ -16,13 +16,15 @@ const isView = (value: unknown): value is AgentView => VIEWS.includes(value as A
 let remembered: AgentView | null = null
 
 export function readAgentView(): AgentView {
+  // 이 탭에서 이미 고른 보기가 있으면 그것이 가장 새 값이다(저장만 실패한 경우에도 맞다).
+  if (remembered) return remembered
   try {
     const stored = window.localStorage.getItem(AGENT_VIEW_STORAGE_KEY)
     if (isView(stored)) return stored
   } catch {
     // 저장소를 읽지 못해도 화면은 기본 보기로 연다.
   }
-  return remembered ?? 'panel'
+  return 'panel'
 }
 
 function storeAgentView(view: AgentView) {

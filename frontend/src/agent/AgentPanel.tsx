@@ -200,8 +200,15 @@ export function AgentPanel(props: AgentPanelProps) {
     // 내용이 줄어 스크롤 이벤트 없이 맨 아래가 된 경우(새 대화 등)에도 위치를 다시 잰다.
     onScroll()
   }, [lastKey])
-  // 보기를 바꾸면 대화 영역의 높이가 바뀌어 맨 아래인지가 달라진다. 스크롤 위치는 같은 요소라 그대로 남는다.
-  useLayoutEffect(() => onScroll(), [mode])
+  // 보기를 바꾸면 대화 영역의 폭·높이가 바뀌어 글이 다시 흐른다. 맨 아래를 따라가던 중이었으면 계속 맨 아래에 둔다.
+  // 출처 보기 중에는 대화 영역이 숨어 잴 수 없으므로 건드리지 않는다. 돌아오면 위의 savedScroll이 위치를 되살리고,
+  // 그 전에 맨 아래였으면 다시 맨 아래에 둔다(같은 위치다).
+  useLayoutEffect(() => {
+    const body = bodyRef.current
+    if (!body || sourceOpen) return
+    if (bottomRef.current) body.scrollTop = body.scrollHeight
+    onScroll()
+  }, [mode, sourceOpen])
   const showNewAnswer = wide && !sourceOpen && !atBottom && (unseen || (pending !== null && !collapsed))
 
   // --- 동작 ---

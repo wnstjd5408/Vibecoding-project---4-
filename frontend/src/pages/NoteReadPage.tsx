@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 import { apiFetch, isApiError } from '../api/client.ts'
 import type { NoteReadResponse } from '../api/types.ts'
@@ -251,6 +251,22 @@ function NoteRead({ noteId }: { noteId: string }) {
   // 패널이 열려 있으면 본문 오른쪽 480px를 비워 패널이 본문을 가리지 않게 한다(PC 폭에서만).
   // 떠 있는 창이면 창 폭만큼 비운다(F6-3f). 전체 화면은 패널과 같은 배치를 둔 채 노트를 가려서, 패널로 돌아오면 읽던 위치가 그대로다(결정 43).
   const panelReserved = wide && (term !== undefined || openAi !== null || loginPanelOpen || (agentOpen && agentShown !== 'floating'))
+  // 전체 화면 동안에는 가린 노트가 굴러가지 않게 문서 스크롤을 잠근다. 잠근 동안 위치는 그대로라 패널로 돌아오면 읽던 위치다(결정 43).
+  // inert는 포커스와 보조기기만 막고 휠·키보드 스크롤은 막지 않는다. 스크롤 막대가 있던 화면은 막대 자리를 남겨 머리가 옆으로 밀리지 않게 한다.
+  // 위치를 따로 되돌리지 않는다. 출처 보기를 닫을 때 noteScroll로 옮기는 스크롤(아래 효과)을 덮어쓰지 않기 위해서다.
+  const agentFullscreen = agentShown === 'fullscreen'
+  useLayoutEffect(() => {
+    if (!agentFullscreen) return
+    const root = document.documentElement
+    const previous = { overflow: root.style.overflow, gutter: root.style.scrollbarGutter }
+    const hadScrollbar = window.innerWidth > root.clientWidth
+    root.style.overflow = 'hidden'
+    if (hadScrollbar) root.style.scrollbarGutter = 'stable'
+    return () => {
+      root.style.overflow = previous.overflow
+      root.style.scrollbarGutter = previous.gutter
+    }
+  }, [agentFullscreen])
   const pageClass = cx(styles.page, panelReserved && styles.panelOpen, agentShown === 'floating' && styles.floatingOpen)
 
   return <div className={pageClass}>

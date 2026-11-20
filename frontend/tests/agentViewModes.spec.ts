@@ -191,7 +191,9 @@ test('마지막 보기 방식을 기억해 닫았다 열거나 다른 노트로 
   await panel.getByRole('button', { name: '전체 화면' }).click()
   expect(await page.evaluate((key) => localStorage.getItem(key), VIEW_KEY)).toBe('fullscreen')
   // 다른 노트로 갔다가 돌아오면 노트 화면을 새로 만든다. 그래도 전체 화면으로 연다
-  await goInApp(page, '/notes/12?cs-agent=1')
+  // 노트 목록을 거쳐 돌아오면 노트 화면을 새로 만든다. 목록이 그려진 것을 본 뒤에 돌아가야 앞 화면과 헷갈리지 않는다
+  await goInApp(page, '/')
+  await expect(page.getByText('예시 노트 · 프로세스가 번갈아 실행되는 이유')).toBeVisible()
   await goInApp(page, '/notes/11?cs-agent=1')
   await expect(page.getByRole('heading', { level: 1, name: 'Example Note' })).toBeVisible()
   panel = await openPanel(page)
@@ -238,12 +240,21 @@ test('Esc: 전체 화면은 패널로, 떠 있는 창은 닫고 노트(진입점
   await expect(headButtons(again)).toHaveText(['패널로 보기', '전체 화면', '새 대화', '닫기'])
 })
 
-test('전체 화면에서는 Tab이 가린 노트로 가지 않고, 패널로 돌아오면 노트를 읽던 위치가 그대로다', async ({ page }) => {
-  await login(page, { width: 1280, height: 480 })
+test('전체 화면에서는 Tab이 가린 노트로 가지 않고, 휠·키보드로도 노트가 움직이지 않아 패널로 돌아오면 읽던 위치다', async ({ page }) => {
+  await login(page, { width: 1280, height: 600 })
+  // 가짜 노트는 짧아서 스크롤이 생기지 않는다. 본문 뒤에 빈 공간을 붙여 읽던 위치가 0이 아니게 한다
+  await page.locator('article').evaluate((element) => { (element as HTMLElement).style.paddingBottom = '2000px' })
   const panel = await openPanel(page)
-  const scrolled = await page.evaluate(() => { window.scrollTo({ top: 200 }); return window.scrollY })
+  const scrolled = await page.evaluate(() => { window.scrollTo({ top: 300 }); return window.scrollY })
+  expect(scrolled).toBe(300)
   await panel.getByRole('button', { name: '전체 화면' }).click()
-  // 대화 영역 끝에서 Tab을 여러 번 눌러도 노트 본문 안(용어 링크 등)으로 들어가지 않는다
+  await expect(title(page)).toBeFocused()
+  // 대화 칸 옆 빈자리에서 굴리고, 제목에 포커스를 둔 채 PageDown·Space를 눌러도 노트가 움직이지 않는다
+  await page.mouse.move(100, 400)
+  await page.mouse.wheel(0, 600)
+  await page.keyboard.press('PageDown')
+  await page.keyboard.press('End')
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrolled)
   const visited = new Set<string>()
   for (let i = 0; i < 20; i += 1) {
     await page.keyboard.press('Tab')
@@ -263,6 +274,21 @@ test('전체 화면에서는 Tab이 가린 노트로 가지 않고, 패널로 �
   await panel.getByRole('button', { name: '패널로 보기' }).click()
   await expect(noteMain(page)).not.toHaveAttribute('inert')
   expect(await page.evaluate(() => window.scrollY)).toBe(scrolled)
+  expect(await page.evaluate(() => document.documentElement.style.overflow)).toBe('')
+})
+
+test('맨 아래를 따라가던 중에 보기를 바꾸면 계속 맨 아래에 있다', async ({ page }) => {
+  await login(page, { width: 1280, height: 640 })
+  const panel = await openPanel(page)
+  await answer(page, panel)
+  await panel.getByRole('button', { name: '전체 화면' }).click()
+  const body = panel.locator('[class*="body"]').first()
+  const gap = () => body.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)
+  await body.evaluate((element) => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event('scroll')) })
+  expect(await gap()).toBeLessThan(24)
+  await panel.getByRole('button', { name: '창으로 보기' }).click()
+  expect(await gap()).toBeLessThan(24)
+  await expect(panel.getByRole('button', { name: '새 답변 보기' })).toHaveCount(0)
 })
 
 test('전체 화면에서 출처를 열면 출처 보기(F6-4)로 보이고, 대화로 돌아오면 다시 전체 화면이다', async ({ page }) => {
