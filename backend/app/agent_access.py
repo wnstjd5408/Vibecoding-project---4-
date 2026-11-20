@@ -203,6 +203,8 @@ def hidden_marks(
       쓴 것으로 보지 않아 X의 retry_allowed는 true로 남는다. running 중의 겹친 다시 묻기는 E29가 turn_in_progress로 막는다.
     - X가 아닌 턴(연쇄 중간의 턴, 지금 보이는 턴)을 대상으로 한 다시 묻기 턴은 일반 턴과 같다. 연쇄를 끝내지 않는다.
     - retry_of_turn_id가 없는 행은 다시 묻기 턴이 아닌 것으로 본다.
+    - 추천 질문을 고른 앞 턴(from_turn_id)이 가려진 X는 retry_allowed가 false다. 다시 묻기는 X에 저장된 질문을 새 턴에
+      싣는데(MEG-257), 그 글은 가려진 앞 턴의 답(회수된 출처)에서 나왔기 때문이다. 연쇄가 다시 묻기로 끝난 뒤에 생긴다.
     """
     ordered = sorted(turns, key=lambda row: row["seq"])
     retried = {
@@ -217,12 +219,21 @@ def hidden_marks(
             first_hidden = None
         if first_hidden is None and not all(source_visible(s) for s in turn.get("ai_turn_sources") or []):
             first_hidden = turn["id"]
-            marks[turn["id"]] = Hidden("source_revoked", retry_allowed=turn["id"] not in retried)
+            marks[turn["id"]] = Hidden(
+                "source_revoked", retry_allowed=turn["id"] not in retried and not _from_hidden_turn(turn, marks)
+            )
         elif first_hidden is None:
             marks[turn["id"]] = None
         else:
             marks[turn["id"]] = Hidden("source_revoked", retry_allowed=False)
     return marks
+
+
+def _from_hidden_turn(turn: dict[str, Any], marks: dict[str, Hidden | None]) -> bool:
+    """추천 질문 턴이고, 그 추천 질문을 고른 앞 턴이 가려졌는가. 앞 턴은 seq가 앞서므로 marks에 이미 있다."""
+    if turn.get("question_kind") != "suggested" or turn.get("from_turn_id") is None:
+        return False
+    return marks.get(turn["from_turn_id"]) is not None
 
 
 def visible_turns(
