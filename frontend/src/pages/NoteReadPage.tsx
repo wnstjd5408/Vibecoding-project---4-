@@ -8,6 +8,7 @@ import { AiExplainSheet } from '../ai/AiExplainSheet.tsx'
 import { useWideLayout } from '../components/useWideLayout.ts'
 import { toCodePointRange } from '../ai/explain.ts'
 import { AppHeader, Button, LinkButton, SelectionAction, StateMessage } from '../components/index.ts'
+import { cx } from '../components/cx.ts'
 import { TermSheet } from '../glossary/TermSheet.tsx'
 import { isLoginRequired } from '../loginPrompt/isLoginRequired.ts'
 import { useLoginPrompt } from '../loginPrompt/useLoginPrompt.ts'
@@ -250,7 +251,7 @@ function NoteRead({ noteId }: { noteId: string }) {
   // 패널이 열려 있으면 본문 오른쪽 480px를 비워 패널이 본문을 가리지 않게 한다(PC 폭에서만).
   // 떠 있는 창이면 창 폭만큼 비운다(F6-3f). 전체 화면은 패널과 같은 배치를 둔 채 노트를 가려서, 패널로 돌아오면 읽던 위치가 그대로다(결정 43).
   const panelReserved = wide && (term !== undefined || openAi !== null || loginPanelOpen || (agentOpen && agentShown !== 'floating'))
-  const pageClass = [styles.page, panelReserved ? styles.panelOpen : '', agentShown === 'floating' ? styles.floatingOpen : ''].filter(Boolean).join(' ')
+  const pageClass = cx(styles.page, panelReserved && styles.panelOpen, agentShown === 'floating' && styles.floatingOpen)
 
   return <div className={pageClass}>
     <AppHeader title="CS 학습 노트" backTo={userPaths.noteList} backLabel="목록" wide stickyOnWide actions={

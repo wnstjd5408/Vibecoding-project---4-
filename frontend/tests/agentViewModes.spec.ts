@@ -244,11 +244,22 @@ test('전체 화면에서는 Tab이 가린 노트로 가지 않고, 패널로 �
   const scrolled = await page.evaluate(() => { window.scrollTo({ top: 200 }); return window.scrollY })
   await panel.getByRole('button', { name: '전체 화면' }).click()
   // 대화 영역 끝에서 Tab을 여러 번 눌러도 노트 본문 안(용어 링크 등)으로 들어가지 않는다
+  const visited = new Set<string>()
   for (let i = 0; i < 20; i += 1) {
     await page.keyboard.press('Tab')
-    const inNote = await page.evaluate(() => document.activeElement?.closest('main') !== null)
-    expect(inNote).toBe(false)
+    // 포커스는 대화 창이나 앱 머리(목록·내 계정)에만 있고, 가린 노트에는 가지 않는다
+    const where = await page.evaluate(() => {
+      const active = document.activeElement
+      if (!active || active === document.body) return 'body'
+      if (active.closest('dialog')) return 'dialog'
+      if (active.closest('header')) return 'header'
+      return active.closest('main') ? 'note' : 'other'
+    })
+    expect(['dialog', 'header', 'body']).toContain(where)
+    visited.add(where)
   }
+  // 한 바퀴 도는 동안 대화 창과 앱 머리를 모두 지난다
+  expect(visited.has('dialog') && visited.has('header')).toBe(true)
   await panel.getByRole('button', { name: '패널로 보기' }).click()
   await expect(noteMain(page)).not.toHaveAttribute('inert')
   expect(await page.evaluate(() => window.scrollY)).toBe(scrolled)
