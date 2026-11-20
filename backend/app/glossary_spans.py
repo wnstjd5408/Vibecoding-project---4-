@@ -201,6 +201,14 @@ def _code_mask(text: str) -> bytearray:
     return mask
 
 
+def fenced_mask(text: str) -> bytearray:
+    """코드 블록(펜스)만 1로 표시한다. 인라인 코드는 표시하지 않는다. 노트 문단 분할(MEG-237)이 제목·빈 줄 경계를 볼 때 쓴다."""
+    mask = bytearray(len(text))
+    if "```" in text or "~~~" in text:
+        _mask_fenced_blocks(text, mask)
+    return mask
+
+
 def _fence_info_ranges(text: str) -> list[tuple[int, int]]:
     """코드 블록 여는 줄의 info(언어 이름 등) 구간 (시작, 끝). 화면에 글자로 보이지 않는다(MEG-149)."""
     ranges: list[tuple[int, int]] = []
