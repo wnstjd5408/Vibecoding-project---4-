@@ -37,6 +37,7 @@ from test_agent import (
     PRIVATE,
     PUBLIC,
     SOURCE_NOTE,
+    QUESTION as AGENT_QUESTION,
     AgentFake,
     assert_error,
     assert_field,
@@ -316,6 +317,11 @@ def events(response) -> list[tuple[str, object]]:
 
 def names(parsed):
     return [name for name, _ in parsed]
+
+
+def stored_question(seq: int) -> str:
+    """AgentFake.turn이 저장하는 질문 글(test_agent의 QUESTION과 seq)."""
+    return f"{AGENT_QUESTION} {seq}"
 
 
 def last_turn(fake):
@@ -723,10 +729,13 @@ def _selection_case(fake):
 
 
 def _retry_case(fake):
-    """다시 묻기. 첫 요청 뒤 출처 노트가 다시 공개되면 대상이 가려지지 않아 같은 본문은 turn_not_retryable이 된다."""
+    """다시 묻기. 첫 요청 뒤 출처 노트가 다시 공개되면 대상이 가려지지 않아 같은 본문은 turn_not_retryable이 된다.
+
+    질문은 생략한다. 서버가 대상 턴에 저장된 질문을 쓴다(MEG-257).
+    """
     cid = fake.conversation(A)
     hidden = fake.turn(cid, 1, sources=[("note", str(PRIVATE))])
-    body = {"question": {"kind": "free", "text": QUESTION}, "retry_of_turn_id": hidden}
+    body = {"retry_of_turn_id": hidden}
     return cid, body, lambda: fake.note_rows[PRIVATE].update(is_published=True)
 
 
@@ -1119,9 +1128,153 @@ def test_retry_is_only_allowed_for_the_first_hidden_turn(client, fake):
     assert_error(ask(client, cid, body={"question": {"kind": "free", "text": QUESTION}, "retry_of_turn_id": visible}),
                  409, "conflict", "turn_not_retryable")
     hidden = fake.turn(cid, 2, sources=[("note", str(PRIVATE))])
-    response = ask(client, cid, body={"question": {"kind": "free", "text": QUESTION}, "retry_of_turn_id": hidden})
+    response = ask(client, cid, body={"question": {"kind": "free", "text": stored_question(2)}, "retry_of_turn_id": hidden})
     assert events(response)[0][0] == "turn"
     assert last_turn(fake)["retry_of_turn_id"] == hidden
+
+
+# --- MEG-257: 다시 묻기는 대상 턴에 저장된 질문을 쓴다 ---
+
+
+def _hidden_suggested_case(fake):
+    """앞 턴(보임)의 추천 질문을 고른 턴 X가 회수된 출처를 인용해 처음 가려진 대화. X의 질문 글은 응답에서 빠진다."""
+    cid = fake.conversation(A)
+    source = fake.turn(cid, 1)
+    hidden = fake.turn(cid, 2, sources=[("note", str(PRIVATE))])
+    fake.turns[hidden].update(question_kind="suggested", question_text="다음 질문", from_turn_id=source)
+    return cid, source, hidden
+
+
+def test_a_retry_of_a_hidden_suggested_turn_runs_with_its_stored_question(client, fake, bedrock):
+    """AC-1: 가린 추천 질문 턴은 질문 글을 볼 수 없다. 질문 없이 retry_of_turn_id만 보내면 저장된 질문으로 실행한다."""
+    cid, source, hidden = _hidden_suggested_case(fake)
+    shown = client.get(f"/api/ai/conversations/{cid}", headers=cookie("a-token")).json()["turns"][1]
+    assert shown["turn_id"] == hidden and "text" not in shown["question"]
+    assert shown["hidden"] == {"reason": "source_revoked", "retry_allowed": True}
+
+    parsed = events(ask(client, cid, body={"retry_of_turn_id": hidden}))
+
+    assert parsed[-1][0] == "result" and parsed[-1][1]["status"] == "completed"
+    row = last_turn(fake)
+    assert (row["question_kind"], row["question_text"], row["from_turn_id"]) == ("suggested", "다음 질문", source)
+    assert (row["preset"], row["retry_of_turn_id"]) == (None, hidden)
+    assert bedrock.calls == 1 and "다음 질문" in bedrock.prompts[-1]
+    after = client.get(f"/api/ai/conversations/{cid}", headers=cookie("a-token")).json()["turns"]
+    assert "text" not in after[1]["question"] and after[1]["hidden"]["retry_allowed"] is False
+
+
+@pytest.mark.parametrize(
+    "stored, expected",
+    [
+        ({"question_kind": "free", "question_text": "직접 쓴 질문", "preset": None}, ("free", "직접 쓴 질문", None)),
+        # 빠른 질문은 저장한 문구를 쓴다. 고정 문구가 그사이 바뀌어도 대상 턴과 같은 질문을 보낸다.
+        ({"question_kind": "preset", "question_text": "예전 칩 문구", "preset": "example"}, ("preset", "예전 칩 문구", "example")),
+    ],
+    ids=["free", "preset"],
+)
+def test_a_retry_without_a_question_copies_any_kind_of_stored_question(client, fake, bedrock, stored, expected):
+    cid = fake.conversation(A)
+    hidden = fake.turn(cid, 1, sources=[("note", str(PRIVATE))])
+    fake.turns[hidden].update(stored)
+    events(ask(client, cid, body={"retry_of_turn_id": hidden}))
+    row = last_turn(fake)
+    assert (row["question_kind"], row["question_text"], row["preset"]) == expected
+    assert row["from_turn_id"] is None and row["retry_of_turn_id"] == hidden
+    assert expected[1] in bedrock.prompts[-1]
+
+
+@pytest.mark.parametrize("kind", ["free", "suggested"])
+def test_a_retry_may_still_send_the_same_question(client, fake, bedrock, kind):
+    """질문을 함께 보내면 대상 턴의 질문과 같아야 한다. 같으면 지금처럼 실행한다(질문을 보내던 클라이언트도 동작한다)."""
+    cid = fake.conversation(A)
+    source = fake.turn(cid, 1)
+    hidden = fake.turn(cid, 2, sources=[("note", str(PRIVATE))])
+    if kind == "suggested":
+        fake.turns[hidden].update(question_kind="suggested", question_text="다음 질문", from_turn_id=source)
+        # 대문자 UUID도 같은 턴이다(서버가 소문자로 맞춘다).
+        question = {"kind": "suggested", "text": "다음 질문", "from_turn_id": source.upper()}
+    else:
+        question = {"kind": "free", "text": stored_question(2)}
+    parsed = events(ask(client, cid, body={"question": question, "retry_of_turn_id": hidden}))
+    assert parsed[-1][1]["status"] == "completed"
+    row = last_turn(fake)
+    assert (row["question_kind"], row["question_text"], row["retry_of_turn_id"]) == (kind, question["text"], hidden)
+
+
+@pytest.mark.parametrize("variant", ["other-text", "other-kind", "same-text-other-kind"])
+def test_a_retry_with_a_different_question_is_422_before_claiming(client, fake, bedrock, variant):
+    cid = fake.conversation(A)
+    source = fake.turn(cid, 1)
+    hidden = fake.turn(cid, 2, sources=[("note", str(PRIVATE))])
+    fake.turns[hidden]["question_text"] = "다음 질문"
+    question = {
+        "other-text": {"kind": "free", "text": "다른 질문"},
+        "other-kind": {"kind": "preset", "preset": "simple"},
+        # 저장한 턴은 직접 입력이고, 같은 문구를 추천 질문으로 보냈다.
+        "same-text-other-kind": {"kind": "suggested", "text": "다음 질문", "from_turn_id": source},
+    }[variant]
+    assert_field(ask(client, cid, body={"question": question, "retry_of_turn_id": hidden}), "question", "invalid_value")
+    assert "claim_agent_turn" not in fake.calls and bedrock.calls == 0
+
+
+def test_a_retry_with_another_preset_is_422(client, fake, bedrock):
+    cid = fake.conversation(A)
+    hidden = fake.turn(cid, 1, sources=[("note", str(PRIVATE))])
+    fake.turns[hidden].update(question_kind="preset", question_text="방금 설명을 더 쉽게 설명해 주세요.", preset="simple")
+    other = {"question": {"kind": "preset", "preset": "detail"}, "retry_of_turn_id": hidden}
+    assert_field(ask(client, cid, body=other), "question", "invalid_value")
+    same = {"question": {"kind": "preset", "preset": "simple"}, "retry_of_turn_id": hidden}
+    assert events(ask(client, cid, body=same))[-1][1]["status"] == "completed"
+
+
+def test_a_question_is_still_required_without_retry_of_turn_id(client, fake, bedrock, monkeypatch):
+    """질문 생략은 다시 묻기에서만 된다. 다른 형식 오류처럼 대화 확인·노출 중단 플래그보다 먼저 422다."""
+    cid = fake.conversation(A)
+    calls = len(fake.calls)
+    assert_field(ask(client, cid, body={"exclude_selection_ids": []}), "question", "required")
+    assert_field(ask(client, str(uuid.uuid4()), body={"reply": None}), "question", "required")
+    monkeypatch.setenv(agent.DISABLE_ENV, "1")
+    assert_field(ask(client, cid, body={"retry_of_turn_id": None}), "question", "required")
+    assert "claim_agent_turn" not in fake.calls[calls:] and "find_agent_turn_by_key" not in fake.calls[calls:]
+    assert bedrock.calls == 0
+
+
+def test_a_retry_without_a_question_keeps_the_target_checks(client, fake, bedrock):
+    """AC-2: 질문을 생략해도 대상 검사는 같다. 보이는 턴·이미 다시 물은 턴은 409, 이 대화에 없는 턴은 422, 남의 대화는 404."""
+    cid = fake.conversation(A)
+    visible = fake.turn(cid, 1)
+    assert_error(ask(client, cid, body={"retry_of_turn_id": visible}), 409, "conflict", "turn_not_retryable")
+    hidden = fake.turn(cid, 2, sources=[("note", str(PRIVATE))])
+    between = fake.turn(cid, 3)
+    assert_error(ask(client, cid, body={"retry_of_turn_id": between}), 409, "conflict", "turn_not_retryable")
+    done = fake.turn(cid, 4)
+    fake.turns[done]["retry_of_turn_id"] = hidden
+    assert_error(ask(client, cid, body={"retry_of_turn_id": hidden}), 409, "conflict", "turn_not_retryable")
+
+    other = fake.conversation(A)
+    elsewhere = fake.turn(other, 1, sources=[("note", str(PRIVATE))])
+    assert_field(ask(client, cid, body={"retry_of_turn_id": elsewhere}), "retry_of_turn_id", "invalid_value")
+    assert_field(ask(client, cid, body={"retry_of_turn_id": "x"}), "retry_of_turn_id", "invalid_format")
+
+    foreign = fake.conversation(B)
+    theirs = fake.turn(foreign, 1, sources=[("note", str(PRIVATE))])
+    assert_error(ask(client, foreign, body={"retry_of_turn_id": theirs}), 404, "not_found")
+    assert_field(ask(client, cid, body={"retry_of_turn_id": theirs}), "retry_of_turn_id", "invalid_value")
+    assert "claim_agent_turn" not in fake.calls and bedrock.calls == 0
+
+
+@pytest.mark.parametrize("first_sends_question", [True, False], ids=["then-omitted", "then-sent"])
+def test_a_same_key_retry_replays_whether_or_not_the_question_is_sent(client, fake, bedrock, first_sends_question):
+    """같은 키 재전송은 본문을 비교하지 않고 재생한다(spec 2절 멱등 키). 질문을 넣었다 뺐다 해도 모델 호출은 한 번이다."""
+    cid = fake.conversation(A)
+    hidden = fake.turn(cid, 1, sources=[("note", str(PRIVATE))])
+    with_question = {"question": {"kind": "free", "text": stored_question(1)}, "retry_of_turn_id": hidden}
+    without = {"retry_of_turn_id": hidden}
+    key = str(uuid.uuid4())
+    first = events(ask(client, cid, body=with_question if first_sends_question else without, key=key))
+    second = events(ask(client, cid, body=without if first_sends_question else with_question, key=key))
+    assert names(second) == ["turn", "result"] and second[-1][1]["turn_id"] == first[0][1]["turn_id"]
+    assert bedrock.calls == 1
 
 
 def test_selections_can_be_added_from_the_same_note_and_excluded(client, fake, bedrock):
