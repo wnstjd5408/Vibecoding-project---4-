@@ -17,9 +17,9 @@ import { sourceRangeOfSelection } from '../notes/selection.ts'
 import { userPaths } from '../routes/paths.ts'
 import type { ExplainTarget } from '../ai/explain.ts'
 import { AgentPanel } from '../agent/AgentPanel.tsx'
-import { INITIAL_AGENT_UI } from '../agent/agentUi.ts'
+import { INITIAL_AGENT_UI, agentAccessLost } from '../agent/agentUi.ts'
 import type { AgentUi } from '../agent/agentUi.ts'
-import { AgentSourceDocument } from '../agent/AgentSourceDocument.tsx'
+import { AgentAccessLostDocument, AgentSourceDocument } from '../agent/AgentSourceDocument.tsx'
 import { shownAgentView, useAgentView } from '../agent/agentView.ts'
 import { AGENT_MESSAGES } from '../agent/messages.ts'
 import { AGENT_DISABLED_BY_BUILD, closeAgentEntry, useAgentEntryClosed } from '../agent/availability.ts'
@@ -199,7 +199,7 @@ function NoteRead({ noteId }: { noteId: string }) {
     setAttempt((value) => value + 1)
   }, [])
   // 'AI에게 질문': 선택만으로는 아무 요청도 보내지 않고 질문 준비 화면(F6-1)을 연다.
-  // 대화가 이미 있으면 그 대화를 그대로 보여 준다. 다른 영역을 고른 뒤의 '현재 대화에 추가'·'새 대화' 선택(F6-8)은 T6d 범위다.
+  // 대화가 이미 있으면 그 대화를 보여 주고, 새로 고른 문장은 '현재 대화에 추가'·'이 내용으로 새 대화' 카드로 묻는다(F6-8, MEG-260).
   const openAgent = () => {
     if (!note || !pick) return
     const text = note.body_markdown.slice(pick.start, pick.end)
@@ -211,9 +211,17 @@ function NoteRead({ noteId }: { noteId: string }) {
     if (auth.role === 'visitor') return openLoginPrompt()
     if (loginPanelOpen) closeLoginPrompt()
     const started = agentState.conversation !== null || agentState.pending !== null || agentState.turns.length > 0
-    if (!started) {
-      const range = toCodePointRange(note.body_markdown, pick.start, pick.end)
-      setAgentUi((previous) => ({ ...previous, selection: { noteId: note.id, revision: note.revision, ...range, text }, excluded: false, expanded: false }))
+    const selection = { noteId: note.id, revision: note.revision, ...toCodePointRange(note.body_markdown, pick.start, pick.end), text }
+    if (!started) setAgentUi((previous) => ({ ...previous, selection, excluded: false, expanded: false }))
+    else {
+      // 이미 문맥에 있는 문장(제외한 것은 빼고)을 다시 골랐으면 묻지 않고 대화만 연다.
+      const known = agentState.conversation
+        ? [...agentState.conversation.context_selections
+            .filter((item) => !agentUi.excludedIds.includes(item.selection_id))
+            .map((item) => ({ noteId: item.note_id, start: item.start, end: item.end })), ...agentUi.added]
+        : agentUi.selection ? [agentUi.selection] : []
+      const same = known.some((item) => item.noteId === selection.noteId && item.start === selection.start && item.end === selection.end)
+      if (!same) setAgentUi((previous) => ({ ...previous, candidate: selection }))
     }
     setAgentOpen(true)
   }
@@ -238,6 +246,7 @@ function NoteRead({ noteId }: { noteId: string }) {
   }
   // PC 출처 보기를 닫으면 노트를 읽던 위치로 돌아간다(9절).
   const showingSource = wide && agentOpen && agentSource !== null
+  const agentLost = agentAccessLost(agentState)
   useEffect(() => {
     if (!showingSource) window.scrollTo({ top: noteScroll.current })
   }, [showingSource])
@@ -290,7 +299,9 @@ function NoteRead({ noteId }: { noteId: string }) {
             action={<Button onClick={() => setAttempt((value) => value + 1)}>{MESSAGES.retry}</Button>} />
         : <>
           {showingSource && agentSourceState ? <AgentSourceDocument state={agentSourceState} ref_={agentSource.ref} /> : null}
-          <article ref={articleRef} className={styles.article} tabIndex={-1} hidden={showingSource}>
+          {/* 노트 접근 변경(F6-15, MEG-260): 노트를 더 볼 수 없으면 본문을 숨기고 안내만 둔다. */}
+          {agentLost ? <AgentAccessLostDocument /> : null}
+          <article ref={articleRef} className={styles.article} tabIndex={-1} hidden={showingSource || agentLost}>
             <h1 className={styles.title}>{current.data.title}</h1>
             <p className={styles.meta}>{[...current.data.subjects.map((item) => item.name), ...(current.data.studied_on ? [current.data.studied_on] : [])].join(' · ')}</p>
             <NoteBody body={current.data.body_markdown} spans={current.data.glossary_spans} images={current.data.images}
