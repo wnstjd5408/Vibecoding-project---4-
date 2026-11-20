@@ -19,6 +19,7 @@ import { AgentPanel } from '../agent/AgentPanel.tsx'
 import { INITIAL_AGENT_UI } from '../agent/agentUi.ts'
 import type { AgentUi } from '../agent/agentUi.ts'
 import { AgentSourceDocument } from '../agent/AgentSourceDocument.tsx'
+import { shownAgentView, useAgentView } from '../agent/agentView.ts'
 import { AGENT_MESSAGES } from '../agent/messages.ts'
 import { agentPreviewEnabled } from '../agent/preview.ts'
 import { useAgentConversation } from '../agent/useAgentConversation.ts'
@@ -83,6 +84,9 @@ function NoteRead({ noteId }: { noteId: string }) {
   const onAgentUi = useCallback((patch: Partial<AgentUi> | ((ui: AgentUi) => Partial<AgentUi>)) => setAgentUi((previous) => ({ ...previous, ...(typeof patch === 'function' ? patch(previous) : patch) })), [])
   const [agentSource, setAgentSource] = useState<OpenSource | null>(null)
   const agentSourceState = useAgentSource(agentSource)
+  // PC 보기 방식(패널·떠 있는 창·전체 화면, MEG-261). 마지막 보기 방식으로 다시 연다.
+  const [agentView, setAgentView] = useAgentView()
+  const agentShown = wide && agentOpen ? shownAgentView(agentView, wide, agentSource !== null) : null
   // PC 출처 보기에서 노트 자리에 출처를 보여 주는 동안 노트를 읽던 위치. 돌아오면 되살린다.
   const noteScroll = useRef(0)
   const current = valid && result?.key === key ? result : null
@@ -244,14 +248,16 @@ function NoteRead({ noteId }: { noteId: string }) {
     setOpenTerm({ termId, openId: openCount.current })
   }
   // 패널이 열려 있으면 본문 오른쪽 480px를 비워 패널이 본문을 가리지 않게 한다(PC 폭에서만).
-  const panelReserved = wide && (term !== undefined || openAi !== null || loginPanelOpen || agentOpen)
+  // 떠 있는 창이면 창 폭만큼 비운다(F6-3f). 전체 화면은 패널과 같은 배치를 둔 채 노트를 가려서, 패널로 돌아오면 읽던 위치가 그대로다(결정 43).
+  const panelReserved = wide && (term !== undefined || openAi !== null || loginPanelOpen || (agentOpen && agentShown !== 'floating'))
+  const pageClass = [styles.page, panelReserved ? styles.panelOpen : '', agentShown === 'floating' ? styles.floatingOpen : ''].filter(Boolean).join(' ')
 
-  return <div className={panelReserved ? `${styles.page} ${styles.panelOpen}` : styles.page}>
+  return <div className={pageClass}>
     <AppHeader title="CS 학습 노트" backTo={userPaths.noteList} backLabel="목록" wide stickyOnWide actions={
       auth.status === 'loading' ? null
         : auth.role === 'visitor' ? <LinkButton to={userPaths.login}>로그인</LinkButton> : <AccountMenu />
     } />
-    <main className={styles.main} aria-busy={valid && !current}>
+    <main className={styles.main} aria-busy={valid && !current} inert={agentShown === 'fullscreen'}>
       {!valid || (current && 'error' in current && current.error === 'not_found')
         ? <StateMessage kind="empty" title={MESSAGES.notFound} headingLevel={2}
             action={<Link className={styles.link} to={userPaths.noteList}>{MESSAGES.notFoundAction}</Link>} />
@@ -277,7 +283,7 @@ function NoteRead({ noteId }: { noteId: string }) {
           </article>
         </>}
     </main>
-    <AgentPanel open={agentOpen} wide={wide} state={agentState} controller={agent} ui={agentUi} onUi={onAgentUi}
+    <AgentPanel open={agentOpen} wide={wide} view={agentView} onView={setAgentView} state={agentState} controller={agent} ui={agentUi} onUi={onAgentUi}
       source={agentSource} sourceState={agentSourceState} onOpenSource={openAgentSource} onCloseSource={closeAgentSource}
       onClose={closeAgent} onLoginRequired={onAgentLoginRequired} returnFocus={() => articleRef.current} />
     <AiExplainSheet open={openAi !== null} onClose={() => setOpenAi(null)} openId={openAi?.openId ?? 0} target={openAi?.target ?? null} text={openAi?.text ?? ''} onLoginRequired={onAiLoginRequired} onReloadNote={onReloadNote} returnFocus={() => articleRef.current} />
