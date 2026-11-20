@@ -1458,6 +1458,41 @@ class SupabaseClient:
         logger.error("stage=db wiki_entries=%d read %d pages and more entries remain; refusing a partial list", len(rows), WIKI_MAX_PAGES)
         raise SupabaseConfigError(f"wiki entries exceed {WIKI_MAX_PAGES * WIKI_PAGE_SIZE}")
 
+    def get_wiki_entry_states(self, term_ids: list[int]) -> dict[int, dict[str, Any]]:
+        """CS Agent 권한·가림 판정용 위키(사전 항목) 상태(id, label). 지금 있는 항목만 결과에 있다(MEG-252).
+
+        항목이 있다는 판정은 list_wiki_entries와 같다(설계 3.2): glossary_entries 행이 있고(!inner) terms.source =
+        'glossary'다. 사전 삭제(E21)로 terms 행만 남은 용어는 결과에 없다. 본문과 개정 번호는 읽지 않는다.
+        """
+        ids = sorted({int(term_id) for term_id in term_ids})
+        if not ids:
+            return {}
+        rows = self._select(
+            "terms",
+            {
+                "id": f"in.({','.join(str(term_id) for term_id in ids)})",
+                "source": "eq.glossary",
+                "select": "id,label,glossary_entries!inner(term_id)",
+            },
+        )
+        return {row["id"]: {"id": row["id"], "label": row["label"]} for row in rows}
+
+    def get_wiki_entry(self, term_id: int) -> dict[str, Any] | None:
+        """E32: 지금 있는 사전 항목 하나의 id, label, 본문(glossary_entries 내장). 없으면 None이다(MEG-252).
+
+        판정은 get_wiki_entry_states와 같다(!inner + source = 'glossary').
+        """
+        rows = self._select(
+            "terms",
+            {
+                "id": f"eq.{int(term_id)}",
+                "source": "eq.glossary",
+                "select": "id,label,glossary_entries!inner(body_markdown)",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
     def get_agent_turn_source(self, turn_id: str, ref: int) -> dict[str, Any] | None:
         """E32: 턴의 인용 출처 한 개와 인용 당시 원문(paragraph_snapshot). 없으면 None이다.
 

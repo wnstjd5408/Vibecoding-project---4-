@@ -331,7 +331,7 @@ def _figures(raw: Any, paragraph_count: int, section_count: int) -> tuple[list[d
     figures, refs = [], set()
     for item in raw[:MAX_FIGURES]:
         if not isinstance(item, dict) or item.get("kind", "diagram") != "diagram":
-            # T4 전에는 이미지 그림을 받지 않는다(기술 검토 4절 T4 전 동작).
+            # 이미지 그림은 받지 않는다. 노트 근거 기간(기술 검토 4절)과 위키 근거(MEG-163 W6) 모두 다이어그램만이다.
             continue
         try:
             mermaid = _clean(item.get("mermaid"), MAX_MERMAID_CHARS, "figure")

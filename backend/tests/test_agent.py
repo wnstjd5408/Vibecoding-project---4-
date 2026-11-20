@@ -298,7 +298,7 @@ def test_creating_a_conversation_reads_no_ai_and_writes_only_the_conversation(cl
     assert [c for c in fake.calls if c != "get_note_for_agent"] == ["create_agent_conversation", "add_agent_selection"]
 
 
-def test_wiki_origin_is_rejected_until_t4(client, fake):
+def test_wiki_origin_is_rejected_while_the_wiki_flag_is_off(client, fake):
     assert_field(create(client, {"origin": "wiki", "wiki_ref": "page-1"}), "origin", "invalid_value")
     assert fake.conversations == {}
 
@@ -518,7 +518,7 @@ def test_a_missing_note_row_closes_the_conversation_even_without_the_cascade(cli
     assert_error(get(client, f"/api/ai/conversations/{cid}"), 404, "not_found")
 
 
-def test_a_wiki_conversation_is_closed_until_t4(client, fake):
+def test_a_wiki_conversation_is_closed_while_the_wiki_flag_is_off(client, fake):
     cid = fake.conversation(A, note_id=None)
     fake.conversations[cid].update(origin="wiki", wiki_ref="page-1")
     assert_error(get(client, f"/api/ai/conversations/{cid}"), 404, "not_found")
