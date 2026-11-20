@@ -86,6 +86,29 @@ def test_an_unfinished_retry_ends_the_cascade_without_using_up_the_retry(status)
     assert hidden_marks(turns, CHECKER) == {"x": FIRST, "r": None}
 
 
+def _suggested(row, from_turn):
+    return {**row, "question_kind": "suggested", "from_turn_id": from_turn}
+
+
+@pytest.mark.parametrize(
+    "turns, expected",
+    [
+        # 고른 앞 턴 f가 가려졌다(다시 묻기 r로 연쇄가 끝난 뒤 x가 새 첫 가림 턴). x의 질문 글도 회수된 출처에서 나왔다.
+        ([turn("f", 1, revoked=True), turn("r", 2, retry_of="f"), _suggested(turn("x", 3, revoked=True), "f")],
+         {"f": LATER, "r": None, "x": LATER}),
+        # 고른 앞 턴이 보이면 지금처럼 다시 물을 수 있다.
+        ([turn("f", 1), _suggested(turn("x", 2, revoked=True), "f")], {"f": None, "x": FIRST}),
+        # 앞 턴이 지워졌으면(from_turn_id 없음) 직접 입력처럼 본다.
+        ([turn("f", 1), _suggested(turn("x", 2, revoked=True), None)], {"f": None, "x": FIRST}),
+    ],
+    ids=["source-hidden", "source-visible", "source-gone"],
+)
+def test_a_suggested_first_hidden_turn_is_retryable_only_while_its_source_turn_is_visible(turns, expected):
+    """MEG-257: 다시 묻기는 대상 턴에 저장된 질문을 새 턴에 싣는다. 추천 질문 글의 출처 턴이 가려졌으면 다시 묻지 않는다."""
+    assert hidden_marks(turns, CHECKER) == expected
+    assert hidden_marks(list(reversed(turns)), CHECKER) == expected
+
+
 def test_rows_without_retry_of_turn_id_keep_the_old_cascade():
     turns = [{"id": "x", "seq": 1, "status": "completed", "ai_turn_sources": [REVOKED]},
              {"id": "b", "seq": 2, "status": "completed", "ai_turn_sources": []}]
@@ -93,6 +116,7 @@ def test_rows_without_retry_of_turn_id_keep_the_old_cascade():
 
 
 def test_listing_turns_selects_retry_of_turn_id():
+    """가림 함수와 다시 묻기(MEG-257)가 쓰는 열을 모두 읽는다. 다시 묻기는 대상 턴의 질문을 이 목록에서 꺼낸다."""
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -102,4 +126,6 @@ def test_listing_turns_selects_retry_of_turn_id():
     client = SupabaseClient("https://project.supabase.co/", "sb_secret_test",
                             httpx.Client(transport=httpx.MockTransport(handler)))
     client.list_agent_turns("00000000-0000-4000-8000-00000000000a", "11111111-1111-4111-8111-111111111111")
-    assert "retry_of_turn_id" in dict(seen[0].url.params)["select"].split(",")
+    selected = dict(seen[0].url.params)["select"].split(",")
+    for column in ("retry_of_turn_id", "question_kind", "question_text", "preset", "from_turn_id"):
+        assert column in selected
