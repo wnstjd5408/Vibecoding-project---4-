@@ -17,6 +17,7 @@ export class ApiError extends Error {
   fields: FieldError[]
   requestId: string | undefined
   retryAfterSeconds: number | undefined
+  turnId: string | undefined
 
   // message는 영어 고정 문구라 화면에 띄우거나 분기에 쓰지 않는다. 화면 문구는 code·detail·fields[].reason으로 고른다.
   constructor(status: number, error: ApiErrorBody['error']) {
@@ -28,6 +29,7 @@ export class ApiError extends Error {
     this.fields = error.fields ?? []
     this.requestId = error.request_id
     this.retryAfterSeconds = error.retry_after_seconds
+    this.turnId = error.turn_id
   }
 }
 
