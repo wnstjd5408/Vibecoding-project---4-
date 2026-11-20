@@ -5,7 +5,8 @@ on:
     # Feature integration branches (meg-<n>-integration) collect sub-PRs before a release candidate.
     branches: [main, staging, 'meg-*-integration']
   push:
-    branches: [main, staging]
+    # An integration branch merge runs the full suite once more on the combined result.
+    branches: [main, staging, 'meg-*-integration']
 
 # No environment, secrets, deployment or write access in PR code execution.
 permissions:
