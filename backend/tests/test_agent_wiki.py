@@ -481,7 +481,7 @@ def test_e32_returns_the_cited_wiki_paragraph_unchanged(client, fake, wiki_on):
     response = get(client, source_path(turn["turn_id"]))
     assert response.status_code == 200, response.text
     assert response.json() == {
-        "ref": 1, "source_kind": "wiki", "title": "멱등성", "section": "정의", "cited_revision": "1",
+        "ref": 1, "source_kind": "wiki", "source_id": f"glossary:{IDEMPOTENCY}", "title": "멱등성", "section": "정의", "cited_revision": "1",
         "paragraph_text": IDEMPOTENCY_DEFINITION, "highlight": None, "changed_since_cited": False,
     }
 

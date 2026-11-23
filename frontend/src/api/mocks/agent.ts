@@ -6,10 +6,13 @@
 //  - revokeAgentMockSources()는 지금까지 끝난 답변의 출처를 볼 수 없게 만든다. 서버의 가림 함수(agent_access.hidden_marks)처럼
 //    그 출처를 쓴 첫 턴부터 가리고, 다시 묻기(retry_of_turn_id)는 그 첫 턴에만 한 번 허용한다(MEG-260, F6-15b).
 //  - revokeAgentMockNote()는 대화의 노트를 볼 수 없게 만든다. E27~E32가 404다(F6-15).
+//  - setAgentMockWiki()는 서버의 위키 플래그(CS_AGENT_WIKI_ENABLED)와 위키 근거를 흉내 낸다(MEG-254). 플래그 기본값은 화면 빌드 값과 같다.
+//    꺼져 있으면 E27 origin wiki는 422다. 위키에서 연 대화와 sources: true인 동안의 질문은 위키 문단을 출처로 쓴다.
 // 시나리오는 setAgentMockScenario로 고른다. 다시 고르거나 resetAgentMock을 부를 때까지 다음 질문마다 같은 시나리오를 쓴다.
 // 다만 rate_limited와 turn_in_progress는 한 번 거절한 뒤 answered로 돌아간다(기다린 뒤 다시 보내면 성공하는 흐름).
 // 화면 개발 중에는 브라우저 콘솔이나 시험에서 `await import('/src/api/mocks/agent.ts')`로 불러 바꿀 수 있다.
 import { newIdempotencyKey } from '../../ai/explain.ts'
+import { WIKI_ENABLED_BY_BUILD, wikiTermId } from '../../agent/availability.ts'
 import type {
   AgentConversation,
   AgentQuestion,
@@ -78,6 +81,14 @@ const conversations = new Map<string, MockConversation>()
 const turns = new Map<string, MockTurn>()
 const keys = new Map<string, string>()
 let noteRevoked = false
+// 서버 위키 플래그, 노트 대화에서도 위키 문단을 출처로 쓸지, E32가 '인용 뒤 바뀜'을 돌려줄지
+type MockWiki = { enabled: boolean; sources: boolean; changed: boolean }
+const WIKI_DEFAULT: MockWiki = { enabled: WIKI_ENABLED_BY_BUILD, sources: false, changed: false }
+let wiki: MockWiki = { ...WIKI_DEFAULT }
+
+export function setAgentMockWiki(next: Partial<MockWiki>): void {
+  wiki = { ...wiki, ...next }
+}
 
 export function setAgentMockScenario(next: AgentMockScenario, options: { stepMs?: number } = {}): void {
   scenario = next
@@ -92,6 +103,7 @@ export function resetAgentMock(): void {
   turns.clear()
   keys.clear()
   noteRevoked = false
+  wiki = { ...WIKI_DEFAULT }
 }
 
 // 지금까지 끝난 답변(출처가 있는 completed 턴)의 출처를 볼 수 없게 만든다. 뒤에 만드는 턴은 영향이 없다.
@@ -124,19 +136,32 @@ const unavailable = () => errorBody(503, 'service_unavailable', 'Service tempora
 
 // --- 합성 결과 ---
 
-const NOTE_SOURCES = [
+const NOTE_SOURCE_LIST = [
   { ref: 1, source_kind: 'note' as const, title: '예시 노트 · 요청이 서버까지 가는 길', section: '요청 흐름', excerpt: '합성 근거 문단 하나', cited_revision: 3 },
   { ref: 2, source_kind: 'note' as const, title: '예시 노트 · 캐시가 오래된 값을 돌려주는 경우', section: '만료', excerpt: '합성 근거 문단 둘', cited_revision: 1 },
 ]
 
-function resultFor(kind: AgentMockScenario, topic: string): AgentResult {
+// 위키 근거(MEG-254). source_id는 E29 sources[]에 없고(spec 5.2) E32에만 있어서 따로 둔다. 용어 7은 가짜 사전(E06)에 있고, 8은 없다.
+const WIKI_SOURCES = [
+  { ref: 1, source_kind: 'wiki' as const, title: 'ExampleTerm', section: '정의', excerpt: '합성 위키 문단 하나', cited_revision: 2 },
+  { ref: 2, source_kind: 'wiki' as const, title: 'RetryTerm', section: '예외', excerpt: '합성 위키 문단 둘', cited_revision: 1 },
+]
+const SOURCE_IDS: Record<string, string> = {
+  'note:1': '11',
+  'note:2': '12',
+  'wiki:1': 'glossary:7',
+  'wiki:2': 'glossary:8',
+}
+
+function resultFor(kind: AgentMockScenario, topic: string, useWiki = false): AgentResult {
+  const sources = useWiki ? WIKI_SOURCES : NOTE_SOURCE_LIST
   switch (kind) {
     case 'partial':
       return {
         state: 'partial',
         sections: [{ heading: '핵심', body: '합성 부분 답변 문장입니다 [1].' }],
         limitation: '합성 한계 문장입니다.',
-        sources: [NOTE_SOURCES[0]],
+        sources: [sources[0]],
       }
     case 'clarify':
       return {
@@ -157,7 +182,7 @@ function resultFor(kind: AgentMockScenario, topic: string): AgentResult {
         sections: [{ heading: '핵심', body: '합성 교정 설명입니다 [1].' }],
         corrections: [{ note_excerpt: '합성 노트 문장', corrected: '합성 고친 내용 [1]', source_refs: [1] }],
         unresolved: ['합성 노트 문장 둘은 참고한 노트에서 확인하지 못했어요. 맞는지 틀린지는 판단하지 않았어요.'],
-        sources: [NOTE_SOURCES[0]],
+        sources: [sources[0]],
       }
     case 'topic_check':
       return { state: 'topic_check', topic_check: { current_topic: topic } }
@@ -168,7 +193,7 @@ function resultFor(kind: AgentMockScenario, topic: string): AgentResult {
           { heading: '핵심', body: '합성 답변 첫 절입니다 [1].' },
           { heading: '원리', body: '합성 답변 둘째 절입니다 [2].' },
         ],
-        sources: NOTE_SOURCES,
+        sources: sources,
         figures: [
           {
             figure_id: 'f-1',
@@ -262,11 +287,12 @@ function questionOf(body: AskTurnRequest): AgentQuestion | null {
 function createTurn(conversation: MockConversation, key: string, question: AgentQuestion, kind: AgentMockScenario, retryOf: string | null = null): MockTurn {
   const now = Date.now()
   const id = newIdempotencyKey()
+  const useWiki = conversation.conversation.origin === 'wiki' || wiki.sources
   const steps: [AgentStep, 'current' | 'done', Record<string, unknown>?][] = [
     ['understand', 'current'],
     ['understand', 'done'],
     ['retrieve', 'current'],
-    ['retrieve', 'done', { paragraph_count: kind === 'no_evidence' ? 0 : 3, source_kind: 'note' }],
+    ['retrieve', 'done', { paragraph_count: kind === 'no_evidence' ? 0 : 3, source_kind: useWiki ? 'wiki' : 'note' }],
     ['compose', 'current'],
     ['compose', 'done'],
   ]
@@ -290,7 +316,7 @@ function createTurn(conversation: MockConversation, key: string, question: Agent
       ? { status: 'failed', failure: 'error', code: 'ai_unavailable' }
       : kind === 'limit_after_start'
         ? { status: 'failed', failure: 'limit', code: 'ai_limit_reached' }
-        : { status: 'completed', result: resultFor(kind, conversation.conversation.topic_label) }
+        : { status: 'completed', result: resultFor(kind, conversation.conversation.topic_label, useWiki) }
   const turn: MockTurn = {
     turn: { turn_id: id, seq: conversation.turnIds.length + 1, question, created_at: new Date(now).toISOString() },
     conversationId: conversation.conversation.conversation_id,
@@ -534,6 +560,7 @@ function createConversation(body: CreateConversationRequest): MockResponse {
     conversations.set(id, { conversation, turnIds: [] })
     return { status: 201, body: conversation }
   }
+  if (body.origin === 'wiki') return createWikiConversation(id, created_at, body.wiki_ref)
   if (body.origin !== 'note' || !body.selection) {
     return errorBody(422, 'validation_failed', 'Request validation failed', {
       fields: [{ name: 'origin', reason: 'invalid_value', message: 'Value is not allowed or refers to a missing item' }],
@@ -572,6 +599,22 @@ function createConversation(body: CreateConversationRequest): MockResponse {
   return { status: 201, body: conversation }
 }
 
+// E27 origin wiki(서버 agent.py _create_wiki_conversation). 플래그가 꺼져 있으면 422, 모양이 틀리면 422, 항목이 없으면 404다.
+function createWikiConversation(id: string, created_at: string, ref: string | undefined): MockResponse {
+  const invalid = (name: string) => errorBody(422, 'validation_failed', 'Request validation failed', {
+    fields: [{ name, reason: 'invalid_value', message: 'Value is not allowed or refers to a missing item' }],
+  })
+  if (!wiki.enabled) return invalid('origin')
+  const termId = wikiTermId(ref)
+  if (termId === null) return invalid('wiki_ref')
+  const entry = handleMock({ method: 'GET', path: `/api/glossary/${termId}`, query: new URLSearchParams(), body: undefined })
+  if (entry.status !== 200) return notFound()
+  const label = (entry.body as { term: { label: string } }).term.label
+  const conversation: AgentConversation = { conversation_id: id, topic_label: label, origin: 'wiki', wiki_ref: `glossary:${termId}`, context_selections: [], created_at }
+  conversations.set(id, { conversation, turnIds: [] })
+  return { status: 201, body: conversation }
+}
+
 function log(method: string, path: string): void {
   requests.push({ method, path })
 }
@@ -581,7 +624,8 @@ export const agentRoutes: Route[] = [
     method: 'POST',
     pattern: /^\/api\/ai\/conversations$/,
     handle: ({ body }) => {
-      log('POST', '/api/ai/conversations')
+      // E27은 요청 본문도 남긴다. 시험이 origin·wiki_ref·selection을 확인한다(MEG-254 AC-2·AC-4).
+      requests.push({ method: 'POST', path: '/api/ai/conversations', body })
       if (getMockSession() === 'visitor') return loginRequired()
       if (scenario === 'service_unavailable') return unavailable()
       if (noteRevoked) return notFound()
@@ -647,12 +691,13 @@ export const agentRoutes: Route[] = [
         body: {
           ref: source.ref,
           source_kind: source.source_kind,
+          source_id: SOURCE_IDS[`${source.source_kind}:${source.ref}`],
           title: source.title,
           section: source.section ?? null,
           cited_revision: source.cited_revision,
           paragraph_text: `${source.excerpt ?? '합성 근거 문단'}입니다. 인용 당시의 합성 문단 원문입니다.`,
           highlight: null,
-          changed_since_cited: false,
+          changed_since_cited: wiki.changed,
         },
       }
     },

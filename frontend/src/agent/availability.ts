@@ -37,3 +37,46 @@ const snapshot = () => AGENT_DISABLED_BY_BUILD || closedByServer
 export function useAgentEntryClosed(): boolean {
   return useSyncExternalStore(subscribe, snapshot, snapshot)
 }
+
+// 위키 플래그(MEG-254 결정 2, 2026-11-23). 화면은 빌드 환경변수 VITE_CS_AGENT_WIKI_ENABLED로 안다. 백엔드 CS_AGENT_WIKI_ENABLED(MEG-252)와
+// 환경마다 같은 값으로 둔다. 켜는 것은 T4d(MEG-253)에서 사람이 정한다.
+// 값 규칙은 백엔드(backend/app/agent_retrieval.py wiki_enabled)와 같다. 1·true·yes·on(대소문자·앞뒤 공백 무시)만 켜짐이고, 그 밖은 모두 꺼짐이다.
+const ON_VALUES: ReadonlySet<string> = new Set(['1', 'true', 'yes', 'on'])
+
+export function isWikiOnValue(value: unknown): boolean {
+  return ON_VALUES.has(String(value ?? '').trim().toLowerCase())
+}
+
+export const WIKI_ENABLED_BY_BUILD: boolean = isWikiOnValue(import.meta.env.VITE_CS_AGENT_WIKI_ENABLED)
+
+// 두 값이 어긋난 배포에서 E27 origin wiki가 422(플래그 꺼짐)나 503을 돌려주면 위키 질문 입구를 닫는다. 이 탭을 새로 고칠 때까지 닫혀 있다.
+let wikiClosedByServer = false
+const wikiListeners = new Set<() => void>()
+
+export function closeWikiEntry(): void {
+  if (wikiClosedByServer) return
+  wikiClosedByServer = true
+  for (const listener of wikiListeners) listener()
+}
+
+function subscribeWiki(listener: () => void): () => void {
+  wikiListeners.add(listener)
+  return () => wikiListeners.delete(listener)
+}
+
+const wikiSnapshot = () => WIKI_ENABLED_BY_BUILD && !wikiClosedByServer
+
+// 위키 질문 입구('위키 출처 → 용어 시트'의 'AI에게 질문')가 열려 있는가. 노출 중단(useAgentEntryClosed)은 따로 본다.
+export function useWikiEntryOpen(): boolean {
+  return useSyncExternalStore(subscribeWiki, wikiSnapshot, wikiSnapshot)
+}
+
+// 위키 출처의 source_id(`glossary:{term_id}`, MEG-163 W7)를 term_id로 바꾼다. 위키 출처가 아니거나 모양이 틀리면 null이다(백엔드 parse_wiki_ref와 같은 규칙).
+export function wikiTermId(sourceId: string | undefined | null): number | null {
+  const match = /^glossary:([1-9][0-9]*)$/.exec(sourceId ?? '')
+  if (!match) return null
+  const id = Number(match[1])
+  return Number.isSafeInteger(id) ? id : null
+}
+
+export const wikiRef = (termId: number) => `glossary:${termId}`

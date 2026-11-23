@@ -200,6 +200,8 @@
 .keptText { margin: 0 0 var(--space-2); font-size: 14px; line-height: 22px; }
 .sourceHeading { margin: 0 0 var(--space-2); font-size: 18px; line-height: 28px; font-weight: 700; }
 .cited { margin: var(--space-4) 0; }
+/* 위키 출처의 '용어 시트 열기'(MEG-254). 인용 문단 바로 아래에 둔다 */
+.sourceActions { display: flex; margin: 0 0 var(--space-4); }
 .citedSection { margin: 0 0 var(--space-2); font-size: 16px; line-height: 24px; font-weight: 700; }
 .citedPill { display: inline-flex; align-items: center; min-height: 26px; box-sizing: border-box; margin-bottom: var(--space-2); padding: 0 var(--space-3); border: 1px solid var(--ink); border-radius: var(--radius-pill); font-size: 13px; line-height: 18px; font-weight: 600; }
 .citedText { padding: var(--space-3) var(--space-4); border: 2px solid var(--ink); border-radius: var(--radius-sm); background: var(--surface-300); }

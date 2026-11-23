@@ -22,6 +22,8 @@ export type AgentConversation = {
   topic_label: string
   origin: AgentOrigin
   note?: { note_id: number; note_revision: number; title: string }
+  // 위키에서 연 대화(origin wiki)의 사전 항목 `glossary:{term_id}`(MEG-252, MEG-254)
+  wiki_ref?: string
   context_selections: AgentSelection[]
   created_at: string
 }
@@ -141,6 +143,8 @@ export type AgentCancelResponse = { turn_id: string; status: 'cancelled'; questi
 export type AgentSourceView = {
   ref: number
   source_kind: SourceKind
+  // 출처 원본 식별자. 노트는 노트 ID 문자열, 위키는 `glossary:{term_id}`다(MEG-254 결정 3에서 더한 필드라 없을 수도 있다).
+  source_id?: string
   title: string
   section: string | null
   cited_revision: number
@@ -149,9 +153,13 @@ export type AgentSourceView = {
   changed_since_cited: boolean
 }
 
+// 위키 출처에서 용어 시트를 연다(MEG-254). term_id와 시트 제목(출처 제목 = 용어 이름)을 받는다.
+export type OpenTerm = (termId: number, label: string) => void
+
 // E27 POST /api/ai/conversations 요청
 export type CreateConversationRequest =
   | { origin: 'note'; note_id: number; note_revision: number; selection: { start: number; end: number } }
+  | { origin: 'wiki'; wiki_ref: string }
   | { origin: 'none' }
 
 // E29 POST /api/ai/conversations/{conversation_id}/turns 요청

@@ -19,6 +19,7 @@ import { AiAnswer } from '../notes/AiAnswer.tsx'
 import type { AiAnswerFigure } from '../notes/AiAnswer.tsx'
 import { NoteBody } from '../notes/NoteBody.tsx'
 import { userPaths } from '../routes/paths.ts'
+import { wikiTermId } from './availability.ts'
 import { canRetry } from './conversation.ts'
 import type { AgentConversationController, AgentFailure, AgentState, AskOptions, PendingTurn, StepView } from './conversation.ts'
 import { AGENT_MESSAGES as M, PRESETS, questionLabel, questionText, topicLabelOf } from './messages.ts'
@@ -35,6 +36,8 @@ import type {
   ClarifyResult,
   CorrectionResult,
   CreateConversationRequest,
+  AgentSourceView,
+  OpenTerm,
   SourceKind,
 } from './types.ts'
 import type { OpenSource, SourceState } from './useAgentSource.ts'
@@ -56,6 +59,8 @@ type AgentPanelProps = {
   sourceState: SourceState | null
   onOpenSource: (turnId: string, ref: number, opener: HTMLElement) => void
   onCloseSource: () => void
+  // 위키 출처의 '용어 시트 열기'(MEG-254). 모바일 출처 보기에서 쓴다. PC는 노트 자리의 출처 문서(AgentSourceDocument)에 같은 버튼이 있다.
+  onOpenTerm?: OpenTerm
   onClose: () => void
   // 패널을 닫을 때 포커스를 돌려줄 곳(노트 본문)
   returnFocus: () => HTMLElement | null
@@ -546,7 +551,7 @@ export function AgentPanel(props: AgentPanelProps) {
         ? <div className={wide ? styles.sourceBody : styles.mobileBody}>
             {wide
               ? <SourcePanelInfo state={props.sourceState} quote={quoteOf(sourceTurn, source.ref)} question={sourceTurn ? questionText(sourceTurn.question) : ''} />
-              : <SourceMobile state={props.sourceState} source={source} />}
+              : <SourceMobile state={props.sourceState} source={source} onOpenTerm={props.onOpenTerm} />}
           </div>
         : null}
       <div ref={bodyRef} className={wide ? styles.body : styles.mobileBody} hidden={sourceOpen} onScroll={onScroll}
@@ -1044,17 +1049,25 @@ function SourcePanelInfo({ state, quote, question }: { state: SourceState | null
 }
 
 // 모바일 출처 보기(F6-9). 대화 화면 대신 인용 문단을 보여 주고, 돌아가면 대화 스크롤과 초안이 그대로다.
-function SourceMobile({ state, source }: { state: SourceState | null; source: OpenSource }) {
+function SourceMobile({ state, source, onOpenTerm }: { state: SourceState | null; source: OpenSource; onOpenTerm?: OpenTerm }) {
   if (!state || state.status === 'loading' || state.status === 'gone') return <p role="status" className={styles.noticeText}>{M.sourceLoading}</p>
   if (state.status === 'failed') return <p role="alert" className={styles.noticeTitleSmall}>{M.sourceFailed}</p>
   const { data } = state
   return <>
     <h2 className={styles.sourceHeading}>{data.title}</h2>
     <div className={styles.caption}>{M.sourceCard(data.source_kind, data.title, data.section ?? undefined)}</div>
-    {data.changed_since_cited ? <p className={styles.noticeText}>{M.sourceChanged}</p> : null}
+    {data.changed_since_cited ? <p className={styles.noticeText}>{M.sourceChanged(data.source_kind)}</p> : null}
     <SourceParagraph ref_={source.ref} text={data.paragraph_text} section={data.section} />
+    <OpenTermButton data={data} onOpenTerm={onOpenTerm} />
     <p className={styles.hintSmall}>{M.sourceReturnHint}</p>
   </>
+}
+
+// 위키 출처의 '용어 시트 열기'(MEG-254 결정 3·4). 위키 출처이고 source_id로 용어를 알 수 있을 때만 그린다. 노트 출처와 모르는 모양은 버튼이 없다.
+export function OpenTermButton({ data, onOpenTerm }: { data: AgentSourceView; onOpenTerm?: OpenTerm }): ReactNode {
+  const termId = data.source_kind === 'wiki' ? wikiTermId(data.source_id) : null
+  if (termId === null || !onOpenTerm) return null
+  return <div className={styles.sourceActions}><Button onClick={() => onOpenTerm(termId, data.title)}>{M.openTermSheet}</Button></div>
 }
 
 // 인용 문단. 노트 렌더러의 AI 모드로 그려 링크·이미지·HTML을 실행하지 않는다.
