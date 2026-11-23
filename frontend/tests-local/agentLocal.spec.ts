@@ -31,9 +31,19 @@ async function login(page: Page, account: string) {
   await expect(page.getByLabel('이메일')).toHaveCount(0)
 }
 
-async function agentCalls(): Promise<number> {
+type StubRecord = {
+  agent: number
+  calls: { kind: string; at: number; done_at: number | null }[]
+  disconnects: { path: string; at: number }[]
+}
+
+async function stubRecord(): Promise<StubRecord> {
   const response = await fetch(`${API}/__e2e/model-calls`)
-  return ((await response.json()) as { agent: number }).agent
+  return (await response.json()) as StubRecord
+}
+
+async function agentCalls(): Promise<number> {
+  return (await stubRecord()).agent
 }
 
 async function selectText(page: Page, needle: string) {
@@ -152,12 +162,12 @@ test('AC-1: 질문을 보낸 뒤 스트림이 끊겨도 서버가 턴을 끝내�
   const panel = await openPanel(page)
   const before = await agentCalls()
 
-  // '천천히'가 든 질문은 가짜 모델이 3초 기다린 뒤 답한다. 그 사이 스트림이 끊긴다.
+  // '천천히'가 든 질문은 가짜 모델이 6초 기다린 뒤 답한다. 그 사이 스트림이 끊긴다.
   await panel.getByRole('textbox').fill('합성체이닝은 천천히 설명해 줘')
   await panel.getByRole('button', { name: '보내기' }).click()
   await expect.poll(() => page.evaluate(() => (window as unknown as { __e2eCutDone: boolean }).__e2eCutDone)).toBe(true)
   // 끊긴 직후에는 아직 답이 없다(서버가 모델 응답을 기다리는 중이다).
-  await expect(aiBox(panel)).toHaveCount(0)
+  await expect(panel.getByText(/합성 가짜 답변/)).toHaveCount(0)
 
   await expect(aiBox(panel).getByText('합성 가짜 답변')).toBeVisible({ timeout: 20_000 })
   await expect(panel.getByRole('alert')).toHaveCount(0)
@@ -175,19 +185,27 @@ test('AC-1: 질문을 보낸 뒤 스트림이 끊겨도 서버가 턴을 끝내�
   expect(turnIds).toHaveLength(1)
   expect(new Set(polled.map((p) => p.turnId))).toEqual(new Set(turnIds))
   // 모델은 한 번만 불렸다(화면이 다시 보내지 않았다).
-  expect(await agentCalls()).toBe(before + 1)
+  const record = await stubRecord()
+  expect(record.agent).toBe(before + 1)
+  // 서버도 끊김을 봤다: 그 E29 요청에서 클라이언트 끊김이 한 번 기록됐고, 모델 호출은 끊긴 뒤에 끝났다(서버가 계속 실행했다).
+  const cutAt = record.disconnects.filter((d) => d.path === seen.asks[0])
+  expect(cutAt).toHaveLength(1)
+  const call = record.calls.filter((c) => c.kind === 'agent').at(-1)!
+  expect(call.done_at).not.toBeNull()
+  expect(cutAt[0].at).toBeLessThan(call.done_at!)
   await shot(page, testInfo, 'ac1-disconnect-e30')
 })
 
 test('AC-2: 추천 질문을 연속으로 눌러도, 같은 멱등 키로 다시 보내도 모델 호출은 1회다', async ({ page }, testInfo) => {
   const seen = watchRequests(page)
   const panel = await openPanel(page)
+  const start = await stubRecord()
   await panel.getByRole('textbox').fill('합성체이닝은 무엇인가요?')
   await panel.getByRole('button', { name: '보내기' }).click()
   await expect(aiBox(panel).getByText('합성 가짜 답변')).toBeVisible({ timeout: 20_000 })
   const afterFirst = await agentCalls()
 
-  // 추천 질문 버튼을 연달아 세 번 누른다(두 번은 더블클릭).
+  // 추천 질문 버튼을 화면이 다시 그려지기 전에 세 번 누른다(한 작업 안에서 click 세 번).
   const suggestion = panel.getByRole('button', { name: '합성체이닝을 예시로 보여 줘' })
   await expect(suggestion).toBeVisible()
   await suggestion.evaluate((button: HTMLElement) => {
@@ -195,17 +213,34 @@ test('AC-2: 추천 질문을 연속으로 눌러도, 같은 멱등 키로 다시
     button.click()
     button.click()
   })
-  await expect(aiBox(panel)).toHaveCount(1, { timeout: 20_000 })
+  // 추천 질문의 턴이 서버에서 끝날 때까지 기다린다(첫 답변이 이미 보여서 화면 확인만으로는 이르게 지날 수 있다).
+  const conversationId = TURNS_PATH.exec(seen.asks[0])![1]
+  const turnStates = () => page.evaluate(async (id) => {
+    const conversation = await (await fetch(`/api/ai/conversations/${id}`)).json()
+    return conversation.turns.map((t: { status: string }) => t.status) as string[]
+  }, conversationId)
+  await expect.poll(turnStates, { timeout: 20_000 }).toEqual(['completed', 'completed'])
+  // 고른 추천 질문이 질문으로 한 번 보인다(새 답변의 추천 질문 버튼과 구분한다).
+  await expect(panel.getByText('합성체이닝을 예시로 보여 줘', { exact: true }).and(panel.locator(':not(button)'))).toHaveCount(1)
   await expect(aiBox(panel).getByText('합성 가짜 답변')).toBeVisible({ timeout: 20_000 })
   await expect(panel.getByRole('alert')).toHaveCount(0)
-  // 답이 끝난 뒤 조금 더 기다려도 늦게 도착한 호출이 없다.
+  // 턴이 끝난 뒤 조금 더 기다려도 늦게 도착한 요청·호출이 없다.
   await page.waitForTimeout(1_000)
+  expect(await turnStates()).toHaveLength(2)
   expect(await agentCalls()).toBe(afterFirst + 1)
   expect(seen.asks).toHaveLength(2)
+  // 대조군: 끊지 않은 E29도 화면이 마지막 이벤트를 받은 뒤 스트림을 닫으므로 끊김이 기록된다. 다만 i번째 요청의 끊김은
+  // i번째 모델 호출이 끝난 뒤다. AC-1의 '호출이 끝나기 전 끊김' 단언이 정상 요청에는 참이 되지 않음을 보인다.
+  const asked = new Set(seen.asks)
+  const now = await stubRecord()
+  const cuts = now.disconnects.slice(start.disconnects.length).filter((d) => asked.has(d.path))
+  const calls = now.calls.slice(start.calls.length).filter((c) => c.kind === 'agent')
+  expect(calls).toHaveLength(2)
+  expect(cuts.length).toBeLessThanOrEqual(2)
+  cuts.forEach((cut, i) => expect(cut.at).toBeGreaterThanOrEqual(calls[i].done_at!))
   await shot(page, testInfo, 'ac2-suggestion-repeat-click')
 
   // 서버 쪽 중복 방지(E29 2단계): 같은 Idempotency-Key로 두 번 동시에 보내도 모델 호출은 1회다.
-  const conversationId = TURNS_PATH.exec(seen.asks[0])![1]
   const beforeResend = await agentCalls()
   const statuses = await page.evaluate(async (id) => {
     const key = crypto.randomUUID()
@@ -251,15 +286,18 @@ test('AC-3: 인용한 노트를 비공개로 바꾸면 그 턴이 가려지고, 
 
   // 운영자가 인용된 노트를 비공개로 바꾼다(E17, 실제 API).
   const operator = await operatorPage(browser)
-  const patched = await operator.evaluate(async (noteId) => {
-    const response = await fetch(`/api/admin/notes/${noteId}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_published: false }),
-    })
-    return { status: response.status, body: await response.json() }
-  }, NOTE_CITED)
-  expect(patched.status).toBe(200)
-  expect(patched.body.is_published).toBe(false)
-  await operator.context().close()
+  try {
+    const patched = await operator.evaluate(async (noteId) => {
+      const response = await fetch(`/api/admin/notes/${noteId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_published: false }),
+      })
+      return { status: response.status, body: await response.json() }
+    }, NOTE_CITED)
+    expect(patched.status).toBe(200)
+    expect(patched.body.is_published).toBe(false)
+  } finally {
+    await operator.context().close()
+  }
 
   // 화면: 출처를 열면 서버가 404를 주고, 화면이 대화를 다시 읽어 가린 턴을 보인다.
   await panel.getByRole('button', { name: /^\[1\] 노트 · 합성 출처 노트/ }).click()
