@@ -4,25 +4,39 @@
 //  - 대화 상태는 노트 화면(NoteReadPage)이 useAgentConversation으로 가진다. 이 패널은 상태를 그리기만 하고, 닫아도 대화와 초안은 남는다.
 //  - 모바일 보드가 없는 상태(지연 안내, 단계 없는 준비 중, 긴 답변의 '새 답변 보기', 다시 넣기 확인, 사용 제한)는 모바일에서 그리지 않는다
 //    (2026-11-20 결정 8, MEG-262 디자인 → MEG-263에서 반영).
-//  - 예외 상태(의미 확인·근거 일부·근거 없음·교정·주제 전환·다른 영역 선택·접근 변경)는 T6d(MEG-260)다.
+//  - 예외 상태(MEG-260, T6d): 의미 확인(F6-11·F6-11m), 근거 일부만 확인(F6-12), 근거 없음(F6-12b), 확인된 교정(F6-13·F6-13m),
+//    주제 전환 확인(F6-20), 다른 영역 선택(F6-8·F6-8m), 노트 접근 변경(F6-15·F6-15m), 출처만 권한 회수(F6-15b).
+//    MEG-262에서 새로 그린 모바일 보드(F6-12m·F6-12bm·F6-15bm·F6-20m)의 상태는 T6g(MEG-263)가 반영한다. 그 전까지 모바일은 질문만 보인다.
 //  - PC 보기 전환(MEG-261, T6f): 패널(F6-3), 떠 있는 창(F6-3f), 전체 화면(F6-3x). 같은 dialog의 모양만 바꾸므로 대화·초안·스크롤이 그대로 남는다.
 //  - 다시 답하기 화면과 버튼은 만들지 않는다(MEG-228, spec 부록 A).
 //  - 새 질문 입구가 닫히면(closed: 노출 중단 플래그·503, MEG-259) 입력 칸·빠른 질문·추천 질문·'새 대화'·'중단한 질문 다시 넣기'를 숨긴다.
 //    지금 대화, 이전 대화 보기, 출처 보기, 진행 중인 답변의 중단은 그대로 둔다(E28·E30·E31·E32는 플래그와 무관하다).
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
+import { Link } from 'react-router'
 import { AiBadge, Button } from '../components/index.ts'
 import { AiAnswer } from '../notes/AiAnswer.tsx'
 import type { AiAnswerFigure } from '../notes/AiAnswer.tsx'
 import { NoteBody } from '../notes/NoteBody.tsx'
+import { userPaths } from '../routes/paths.ts'
 import { canRetry } from './conversation.ts'
-import type { AgentConversationController, AgentFailure, AgentState, PendingTurn, StepView } from './conversation.ts'
+import type { AgentConversationController, AgentFailure, AgentState, AskOptions, PendingTurn, StepView } from './conversation.ts'
 import { AGENT_MESSAGES as M, PRESETS, questionLabel, questionText, topicLabelOf } from './messages.ts'
-import { MAX_QUESTION, quoteOf, sectionsOf } from './agentUi.ts'
-import type { AgentUi } from './agentUi.ts'
+import { FRESH_CONTEXT, MAX_ADD_SELECTIONS, MAX_QUESTION, MAX_REPLY, agentAccessLost, quoteOf, sectionsOf } from './agentUi.ts'
+import type { AgentContextSelection, AgentUi } from './agentUi.ts'
 import { shownAgentView } from './agentView.ts'
 import type { AgentView } from './agentView.ts'
-import type { AgentFigure, AgentQuestion, AgentSource, AgentTurn, AskQuestion, CreateConversationRequest } from './types.ts'
+import type {
+  AgentFigure,
+  AgentQuestion,
+  AgentSource,
+  AgentTurn,
+  AskQuestion,
+  ClarifyResult,
+  CorrectionResult,
+  CreateConversationRequest,
+  SourceKind,
+} from './types.ts'
 import type { OpenSource, SourceState } from './useAgentSource.ts'
 import styles from './AgentPanel.module.css'
 
@@ -68,6 +82,42 @@ function figuresOf(figures: AgentFigure[] | undefined): AiAnswerFigure[] {
       ? { ...figure, figure_id: figure.figure_id ?? `f-${index + 1}`, kind: figure.kind ?? '' }
       : (figure as unknown as AiAnswerFigure),
   )
+}
+
+// 확인 카드에 답할 때 다시 보낼 질문. 가린 추천 질문처럼 글이 없으면 null이다.
+// 빠른 질문은 칩 종류로, 그 밖은 직접 입력으로 보낸다(주제 전환 '이 대화에서 계속'은 free와 같은 글이어야 한다. spec E29).
+function askOf(question: AgentQuestion): AskQuestion | null {
+  if (question.kind === 'preset' && question.preset) return { kind: 'preset', preset: question.preset }
+  return question.text ? { kind: 'free', text: question.text } : null
+}
+
+// 선택 칩 하나(입력 칸 위). 대화 전에는 고른 문장, 대화 중에는 대화의 선택 문맥과 '현재 대화에 추가'로 고른 문장이다.
+type Chip = { key: string; text: string; exclude: (ui: AgentUi) => Partial<AgentUi> }
+
+function chipsOf(state: AgentState, ui: AgentUi): Chip[] {
+  const conversation = state.conversation
+  if (!conversation) return ui.selection && !ui.excluded ? [{ key: 'selection', text: ui.selection.text, exclude: () => ({ excluded: true }) }] : []
+  const context: Chip[] = conversation.context_selections
+    .filter((item) => !ui.excludedIds.includes(item.selection_id))
+    .map((item) => ({ key: item.selection_id, text: item.text_preview, exclude: (current) => ({ excludedIds: [...current.excludedIds, item.selection_id] }) }))
+  const added: Chip[] = ui.added.map((item) => ({
+    key: `added-${item.start}-${item.end}`,
+    text: item.text,
+    exclude: (current) => ({ added: current.added.filter((other) => other !== item) }),
+  }))
+  return [...context, ...added]
+}
+
+const sameRange = (a: AgentContextSelection, b: AgentContextSelection) => a.noteId === b.noteId && a.start === b.start && a.end === b.end
+
+// 가린 턴 가운데 처음 영향받은 턴(가림 연쇄의 첫 턴). 다시 묻기는 이 턴에만 둔다(결정 15).
+function firstHiddenIds(turns: AgentTurn[]): Set<string> {
+  const ids = new Set<string>()
+  turns.forEach((turn, index) => {
+    if (!turn.hidden) return
+    if (index === 0 || !turns[index - 1].hidden || turn.hidden.retry_allowed) ids.add(turn.turn_id)
+  })
+  return ids
 }
 
 export function AgentPanel(props: AgentPanelProps) {
@@ -145,6 +195,19 @@ export function AgentPanel(props: AgentPanelProps) {
 
   const failure = state.failure
   const limitLike = isLimitLike(failure)
+  const accessLost = agentAccessLost(state)
+
+  // 출처가 404(gone)면 출처 보기를 닫고 대화를 다시 읽는다. 출처만 회수됐으면 가린 턴(F6-15b)이, 노트까지 막혔으면 접근 변경(F6-15)이 보인다.
+  const sourceStatus = props.sourceState?.status
+  useEffect(() => {
+    if (sourceStatus !== 'gone') return
+    latest.current.onCloseSource()
+    void controller.refresh()
+  }, [sourceStatus, controller])
+  // 노트 접근이 바뀌면 출처도 함께 닫는다(결정 3).
+  useEffect(() => {
+    if (accessLost && latest.current.source) latest.current.onCloseSource()
+  }, [accessLost])
 
   // 출처 보기로 바꿀 때 대화 스크롤 위치를 기억했다가 돌아오면 되살린다(9절 '복귀 시 답변 스크롤과 질문 초안을 복원').
   const savedScroll = useRef(0)
@@ -162,13 +225,10 @@ export function AgentPanel(props: AgentPanelProps) {
 
   const conversation = state.conversation
   const pending = state.pending
-  const contextSelection = conversation ? (conversation.context_selections[0] ?? null) : null
-  const selectionText = conversation ? (contextSelection?.text_preview ?? null) : (ui.selection?.text ?? null)
-  const hasSelection = selectionText !== null && !ui.excluded
+  const chips = chipsOf(state, ui)
+  const selectionText = chips.length > 0 ? chips.map((chip) => chip.text).join('\n') : null
+  const hasSelection = chips.length > 0
   const topic = conversation?.topic_label || (ui.selection && !ui.excluded ? topicLabelOf(ui.selection.text) : '')
-  // 보내기 잠금: 생성 중, 다시 시도 전의 요청 실패(F6-6p), 다시 확인 전의 사용 제한(F6-17, 모바일 보드 없음)
-  const failureLock = failure !== null && (limitLike ? wide : isRetryable(failure))
-  const locked = pending !== null || failureLock || closed
   // 입구가 닫혀도 진행 중인 답변은 끝까지 받고 중단할 수 있어야 하므로 그동안은 입력 칸(중단 버튼)을 남긴다.
   const composerHidden = closed && pending === null
   // 입력 칸이 사라지면(503 직후) 그 안에 있던 포커스가 문서 body로 떨어진다. 패널 제목으로 옮겨 키보드·낭독기 사용자가 자리를 잃지 않게 한다.
@@ -183,9 +243,41 @@ export function AgentPanel(props: AgentPanelProps) {
   if (pending) entries.push({ kind: 'pending', key: 'pending', pending })
   // 모바일 사용 제한 보드가 없어(결정 8) 모바일에서는 사용 제한을 대화 항목으로 넣지 않는다. 넣으면 빈 항목이 앞 답변을 가린다.
   else if (failure?.question && !(limitLike && !wide)) entries.push({ kind: 'failure', key: 'failure', failure })
-  const collapsed = !ui.expanded && entries.length > 1
-  const shown = collapsed ? entries.slice(-1) : entries
-  const lastKey = entries.at(-1)?.key ?? null
+  const lastEntry = entries.at(-1)
+  const latestTurn = lastEntry?.kind === 'turn' && !lastEntry.turn.hidden ? lastEntry.turn : null
+  const latestState = latestTurn?.status === 'completed' ? latestTurn.result?.state : undefined
+  // 대화 중에 노트에서 새로 고른 문장(F6-8). 대화를 시작하기 전이면 노트 화면이 선택 문맥으로 바로 넣는다.
+  // 새 질문 입구가 닫혔으면(MEG-259) 묻지 않는다. 추가·새 대화 모두 새 질문을 보내는 동작이다.
+  const candidate = fresh || closed ? null : ui.candidate
+  // 주제 전환 확인 카드(F6-20). 모바일 보드(F6-20m)는 T6g(MEG-263)에서 반영한다.
+  const topicCheck = wide && latestState === 'topic_check'
+
+  // 보내기 잠금: 생성 중, 다시 시도 전의 요청 실패(F6-6p), 다시 확인 전의 사용 제한(F6-17, 모바일 보드 없음),
+  // 고르기 전의 확인 카드(주제 전환 F6-20 결정 38, 다른 영역 선택 F6-8)
+  const failureLock = failure !== null && (limitLike ? wide : isRetryable(failure))
+  const choiceLock = topicCheck || candidate !== null
+  // 새 질문 입구가 닫혔으면(노출 중단 플래그·503, MEG-259) 보내지 않는다.
+  const locked = pending !== null || failureLock || choiceLock || closed
+
+  const firstHidden = firstHiddenIds(state.turns)
+  // 접어도 보여 줄 첫 항목. 보통은 마지막 항목이고, 출처 회수로 가린 턴이 있으면 처음 영향받은 턴부터 보인다(F6-15b).
+  // 다시 묻기를 쓸 수 있거나 그 뒤가 모두 가린 턴인 연쇄만 본다. 다시 묻기로 끝난 옛 연쇄까지 펼치지 않는다.
+  const hiddenStart = entries.findLastIndex((entry, index) =>
+    entry.kind === 'turn' && firstHidden.has(entry.turn.turn_id)
+    && (entry.turn.hidden?.retry_allowed === true || entries.slice(index + 1).every((rest) => rest.kind === 'turn' && rest.turn.hidden)))
+  const keepFrom = candidate ? entries.length : hiddenStart >= 0 ? hiddenStart : Math.max(entries.length - 1, 0)
+  const collapsed = !ui.expanded && keepFrom > 0
+  // 다른 영역 선택 카드가 있으면 앞 대화는 '이전 대화 보기' 뒤로 접고 카드만 보인다(F6-8).
+  const shown = collapsed ? entries.slice(keepFrom) : entries
+  const lastKey = candidate ? 'candidate' : (lastEntry?.key ?? null)
+  // 가린 턴이 새로 보이면(E28 다시 읽기 등) 처음 영향받은 턴의 질문부터 보이게 위로 옮긴다. 앞 답변을 읽던 위치에 남으면 안내 위가 잘린다.
+  const hiddenKey = hiddenStart >= 0 ? entries[hiddenStart].key : null
+  useLayoutEffect(() => {
+    const body = bodyRef.current
+    if (hiddenKey === null || !body) return
+    const first = body.querySelector<HTMLElement>('[data-entry]')
+    body.scrollTop = first ? Math.max(0, first.offsetTop - body.offsetTop) : 0
+  }, [hiddenKey])
 
   // 긴 대화(F6-10): 맨 아래를 보고 있을 때만 새 내용을 따라간다. 위에서 읽고 있으면 옮기지 않고 '새 답변 보기'를 띄운다(PC만).
   const [atBottom, setAtBottom] = useState(true)
@@ -238,8 +330,18 @@ export function AgentPanel(props: AgentPanelProps) {
   // 질문 하나가 끝난 뒤(성공·실패 모두). 로그인이 끊겼으면 노트 화면에 알리고,
   // 사용 제한(S12)이면 보내려던 질문 글을 비어 있는 입력 칸에 되돌려 놓는다(F6-17 '쓰던 내용은 아래 칸에 남겨 두었어요').
   // 세션이 끊긴 경우(401)도 질문 글을 비어 있는 입력 칸에 남긴다. 로그인 뒤 다시 열면 이어서 보낼 수 있다.
+  // 마지막으로 보낸 질문에 실은 '현재 대화에 추가' 문장. 다시 시도로 성공해도 같은 곳(afterRun)에서 정리한다.
+  const sentAdded = useRef<AgentContextSelection[]>([])
   const afterRun = () => {
     const ended = controller.getSnapshot().failure
+    if ((ended === null || ended.turnId !== null) && sentAdded.current.length > 0) {
+      // 턴이 생겼으면(실패한 턴 포함) 추가한 문장이 대화의 선택 문맥이 됐다. 칩을 서버의 선택 문맥으로 바꾼다(E28).
+      // 다시 시도는 이 문장을 다시 싣지 않는다(conversation.learnTurn).
+      const sent = sentAdded.current
+      sentAdded.current = []
+      onUi((current) => ({ added: current.added.filter((item) => !sent.includes(item)) }))
+      void controller.refresh()
+    }
     const login = ended?.kind === 'login_required'
     if ((login || isLimitLike(ended)) && ended?.question && ended.question.kind !== 'preset') {
       const restore = ended.question.text ?? ''
@@ -251,23 +353,70 @@ export function AgentPanel(props: AgentPanelProps) {
     }
   }
   const focusInput = () => inputRef.current?.focus({ preventScroll: true })
-  // 누른 버튼(빠른 질문, 추천 질문, 다시 시도, 중단)은 누른 뒤 사라지므로 포커스를 입력 칸으로 옮긴다.
-  const ask = (question: AskQuestion) => {
-    if (locked) return
+  // 다음 질문의 선택 문맥 변경: 제외한 문맥(exclude_selection_ids)과 '현재 대화에 추가'로 고른 문장(add_selections)
+  const contextChanges = (): Pick<AskOptions, 'exclude_selection_ids' | 'add_selections'> => {
+    if (!conversation) return {}
+    const known = new Set(conversation.context_selections.map((item) => item.selection_id))
+    const excludes = ui.excludedIds.filter((id) => known.has(id))
+    const adds = ui.added.map((item) => ({ note_id: item.noteId, note_revision: item.revision, start: item.start, end: item.end }))
+    return { ...(excludes.length > 0 ? { exclude_selection_ids: excludes } : {}), ...(adds.length > 0 ? { add_selections: adds } : {}) }
+  }
+  // 누른 버튼(빠른 질문, 추천 질문, 다시 시도, 중단, 확인 카드)은 누른 뒤 사라지므로 포커스를 입력 칸으로 옮긴다.
+  // 확인 카드의 선택(주제 전환·의미 확인)은 카드가 보내기를 잠근 동안에도 보낸다(force).
+  const ask = (question: AskQuestion, extra: Pick<AskOptions, 'reply'> = {}, force = false) => {
+    if (pending || closed || (locked && !force)) return
     if (source) onCloseSource()
-    const excludes = conversation && ui.excluded ? conversation.context_selections.map((item) => item.selection_id) : []
-    controller.ask(question, { context: contextFor(), ...(excludes.length > 0 ? { exclude_selection_ids: excludes } : {}) }).then(afterRun, () => {})
+    sentAdded.current = conversation ? ui.added : []
+    controller.ask(question, { context: contextFor(), ...contextChanges(), ...extra }).then(afterRun, () => {})
     focusInput()
   }
   const retry = () => {
     void controller.retry().then(afterRun)
     focusInput()
   }
+  // '같은 질문 다시 하기'(F6-15b). 질문 없이 retry_of_turn_id만 보낸다(MEG-257).
+  const askAgain = (turn: AgentTurn) => {
+    if (locked) return
+    sentAdded.current = ui.added
+    void controller.askAgain(turn, contextChanges()).then(afterRun)
+    focusInput()
+  }
+  // 주제 전환 확인(F6-20, 결정 40): '새 대화로 질문'은 앞 대화와 선택한 문장을 모두 빼고 이 질문만으로 새 대화를 시작한다.
+  const askInNewConversation = (question: AskQuestion) => {
+    if (pending || closed) return
+    controller.reset()
+    onUi({ ...FRESH_CONTEXT, selection: null })
+    setUnseen(false)
+    controller.ask(question, { context: { origin: 'none' } }).then(afterRun, () => {})
+    focusInput()
+  }
+  // 다른 영역 선택(F6-8, 결정 20)
+  const addCandidate = () => {
+    onUi((current) => {
+      const next = current.candidate
+      if (!next) return {}
+      // 제외해 둔 대화 문맥을 다시 고른 경우는 새로 붙이지 않고 제외만 푼다(다음 질문 전이라 서버 문맥에 아직 있다).
+      const excludedMatch = conversation?.context_selections.find((item) =>
+        current.excludedIds.includes(item.selection_id) && item.note_id === next.noteId && item.start === next.start && item.end === next.end)
+      if (excludedMatch) return { candidate: null, excludedIds: current.excludedIds.filter((id) => id !== excludedMatch.selection_id) }
+      return { candidate: null, added: current.added.some((item) => sameRange(item, next)) ? current.added : [...current.added, next] }
+    })
+    focusInput()
+  }
+  const newWithCandidate = () => {
+    if (pending || !ui.candidate) return // 생성 중에는 새 대화를 잠근다(결정 11)
+    controller.reset()
+    onUi({ ...FRESH_CONTEXT, selection: ui.candidate })
+    setUnseen(false)
+    titleRef.current?.focus({ preventScroll: true })
+  }
+  // 의미 확인(F6-11)이 마지막 턴이면 입력 칸의 글은 직접 보충(reply.text)으로 보낸다.
+  const clarifyTurn = latestState === 'clarify' ? latestTurn : null
   const text = ui.draft.trim()
-  const canSend = !locked && text !== '' && [...text].length <= MAX_QUESTION
+  const canSend = !locked && text !== '' && [...text].length <= (clarifyTurn ? MAX_REPLY : MAX_QUESTION)
   const send = () => {
     if (!canSend) return
-    ask({ kind: 'free', text })
+    ask({ kind: 'free', text }, clarifyTurn ? { reply: { turn_id: clarifyTurn.turn_id, text } } : {})
     onUi({ draft: '' })
   }
   const onKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -280,7 +429,7 @@ export function AgentPanel(props: AgentPanelProps) {
   const newConversation = () => {
     if (pending) return // 생성 중에는 잠근다(2026-11-20 결정 11). 먼저 중단하면 다시 열린다.
     controller.reset()
-    onUi({ excluded: false, expanded: false })
+    onUi(FRESH_CONTEXT)
     setUnseen(false)
     titleRef.current?.focus({ preventScroll: true })
   }
@@ -293,7 +442,13 @@ export function AgentPanel(props: AgentPanelProps) {
   const label = sourceOpen || pending ? M.labelKeep
     : failureLock ? (limitLike ? M.labelLockedLimit : M.labelLockedFailed)
     : state.cancelled ? M.labelKeepStopped
-    : fresh ? M.labelFirst : M.labelNext
+    : fresh ? M.labelFirst
+    : candidate ? M.labelNext
+    : latestState === 'clarify' ? M.labelClarify
+    // 근거 일부·근거 없음의 모바일 보드(F6-12m·F6-12bm)는 T6g(MEG-263)에서 반영한다.
+    : wide && latestState === 'partial' ? M.labelPartial
+    : wide && latestState === 'no_evidence' ? M.labelNoEvidence
+    : M.labelNext
 
   // 패널 머리 버튼은 대화 상태와 관계없이 늘 같다(MEG-261). 보기 전환 두 개 + 새 대화 + 닫기, 지금 보기의 버튼만 빠진다(결정 44, 14.5 AI 제안).
   const viewButtons: [AgentView, string][] = mode === 'floating' ? [['panel', M.viewPanel], ['fullscreen', M.viewFullscreen]]
@@ -339,6 +494,40 @@ export function AgentPanel(props: AgentPanelProps) {
 
   const sourceTurn = source ? state.turns.find((turn) => turn.turn_id === source.turnId) : undefined
 
+  if (accessLost) {
+    // S9 노트 접근 변경(F6-15·F6-15m, 결정 3): 대화와 출처를 닫고 노트 목록으로 가는 길만 둔다. PC 노트 자리는 노트 화면이 같은 안내로 바꾼다.
+    return (
+      <dialog ref={dialogRef} className={wide ? styles[mode] : styles.full} aria-labelledby={titleId}
+        onCancel={(event) => { event.preventDefault(); onEscape() }}>
+        <div className={styles.frame} role={mode === 'fullscreen' ? 'main' : undefined}>
+        {wide
+          ? <div className={styles.head}>
+              <h2 id={titleId} ref={titleRef} tabIndex={-1} className={styles.title}>{M.title}</h2>
+              <div className={styles.headActions}>
+                <Link to={userPaths.noteList} className={`${styles.headButton} ${styles.closeButton}`}>{M.close}</Link>
+              </div>
+            </div>
+          : <div className={styles.mobileHead}>
+              <Link to={userPaths.noteList} className={styles.textButton}>{M.accessList}</Link>
+              <h1 id={titleId} ref={titleRef} tabIndex={-1} className={`${styles.title} ${styles.mobileTitle}`}>{M.title}</h1>
+            </div>}
+        <div className={wide ? styles.body : styles.mobileBody}>
+          <div role="status" className={wide ? styles.statusBox : styles.accessBox}>
+            {wide
+              ? <p className={styles.noticeTitleSmall}>{M.accessClosed}</p>
+              : <>
+                  <h2 className={styles.accessTitle}>{M.accessTitle}</h2>
+                  <p className={styles.noticeText}>{M.accessClosed}</p>
+                  <p className={styles.noticeText}>{M.accessHelp}</p>
+                  <Link to={userPaths.noteList} className={styles.primaryLink}>{M.accessToList}</Link>
+                </>}
+          </div>
+        </div>
+        </div>
+      </dialog>
+    )
+  }
+
   return (
     <dialog ref={dialogRef} className={wide ? styles[mode] : styles.full} aria-labelledby={titleId}
       onCancel={(event) => { event.preventDefault(); onEscape() }}>
@@ -365,8 +554,16 @@ export function AgentPanel(props: AgentPanelProps) {
               {shown.map((entry) => <div key={entry.key} data-entry="" className={styles.entry}>
                 <EntryView entry={entry} latest={entry.key === lastKey} wide={wide} state={state} controller={controller}
                   hasSelection={hasSelection} locked={locked} closed={closed} draft={ui.draft} onRetry={retry}
-                  onDraft={(draft) => { onUi({ draft }); focusInput() }} onAsk={ask} onSource={openSource} onClose={onClose} onFocusInput={focusInput} />
+                  onDraft={(draft) => { onUi({ draft }); focusInput() }} onAsk={ask} onSource={openSource} onClose={onClose} onFocusInput={focusInput}
+                  firstHidden={entry.kind === 'turn' && firstHidden.has(entry.turn.turn_id)} onAskAgain={askAgain}
+                  onNewConversationAsk={askInNewConversation} />
               </div>)}
+              {candidate
+                ? <div data-entry="" className={styles.entry}>
+                    <CandidateCard candidate={candidate} newLocked={pending !== null} onAdd={addCandidate} onNew={newWithCandidate} wide={wide}
+                      canAdd={conversation?.origin === 'note' && ui.added.length < MAX_ADD_SELECTIONS} />
+                  </div>
+                : null}
             </>}
       </div>
       {showNewAnswer
@@ -380,13 +577,13 @@ export function AgentPanel(props: AgentPanelProps) {
           </div>
         : <div className={wide ? styles.composerArea : styles.mobileComposerArea}>
         {hasSelection && !(source && !wide)
-          ? <div className={styles.chip}>
-              <span className={styles.chipText}>{M.selectionChip(selectionText ?? '')}</span>
+          ? chips.map((chip) => <div key={chip.key} className={styles.chip}>
+              <span className={styles.chipText}>{M.selectionChip(chip.text)}</span>
               <div className={styles.chipActions}>
                 {wide ? <button type="button" className={styles.chipButton} aria-expanded={showSelection} aria-controls={selectionId} onClick={() => setShowSelection((value) => !value)}>{M.selectionFull}</button> : null}
-                <button type="button" className={styles.chipButton} onClick={() => { onUi({ excluded: true }); setShowSelection(false) }}>{M.exclude}</button>
+                <button type="button" className={styles.chipButton} onClick={() => { onUi(chip.exclude); setShowSelection(false) }}>{M.exclude}</button>
               </div>
-            </div>
+            </div>)
           : null}
         <label htmlFor={inputId} className={styles.label}>{label}</label>
         <div className={styles.composer}>
@@ -445,10 +642,14 @@ type EntryProps = {
   draft: string
   onRetry: () => void
   onDraft: (draft: string) => void
-  onAsk: (question: AskQuestion) => void
+  onAsk: (question: AskQuestion, extra?: Pick<AskOptions, 'reply'>, force?: boolean) => void
   onSource: (turnId: string, ref: number, opener: HTMLElement) => void
   onClose: () => void
   onFocusInput: () => void
+  // 가림 연쇄의 첫 턴인가(F6-15b). '같은 질문 다시 하기'와 가림 안내는 이 턴에 둔다.
+  firstHidden: boolean
+  onAskAgain: (turn: AgentTurn) => void
+  onNewConversationAsk: (question: AskQuestion) => void
 }
 
 function Question({ question }: { question: Pick<AgentQuestion, 'kind' | 'text' | 'preset'> }) {
@@ -564,20 +765,35 @@ function FailureView({ failure, wide, controller, draft, onRetry, onClose, onFoc
 }
 
 function TurnView(props: EntryProps & { turn: AgentTurn }) {
-  const { turn, latest, locked, closed, onAsk, onSource } = props
+  const { turn, latest, locked, closed, wide, onAsk, onSource, onClose } = props
   const badgeId = useId()
   if (turn.status === 'cancelled') return <StoppedView {...props} />
+  // 가린 턴은 답변·출처·추천 질문을 그리지 않는다(AC-2). 서버도 result를 빼고 보낸다. 모바일 보드(F6-15bm)는 T6g(MEG-263)다.
+  if (turn.hidden) return <HiddenView {...props} />
+  const state = turn.status === 'completed' ? turn.result?.state : undefined
+  if (state === 'clarify') return <ClarifyView {...props} result={turn.result as ClarifyResult} />
+  // 근거 없음(F6-12b)과 주제 전환 확인(F6-20)의 모바일 보드는 T6g(MEG-263)에서 반영한다. 그 전까지 모바일은 질문만 보인다.
+  if (state === 'no_evidence') return wide ? <NoEvidenceView {...props} /> : <Question question={turn.question} />
+  if (state === 'topic_check') return wide ? <TopicCheckView {...props} /> : <Question question={turn.question} />
   const result = sectionsOf(turn.result)
   const sources: AgentSource[] = result?.sources ?? []
   const suggestions = latest && result && !closed ? (result.suggestions ?? []).slice(0, 3) : []
+  const openRef = (ref: number, button: HTMLElement) => onSource(turn.turn_id, ref, button)
   return <>
     <Question question={turn.question} />
     {result
       ? <>
           <span id={badgeId}><AiBadge>{M.aiBadge}</AiBadge></span>
           <div role="group" aria-labelledby={badgeId} className={styles.aiBox}>
-            <AiAnswer sections={result.sections} figures={figuresOf(result.figures)} sources={sources}
-              onSource={(ref, button) => onSource(turn.turn_id, ref, button)} />
+            <AiAnswer sections={result.sections} figures={figuresOf(result.figures)} sources={sources} onSource={openRef} />
+            {result.state === 'correction' ? <CorrectionParts result={result} sources={sources} onSource={openRef} /> : null}
+            {/* 근거 일부만 확인(F6-12). 한계 문장에는 인용을 붙이지 않는다. 모바일 보드(F6-12m)는 T6g(MEG-263)다. */}
+            {result.state === 'partial' && wide && result.limitation
+              ? <>
+                  <h3 className={styles.partHeading}>{M.partialUnconfirmed}</h3>
+                  <p className={styles.partText}>{result.limitation}</p>
+                </>
+              : null}
           </div>
           {sources.length > 0
             ? <div className={styles.references}>
@@ -595,10 +811,154 @@ function TurnView(props: EntryProps & { turn: AgentTurn }) {
                 </div>
               </>
             : null}
+          {result.state === 'partial' && wide && latest ? <button type="button" className={styles.linkButton} onClick={onClose}>{M.backToNote}</button> : null}
         </>
       : null}
-    {/* 의미 확인·근거 없음·주제 전환 결과와 가린 턴은 T6d(MEG-260)에서 그린다. */}
   </>
+}
+
+// S6 확인된 교정(F6-13·F6-13m): 노트에서 확인할 부분(노트 문장 → 근거 문단 기준), 확인하지 못한 부분. 노트는 고치지 않는다.
+function CorrectionParts({ result, sources, onSource }: { result: CorrectionResult; sources: AgentSource[]; onSource: (ref: number, button: HTMLElement) => void }) {
+  const kindOf = (refs: number[]): SourceKind => sources.find((item) => refs.includes(item.ref))?.source_kind ?? 'note'
+  const unresolved = result.unresolved ?? []
+  return <>
+    {result.corrections.length > 0
+      ? <>
+          <h3 className={styles.partHeading}>{M.correctionTitle}</h3>
+          {result.corrections.map((item, index) => <div key={index} className={styles.correction}>
+            <div className={styles.caption}>{M.correctionNote}</div>
+            <p className={styles.partText}>{M.quoted(item.note_excerpt)}</p>
+            <div className={styles.caption}>{M.correctionBasis(kindOf(item.source_refs))}</div>
+            <AiAnswer sections={[{ body: item.corrected }]} sources={sources} onSource={onSource} />
+          </div>)}
+        </>
+      : null}
+    {unresolved.length > 0
+      ? <>
+          <h3 className={styles.partHeading}>{M.correctionUnresolved}</h3>
+          {unresolved.map((text, index) => <p key={index} className={styles.partText}>{text}</p>)}
+        </>
+      : null}
+    <p className={styles.hintSmall}>{M.correctionNoEdit}</p>
+  </>
+}
+
+// S4 의미 확인(F6-11·F6-11m). 고르면 같은 질문을 그 후보로 다시 보낸다(reply.clarify_option_id). 입력 칸의 글은 직접 보충이다.
+// 서버 후보는 이름(label)만 있어 보드의 후보 설명 줄은 그리지 않는다.
+function ClarifyView({ turn, result, latest, locked, onAsk }: EntryProps & { turn: AgentTurn; result: ClarifyResult }) {
+  const badgeId = useId()
+  const promptId = useId()
+  const question = askOf(turn.question)
+  const active = latest && question !== null
+  return <>
+    <Question question={turn.question} />
+    <span id={badgeId}><AiBadge>{M.aiBadge}</AiBadge></span>
+    <div role="group" aria-labelledby={badgeId} aria-live="polite" className={styles.aiBox}>
+      <p id={promptId} className={styles.clarifyPrompt}>{result.clarify.prompt}</p>
+      <div role="group" aria-labelledby={promptId} className={styles.options}>
+        {result.clarify.options.map((option) => <button key={option.option_id} type="button" className={styles.option}
+          aria-disabled={!active || locked ? true : undefined}
+          onClick={() => { if (active && !locked && question) onAsk(question, { reply: { turn_id: turn.turn_id, clarify_option_id: option.option_id } }) }}>
+          {option.label}
+        </button>)}
+      </div>
+      {active ? <p className={styles.partText}>{M.clarifyHelp}</p> : null}
+    </div>
+  </>
+}
+
+// S5 근거 없음·무관(F6-12b). AI가 답변을 만들지 않은 서버 고정 안내라 AI 생성 표시와 인용이 없다(결정 4·16).
+function NoEvidenceView({ turn, latest, onClose }: EntryProps & { turn: AgentTurn }) {
+  return <>
+    <Question question={turn.question} />
+    <div role="status" className={styles.statusBox}>
+      <p className={styles.noticeTitleSmall}>{M.noEvidenceTitle('note')}</p>
+      <p className={styles.noticeText}>{M.noEvidenceHelp}</p>
+    </div>
+    {latest ? <button type="button" className={styles.linkButton} onClick={onClose}>{M.backToNote}</button> : null}
+  </>
+}
+
+// 주제 전환 확인(F6-20, 결정 38·40). 고르기 전에는 답변을 만들지 않고 보내기를 잠근다(AC-3). 카드가 뜨면 포커스를 카드 제목으로 옮긴다.
+function TopicCheckView({ turn, latest, state, closed, onAsk, onNewConversationAsk, onClose }: EntryProps & { turn: AgentTurn }) {
+  const titleRef = useRef<HTMLParagraphElement>(null)
+  const titleId = useId()
+  const result = turn.result?.state === 'topic_check' ? turn.result : null
+  const question = turn.question.text ? turn.question.text : null
+  // 새 질문 입구가 닫혔으면(MEG-259) 두 선택지 모두 새 질문을 보내므로 그리지 않는다.
+  const active = latest && question !== null && !closed
+  const pending = state.pending !== null
+  useEffect(() => {
+    if (active) titleRef.current?.focus({ preventScroll: true })
+  }, [active])
+  return <>
+    <Question question={turn.question} />
+    <div role="group" aria-labelledby={titleId} className={styles.statusBox}>
+      <p id={titleId} ref={titleRef} tabIndex={-1} className={styles.noticeTitleSmall}>{M.topicTitle(result?.topic_check.current_topic ?? '')}</p>
+      {active
+        ? <>
+            <p className={styles.noticeText}>{M.topicHelp}</p>
+            <div className={styles.actions}>
+              <Button variant="primary" aria-disabled={pending ? true : undefined}
+                onClick={() => { if (!pending && question) onNewConversationAsk({ kind: 'free', text: question }) }}>{M.topicNew}</Button>
+              <Button aria-disabled={pending ? true : undefined}
+                onClick={() => { if (!pending && question) onAsk({ kind: 'free', text: question }, { reply: { turn_id: turn.turn_id, topic_choice: 'continue' } }, true) }}>{M.topicContinue}</Button>
+            </div>
+          </>
+        : null}
+    </div>
+    {active ? <button type="button" className={styles.linkButton} onClick={onClose}>{M.backToNote}</button> : null}
+  </>
+}
+
+// S9 변형: 출처만 권한 회수(F6-15b, 결정 7·11·15·17). 답변·출처·추천 질문은 그리지 않고 질문만 남긴다.
+// 처음 영향받은 턴에 가림 안내와 '같은 질문 다시 하기'를 두고, 뒤쪽 턴은 함께 가렸다는 안내만 둔다. 뒤쪽 질문은 자동으로 다시 보내지 않는다.
+function HiddenView({ turn, wide, locked, closed, firstHidden, onAskAgain }: EntryProps & { turn: AgentTurn }) {
+  const textless = questionText(turn.question) === ''
+  const question = textless
+    ? <>
+        <div className={styles.caption}>{M.question}</div>
+        <p className={styles.hiddenText}>{M.hiddenSuggested}</p>
+      </>
+    : <Question question={turn.question} />
+  if (!wide) return question
+  // 새 질문 입구가 닫혔으면(MEG-259) 다시 묻기도 새 질문이라 두지 않는다.
+  const canAskAgain = turn.hidden?.retry_allowed === true && !closed
+  return <>
+    {question}
+    {firstHidden
+      ? <div role="status" className={styles.statusBox}>
+          <p className={styles.noticeTitleSmall}>{M.hiddenTitle}</p>
+          <p className={styles.noticeText}>{M.hiddenHelp}</p>
+          <p className={styles.noticeText}>{M.hiddenKept(canAskAgain)}</p>
+          {canAskAgain
+            ? <div className={styles.actions}>
+                <Button variant="primary" aria-disabled={locked ? true : undefined} onClick={() => onAskAgain(turn)}>{M.askAgain}</Button>
+              </div>
+            : null}
+        </div>
+      : <div className={styles.hiddenBox}><p className={styles.hiddenText}>{M.hiddenFollowing}</p></div>}
+  </>
+}
+
+// W5 다른 영역 선택(F6-8·F6-8m, 결정 20). 고르기 전까지 다음 질문의 문맥은 바뀌지 않고 보내기를 잠근다(AC-3).
+// canAdd: 노트에서 연 대화이고 추가 수가 한도 안일 때만 '현재 대화에 추가'를 둔다. 노트 없이 시작한 대화(origin none)는 서버가 추가를 거절한다.
+function CandidateCard({ candidate, newLocked, onAdd, onNew, wide, canAdd }: { candidate: AgentContextSelection; newLocked: boolean; onAdd: () => void; onNew: () => void; wide: boolean; canAdd: boolean }) {
+  const titleRef = useRef<HTMLHeadingElement>(null)
+  const titleId = useId()
+  const Heading = wide ? 'h3' : 'h2'
+  useEffect(() => {
+    titleRef.current?.focus({ preventScroll: true })
+  }, [candidate])
+  return <div role="group" aria-labelledby={titleId} className={wide ? styles.choiceBox : `${styles.choiceBox} ${styles.choiceBoxMobile}`}>
+    <Heading id={titleId} ref={titleRef} tabIndex={-1} className={styles.choiceTitle}>{M.addTitle}</Heading>
+    <p className={styles.choiceQuote}>{M.addQuote(candidate.text)}</p>
+    <div className={styles.choiceActions}>
+      {canAdd ? <Button variant="primary" onClick={onAdd}>{M.addToConversation}</Button> : null}
+      <Button variant={canAdd ? undefined : 'primary'} aria-disabled={newLocked ? true : undefined} onClick={onNew}>{M.addNewConversation}</Button>
+    </div>
+    <p className={styles.hintSmall}>{M.addHint}</p>
+  </div>
 }
 
 // S7 중단(F6-14·F6-14b·F6-14m). 받다 만 답변은 숨기고, '중단한 질문 다시 넣기'로 질문을 입력 칸에 되돌린다(결정 1·5·12·13).
@@ -658,7 +1018,7 @@ function StoppedView({ turn, latest, wide, state, closed, draft, onDraft, onClos
 
 // PC 출처 보기의 패널 쪽(F6-4): 출처 카드, 노트 근거 안내, 대화가 남아 있다는 안내.
 function SourcePanelInfo({ state, quote, question }: { state: SourceState | null; quote: string; question: string }) {
-  if (!state || state.status === 'loading') return <p role="status" className={styles.noticeText}>{M.sourceLoading}</p>
+  if (!state || state.status === 'loading' || state.status === 'gone') return <p role="status" className={styles.noticeText}>{M.sourceLoading}</p>
   if (state.status === 'failed') return <p role="alert" className={styles.noticeTitleSmall}>{M.sourceFailed}</p>
   const { data } = state
   return <>
@@ -674,7 +1034,7 @@ function SourcePanelInfo({ state, quote, question }: { state: SourceState | null
 
 // 모바일 출처 보기(F6-9). 대화 화면 대신 인용 문단을 보여 주고, 돌아가면 대화 스크롤과 초안이 그대로다.
 function SourceMobile({ state, source }: { state: SourceState | null; source: OpenSource }) {
-  if (!state || state.status === 'loading') return <p role="status" className={styles.noticeText}>{M.sourceLoading}</p>
+  if (!state || state.status === 'loading' || state.status === 'gone') return <p role="status" className={styles.noticeText}>{M.sourceLoading}</p>
   if (state.status === 'failed') return <p role="alert" className={styles.noticeTitleSmall}>{M.sourceFailed}</p>
   const { data } = state
   return <>
