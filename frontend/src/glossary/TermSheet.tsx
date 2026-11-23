@@ -150,6 +150,12 @@ function TermSheetContent({ termId, onLoginRequired, ask }: { termId: number; on
   const refreshing = useRef<Promise<GlossaryResponse> | null>(null)
   const current = result?.key === attempt ? result : null
   const data = current && 'data' in current ? current.data : null
+  // 'AI에게 질문'이 안내로 바뀌어 버튼이 사라지면, 누른 버튼에 있던 포커스를 안내로 옮긴다(포커스가 문서 밖으로 빠지지 않게).
+  const noticeRef = useRef<HTMLParagraphElement>(null)
+  const askUnavailable = ask?.notice?.unavailable ?? false
+  useEffect(() => {
+    if (askUnavailable) noticeRef.current?.focus({ preventScroll: true })
+  }, [askUnavailable])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -244,14 +250,15 @@ function TermSheetContent({ termId, onLoginRequired, ask }: { termId: number; on
       })}
       {showViewNotice ? <p className={styles.notice} role="status">{MESSAGES.viewNotRecorded}</p> : null}
       {favoriteFailed ? <p className={styles.notice} role="alert">{MESSAGES.favoriteFailed}</p> : null}
-      {ask?.notice ? <p className={styles.notice} role="alert">{ask.notice.text}</p> : null}
+      {ask?.notice ? <p ref={noticeRef} tabIndex={-1} className={styles.notice} role="alert">{ask.notice.text}</p> : null}
       <div className={styles.actions}>
         <FavoriteToggle pressed={favorite} aria-disabled={favoritePending} onPressedChange={changeFavorite} />
         {ask && !ask.notice?.unavailable
           ? <Button variant="primary" aria-disabled={ask.busy ? true : undefined} onClick={() => { if (!ask.busy) ask.onAsk() }}>{ask.label}</Button>
           : null}
       </div>
-      {ask?.busy ? <p className={styles.srOnly} role="status">{ask.busyLabel}</p> : null}
+      {/* 대화를 여는 중임을 알린다. 알림 영역은 늘 두고 글만 바꿔야 스크린 리더가 읽는다. */}
+      <p className={styles.srOnly} role="status">{ask?.busy ? ask.busyLabel : ''}</p>
       {/* 저장 결과를 스크린 리더에 알린다. 실패했을 때는 비워 두어 저장된 것처럼 읽히지 않는다. */}
       <p className={styles.srOnly} role="status">{favoriteFailed ? '' : favoriteMessage}</p>
     </>

@@ -219,7 +219,11 @@ function NoteRead({ noteId }: { noteId: string }) {
     setOpenAi(null)
     if (auth.role === 'visitor') return openLoginPrompt()
     if (loginPanelOpen) closeLoginPrompt()
-    const started = agentState.conversation !== null || agentState.pending !== null || agentState.turns.length > 0
+    // 질문 없이 만든 대화(위키 출처의 'AI에게 질문', MEG-254)에서 노트 문장을 고르면 그 빈 대화를 버리고 노트 문장으로 새로 시작한다.
+    // 빈 대화는 질문 준비 화면이라 '새로 선택한 내용' 카드를 보이지 않고, 위키 대화는 노트 선택을 더할 수 없기 때문이다(서버 add_selections는 노트 대화만).
+    const empty = agentState.conversation !== null && agentState.turns.length === 0 && agentState.pending === null && agentState.failure === null
+    if (empty) agent.reset()
+    const started = !empty && (agentState.conversation !== null || agentState.pending !== null || agentState.turns.length > 0)
     const selection = { noteId: note.id, revision: note.revision, ...toCodePointRange(note.body_markdown, pick.start, pick.end), text }
     if (!started) setAgentUi((previous) => ({ ...previous, selection, excluded: false, expanded: false }))
     else {
@@ -284,43 +288,61 @@ function NoteRead({ noteId }: { noteId: string }) {
     setOpenTerm({ termId, openId: openCount.current, wikiLabel: label })
   }
   // 위키 출처에서 연 시트의 'AI에게 질문'(MEG-254 결정 1): E27 origin wiki로 새 대화를 만들고 패널을 연다. 모델은 부르지 않는다(첫 질문은 E29).
-  // 지금 대화는 새 대화로 바뀐다(헤더의 '새 대화'와 같다). 생성 중에는 버튼을 두지 않는다(결정 11과 같은 잠금).
+  // E27이 성공해야 지금 대화가 새 대화로 바뀐다(헤더의 '새 대화'와 같다). 실패하면 지금 대화는 그대로 남는다. 생성 중에는 버튼을 두지 않는다(결정 11과 같은 잠금).
+  // 응답이 오기 전에 시트를 닫거나 다른 용어를 열었으면(openId가 바뀜) 결과를 화면에 쓰지 않는다. 대화는 서버에만 생기고 열리지 않는다.
+  const currentOpenId = useRef(0)
+  const shownOpenId = openTerm?.openId ?? 0
+  useEffect(() => {
+    currentOpenId.current = shownOpenId
+  }, [shownOpenId])
   const askFromWiki = async () => {
     if (!openTerm || openTerm.wikiLabel === undefined || wikiAsk.busy) return
     if (auth.role === 'visitor') {
       setOpenTerm(null)
       return openLoginPrompt()
     }
-    const termId = openTerm.termId
+    const { termId, openId } = openTerm
+    const stillOpen = () => currentOpenId.current === openId
     setWikiAsk({ busy: true, notice: null })
-    const created = await agent.newConversation({ origin: 'wiki', wiki_ref: wikiRef(termId) })
-    if (created) {
+    let failure: string | null = null
+    try {
+      const created = await agent.replaceConversation({ origin: 'wiki', wiki_ref: wikiRef(termId) })
+      if (!stillOpen()) return
+      if (created) {
+        setWikiAsk({ busy: false, notice: null })
+        setAgentUi((previous) => ({ ...previous, ...FRESH_CONTEXT, selection: null }))
+        setOpenTerm(null)
+        setAgentOpen(true)
+        return
+      }
+      // 그 사이 다른 질문이 시작됐다. 아무것도 바꾸지 않고 버튼만 다시 쓸 수 있게 둔다.
       setWikiAsk({ busy: false, notice: null })
-      setAgentUi((previous) => ({ ...previous, ...FRESH_CONTEXT, selection: null }))
-      setOpenTerm(null)
-      setAgentOpen(true)
       return
+    } catch (error) {
+      failure = isApiError(error) ? error.code : 'network'
     }
-    const failure = agent.getSnapshot().loadFailure
-    // 실패한 E27의 기록은 지운다. 404가 남으면 노트 접근 변경(F6-15)으로 읽히기 때문이다. 앞 대화는 newConversation이 이미 비웠다.
-    agent.reset()
-    if (failure?.kind === 'login_required') {
+    if (failure === 'service_unavailable') closeAgentEntry()
+    if (!stillOpen()) return
+    if (failure === 'login_required') {
       // 세션이 끝났다. 시트를 닫고 로그인 안내를 연다(질문 401과 같은 처리).
       setWikiAsk({ busy: false, notice: null })
       setOpenTerm(null)
       return openLoginPrompt()
     }
-    // 422(화면 플래그만 켜진 배포)·503(노출 중단)이면 이 탭의 위키 질문 입구를 닫는다. 404는 그 용어로 지금 질문할 수 없다는 뜻이다.
-    if (failure?.kind === 'service_unavailable') closeAgentEntry()
-    const unavailable = failure?.kind === 'invalid' || failure?.kind === 'service_unavailable' || failure?.kind === 'not_found'
-    if (failure?.kind === 'invalid' || failure?.kind === 'service_unavailable') closeWikiEntry()
+    // 422(화면 플래그만 켜진 배포)·503(노출 중단)이면 이 탭의 위키 질문 입구를 닫는다. 404는 그 용어로 지금 질문할 수 없다는 뜻이다(다시 등록될 수 있어 닫지 않는다).
+    const closes = failure === 'validation_failed' || failure === 'bad_request' || failure === 'service_unavailable'
+    if (closes) closeWikiEntry()
+    const unavailable = closes || failure === 'not_found'
     setWikiAsk({ busy: false, notice: { text: unavailable ? AGENT_MESSAGES.wikiAskUnavailable : AGENT_MESSAGES.wikiAskFailed, unavailable } })
   }
+  // 버튼은 위키 출처에서 연 시트이고 입구가 열려 있을 때만 둔다. 열지 못한 안내(notice)는 입구가 닫힌 뒤에도(503 포함) 같은 시트에 남긴다.
   const wikiSheetAsk: TermSheetAsk | undefined =
-    openTerm?.wikiLabel !== undefined && !AGENT_DISABLED_BY_BUILD && !agentClosed && (wikiOpen || wikiAsk.notice !== null)
-      && agentState.pending === null
-      ? { label: AGENT_MESSAGES.wikiAsk, onAsk: () => { void askFromWiki() }, busy: wikiAsk.busy, busyLabel: AGENT_MESSAGES.wikiAskBusy, notice: wikiAsk.notice }
-      : undefined
+    openTerm?.wikiLabel === undefined ? undefined
+      : wikiAsk.notice !== null || wikiAsk.busy
+        ? { label: AGENT_MESSAGES.wikiAsk, onAsk: () => { void askFromWiki() }, busy: wikiAsk.busy, busyLabel: AGENT_MESSAGES.wikiAskBusy, notice: wikiAsk.notice }
+        : !AGENT_DISABLED_BY_BUILD && !agentClosed && wikiOpen && agentState.pending === null
+          ? { label: AGENT_MESSAGES.wikiAsk, onAsk: () => { void askFromWiki() }, busy: false, busyLabel: AGENT_MESSAGES.wikiAskBusy, notice: null }
+          : undefined
   // 패널이 열려 있으면 본문 오른쪽 480px를 비워 패널이 본문을 가리지 않게 한다(PC 폭에서만).
   // 떠 있는 창이면 창 폭만큼 비운다(F6-3f). 전체 화면은 패널과 같은 배치를 둔 채 노트를 가려서, 패널로 돌아오면 읽던 위치가 그대로다(결정 43).
   const panelReserved = wide && (termOpen || openAi !== null || loginPanelOpen || (agentOpen && agentShown !== 'floating'))

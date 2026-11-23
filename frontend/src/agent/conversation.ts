@@ -445,6 +445,17 @@ export class AgentConversationController {
     }
   }
 
+  // 지금 대화를 그대로 둔 채 E27을 먼저 부르고, 성공했을 때만 새 대화로 바꾼다(MEG-254 위키 질문).
+  // 실패하면 지금 대화는 남고 E27의 오류(ApiError 등)를 그대로 던진다. 진행 중인 질문이 있거나 그 사이 질문이 시작되면 바꾸지 않고 null이다.
+  async replaceConversation(context: CreateConversationRequest): Promise<AgentConversation | null> {
+    if (this.run) return null
+    const conversation = await createConversation(context)
+    if (this.run) return null
+    this.reset()
+    this.set({ conversation, turns: [] })
+    return conversation
+  }
+
   // 대화를 비운다. 진행 중인 요청의 응답은 버린다(서버 실행은 끝까지 간다).
   reset(): void {
     this.refreshAfterRun = false

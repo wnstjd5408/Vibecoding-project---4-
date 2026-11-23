@@ -8,7 +8,8 @@ GET /api/ai/turns/{turn_id}/sources/{ref} — 그 턴이 인용한 문단을 인
 3. 노트 출처(D1)는 역할과 관계없이 그 노트가 지금 공개이고 존재한다. 위키 출처(MEG-252)는 그 사전 항목이 지금 있다
    (설계 3.2: glossary_entries 행 + terms.source = 'glossary'). 사전은 모두 공개다(W5).
 
-응답: {ref, source_kind, title, section, cited_revision, paragraph_text, highlight, changed_since_cited}. 노트와 위키가 같은 모양이다.
+응답: {ref, source_kind, source_id, title, section, cited_revision, paragraph_text, highlight, changed_since_cited}. 노트와 위키가 같은 모양이다.
+- source_id는 출처 원본 식별자다(노트 ID 문자열, 위키는 `glossary:{term_id}`). 화면이 위키 출처에서 용어 시트(E06)를 열 때 쓴다(MEG-254).
 - paragraph_text는 인용 당시 문단 원문(paragraph_snapshot)이다. 노트와 사전은 이전 개정을 보관하지 않는다.
 - changed_since_cited는 개정 번호가 아니라, 지금 본문을 같은 규칙(note_chunks)으로 나눈 문단 가운데 인용 당시 원문과 같은
   문단이 없는지로 정한다. 노트 개정은 제목·본문 어디가 바뀌어도 오르고, 사전 개정은 저장할 때마다 오르기 때문이다(기술 검토
