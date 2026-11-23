@@ -176,7 +176,7 @@ test('AC-1: 질문을 보낸 뒤 스트림이 끊겨도 서버가 턴을 끝내�
   expect(new Set(polled.map((p) => p.turnId))).toEqual(new Set(turnIds))
   // 모델은 한 번만 불렸다(화면이 다시 보내지 않았다).
   expect(await agentCalls()).toBe(before + 1)
-  await shot(page, testInfo, 'AC-1 끊긴 뒤 E30으로 받은 답변')
+  await shot(page, testInfo, 'ac1-disconnect-e30')
 })
 
 test('AC-2: 추천 질문을 연속으로 눌러도, 같은 멱등 키로 다시 보내도 모델 호출은 1회다', async ({ page }, testInfo) => {
@@ -202,7 +202,7 @@ test('AC-2: 추천 질문을 연속으로 눌러도, 같은 멱등 키로 다시
   await page.waitForTimeout(1_000)
   expect(await agentCalls()).toBe(afterFirst + 1)
   expect(seen.asks).toHaveLength(2)
-  await shot(page, testInfo, 'AC-2 추천 질문 연속 클릭 뒤 답변')
+  await shot(page, testInfo, 'ac2-suggestion-repeat-click')
 
   // 서버 쪽 중복 방지(E29 2단계): 같은 Idempotency-Key로 두 번 동시에 보내도 모델 호출은 1회다.
   const conversationId = TURNS_PATH.exec(seen.asks[0])![1]
@@ -270,7 +270,7 @@ test('AC-3: 인용한 노트를 비공개로 바꾸면 그 턴이 가려지고, 
   await expect(panel.getByRole('button', { name: '합성체이닝을 예시로 보여 줘' })).toHaveCount(0)
   // 열어 둔 노트는 그대로 공개라 남는다.
   await expect(page.getByRole('heading', { level: 1, name: '합성 에이전트 노트' })).toBeVisible()
-  await shot(page, testInfo, 'AC-3 인용 노트 비공개 뒤 가린 턴')
+  await shot(page, testInfo, 'ac3-cited-note-unpublished')
 
   // API: 같은 턴의 출처는 404이고, E28·E30은 그 턴을 가린 채 돌려준다(답변 본문이 없다).
   const after = await page.evaluate(async ({ id, turnId }) => {
