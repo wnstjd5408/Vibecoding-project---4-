@@ -2,7 +2,7 @@
 import { Link, Outlet, useLocation } from 'react-router'
 import { AccountMenu } from '../account/AccountMenu.tsx'
 import { Badge } from '../components/Badge.tsx'
-import { operatorPaths } from '../routes/paths.ts'
+import { operatorPaths, userPaths } from '../routes/paths.ts'
 import RequireOperator from './RequireOperator.tsx'
 import styles from './OperatorShell.module.css'
 
@@ -31,7 +31,11 @@ function Shell() {
           <span className={styles.title}>CS 학습 노트</span>
           <Badge>운영자</Badge>
         </div>
-        <AccountMenu myInfoPath={operatorPaths.myInfo} />
+        {/* 사용자 과목·노트 목록(F1-1b)으로 가는 링크(MEG-269). 그 화면의 "운영자 메뉴" 링크와 짝을 이룬다. */}
+        <div className={styles.actions}>
+          <Link className={styles.headerLink} to={userPaths.noteList}>노트 목록 보기</Link>
+          <AccountMenu myInfoPath={operatorPaths.myInfo} />
+        </div>
       </header>
       <div className={styles.body}>
         <nav className={styles.sidebar} aria-label="운영자 메뉴">

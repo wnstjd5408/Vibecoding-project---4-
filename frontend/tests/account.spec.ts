@@ -86,6 +86,33 @@ test('AC-1 운영자 계정이면 역할이 운영자로 보이고 돌아가기�
   await expect(page).toHaveURL(/\/$/)
 })
 
+// MEG-269 운영자 화면 헤더의 "노트 목록 보기". 운영자 화면 어디서나 같은 자리에 있고 사용자 과목·노트 목록으로 간다.
+test('MEG-269 운영자 화면 헤더의 "노트 목록 보기"는 모든 운영자 화면에 있고 키보드로 과목·노트 목록에 간다', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await loginAs(page, 'operator@example.test')
+  await expect(page).toHaveURL(/\/$/)
+  await page.getByRole('link', { name: '운영자 메뉴' }).click()
+  await expect(page).toHaveURL(/\/admin$/)
+  const link = page.getByRole('banner').getByRole('link', { name: '노트 목록 보기', exact: true })
+  await expect(link).toHaveAttribute('href', '/')
+  const first = await link.boundingBox()
+  for (const label of ['용어 사전', '신고', '계정 발급']) {
+    await page.getByRole('navigation', { name: '운영자 메뉴' }).getByRole('link', { name: label, exact: true }).click()
+    await expect(page.getByRole('navigation', { name: '운영자 메뉴' }).getByRole('link', { name: label, exact: true })).toHaveAttribute('aria-current', 'page')
+    await expect(link).toBeVisible()
+    expect(await link.boundingBox()).toEqual(first)
+  }
+  // Tab 순서에서 계정 버튼 바로 앞이다.
+  await trigger(page).focus()
+  await page.keyboard.press('Shift+Tab')
+  await expect(link).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page).toHaveURL(/\/$/)
+  // 로그인 상태가 유지되어 목록이 운영자 상태(F1-1b)로 보인다.
+  await expect(page.getByRole('link', { name: '운영자 메뉴' })).toBeVisible()
+  await expect(trigger(page)).toBeVisible()
+})
+
 test('AC-2 로그아웃하면 방문자 상태가 되고 과목·노트 목록으로 간다', async ({ page }) => {
   await loginAs(page, 'member@example.test')
   await trigger(page).click()
