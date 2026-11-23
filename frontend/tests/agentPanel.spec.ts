@@ -204,21 +204,20 @@ for (const [device, viewport] of [['PC', PC], ['모바일', MOBILE]] as const) {
     // 입력 칸이 비어 있으면 확인 없이 넣는다
     await panel.getByRole('button', { name: '중단한 질문 다시 넣기' }).click()
     await expect(input(panel)).toHaveValue('재시도하면 안 되는 오류도 있나요?')
-    if (device === 'PC') {
-      // 쓰던 초안이 있으면 바꾸기 전에 묻는다(F6-14b). 취소하면 초안을 그대로 둔다
-      await input(panel).fill('그럼 멱등성은 뭐야?')
-      await panel.getByRole('button', { name: '중단한 질문 다시 넣기' }).click()
-      const confirm = panel.getByRole('group', { name: '쓰던 내용을 중단한 질문으로 바꿀까요?' })
-      await expect(confirm).toBeVisible()
-      await expect(confirm.getByText('‘그럼 멱등성은 뭐야?’')).toBeVisible()
-      await expect(confirm.getByText('‘재시도하면 안 되는 오류도 있나요?’')).toBeVisible()
-      await shot(page, testInfo, 'F6-14b 다시 넣기 확인')
-      await confirm.getByRole('button', { name: '취소' }).click()
-      await expect(input(panel)).toHaveValue('그럼 멱등성은 뭐야?')
-      await panel.getByRole('button', { name: '중단한 질문 다시 넣기' }).click()
-      await panel.getByRole('button', { name: '바꾸기' }).click()
-      await expect(input(panel)).toHaveValue('재시도하면 안 되는 오류도 있나요?')
-    }
+    // 쓰던 초안이 있으면 바꾸기 전에 묻는다(F6-14b·F6-14bm). 취소하면 초안을 그대로 둔다
+    await input(panel).fill('그럼 멱등성은 뭐야?')
+    await panel.getByRole('button', { name: '중단한 질문 다시 넣기' }).click()
+    const confirm = panel.getByRole('group', { name: '쓰던 내용을 중단한 질문으로 바꿀까요?' })
+    await expect(confirm).toBeVisible()
+    await expect(confirm.getByText('‘그럼 멱등성은 뭐야?’')).toBeVisible()
+    await expect(confirm.getByText('‘재시도하면 안 되는 오류도 있나요?’')).toBeVisible()
+    await expect(panel.getByLabel('이어서 질문하기 · 쓰던 내용은 그대로 남아요')).toBeVisible()
+    await shot(page, testInfo, `${device === 'PC' ? 'F6-14b' : 'F6-14bm'} 다시 넣기 확인`)
+    await confirm.getByRole('button', { name: '취소' }).click()
+    await expect(input(panel)).toHaveValue('그럼 멱등성은 뭐야?')
+    await panel.getByRole('button', { name: '중단한 질문 다시 넣기' }).click()
+    await panel.getByRole('button', { name: '바꾸기' }).click()
+    await expect(input(panel)).toHaveValue('재시도하면 안 되는 오류도 있나요?')
     expect(await requests(page)).toContain('POST /api/ai/turns/:id/cancel')
   })
 
@@ -254,23 +253,22 @@ for (const [device, viewport] of [['PC', PC], ['모바일', MOBILE]] as const) {
     await sendFree(panel, '재시도 간격은 어떻게 정하나요?')
     // AC-3: 보내려던 질문이 입력 칸에 돌아온다(F6-17 '쓰던 내용은 아래 칸에 남겨 두었어요')
     await expect(input(panel)).toHaveValue('재시도 간격은 어떻게 정하나요?')
-    if (device === 'PC') {
-      const alert = panel.getByRole('alert')
-      await expect(alert.getByText('오류: 지금은 AI 답변을 요청할 수 없어요.')).toBeVisible()
-      await expect(alert.getByText('쓰던 내용은 아래 칸에 남겨 두었어요. 노트는 계속 읽을 수 있어요.')).toBeVisible()
-      await expect(panel.getByLabel('이어서 질문하기 · 다시 확인하기 전에는 보내기를 쓸 수 없어요')).toBeVisible()
-      await expect(send(panel)).toHaveAttribute('aria-disabled', 'true')
-      await shot(page, testInfo, 'F6-17 사용 제한')
-      const before = (await requests(page)).length
-      await alert.getByRole('button', { name: '다시 확인' }).click()
-      await expect(panel.getByRole('alert')).toHaveCount(0)
-      await expect(send(panel)).not.toHaveAttribute('aria-disabled', 'true')
-      expect((await requests(page)).length).toBe(before)
-    } else {
-      // 모바일 사용 제한 보드가 없어(결정 8) 안내 카드는 그리지 않는다(MEG-263). 질문은 입력 칸에 남는다.
-      await expect(panel.getByText('오류: 지금은 AI 답변을 요청할 수 없어요.')).toHaveCount(0)
-      await shot(page, testInfo, 'mobile-limit 모바일 사용 제한(보드 없음, 카드 미표시)')
-    }
+    // F6-17·F6-17m: 안내 카드와 보내기 잠금
+    const alert = panel.getByRole('alert')
+    await expect(alert.getByText('오류: 지금은 AI 답변을 요청할 수 없어요.')).toBeVisible()
+    await expect(alert.getByText('쓰던 내용은 아래 칸에 남겨 두었어요. 노트는 계속 읽을 수 있어요.')).toBeVisible()
+    await expect(alert.getByRole('button', { name: '노트 계속 읽기' })).toBeVisible()
+    await expect(panel.getByLabel('이어서 질문하기 · 다시 확인하기 전에는 보내기를 쓸 수 없어요')).toBeVisible()
+    await expect(send(panel)).toHaveAttribute('aria-disabled', 'true')
+    await shot(page, testInfo, `${device === 'PC' ? 'F6-17' : 'F6-17m'} 사용 제한`)
+    const before = (await requests(page)).length
+    // 다시 확인 전에는 눌러도 보내지 않는다
+    await send(panel).click({ force: true })
+    expect((await requests(page)).length).toBe(before)
+    await alert.getByRole('button', { name: '다시 확인' }).click()
+    await expect(panel.getByRole('alert')).toHaveCount(0)
+    await expect(send(panel)).not.toHaveAttribute('aria-disabled', 'true')
+    expect((await requests(page)).length).toBe(before)
   })
 }
 
@@ -458,7 +456,7 @@ test('리뷰: PC와 모바일 폭을 오가도 입력 칸의 포커스가 남는
   await expect(input(panel)).toBeFocused()
 })
 
-test('리뷰: 모바일에서 답변 뒤 사용 제한이 와도 대화 영역이 비지 않는다', async ({ page }) => {
+test('리뷰: 모바일에서 답변 뒤 사용 제한이 오면 앞 대화는 \'이전 대화 보기\' 뒤로 접고 안내를 보인다(F6-17m)', async ({ page }, testInfo) => {
   await login(page, MOBILE)
   const panel = await openPanel(page)
   await mock(page, 'answered', 20)
@@ -467,6 +465,12 @@ test('리뷰: 모바일에서 답변 뒤 사용 제한이 와도 대화 영역�
   await mock(page, 'ai_limit_reached')
   await sendFree(panel, '두 번째 질문')
   await expect(input(panel)).toHaveValue('두 번째 질문')
+  await expect(panel.getByRole('alert').getByText('오류: 지금은 AI 답변을 요청할 수 없어요.')).toBeVisible()
+  await expect(panel.getByRole('button', { name: /^이전 대화 보기 · ‘UnknownWord 는 사전에 없습’ 자세히 설명$/ })).toBeVisible()
+  // 질문 글은 입력 칸에 돌아왔으므로 질문 줄은 다시 보이지 않는다(보드와 같음)
+  await expect(panel.locator('p').getByText('두 번째 질문', { exact: true })).toHaveCount(0)
+  await shot(page, testInfo, 'F6-17m-after 답변 뒤 사용 제한')
+  await panel.getByRole('button', { name: /^이전 대화 보기/ }).click()
   await expect(panel.getByRole('group', { name: 'AI 생성' })).toBeVisible()
 })
 

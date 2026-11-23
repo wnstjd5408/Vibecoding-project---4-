@@ -191,6 +191,8 @@
 
 /* 긴 대화의 '새 답변 보기'(F6-10) */
 .newAnswerBar { display: flex; justify-content: center; margin-top: calc(var(--space-6) * -1 - 44px); padding-bottom: var(--space-4); position: relative; z-index: 1; pointer-events: none; }
+/* 모바일(F6-10m)은 대화 영역의 안쪽 여백이 space-4라 같은 만큼만 끌어올린다 */
+.mobileBody + .newAnswerBar { margin-top: calc(var(--space-4) * -1 - 44px); }
 .newAnswer { pointer-events: auto; display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 var(--space-4); border: 1px solid var(--ink); border-radius: var(--radius-pill); background: var(--surface-200); color: var(--ink); font: inherit; font-size: 13px; line-height: 18px; font-weight: 600; cursor: pointer; }
 
 /* 출처 보기(F6-4 패널 쪽, F6-9 모바일) */
