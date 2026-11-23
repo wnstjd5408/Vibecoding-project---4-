@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { goInApp } from './inApp.ts'
 
 // MEG-260 CS Agent 예외 상태 화면(T6d). 화면 목록 13~20번을 가짜 API(src/api/mocks/agent.ts)로 띄운다. 모델은 부르지 않는다.
-// 모바일은 기존 보드가 있던 상태(F6-8m·F6-11m·F6-13m·F6-15m)만 본다. MEG-262에서 새로 그린 모바일 보드의 상태는 T6g(MEG-263)다.
+// 모바일은 기존 보드가 있던 상태(F6-8m·F6-11m·F6-13m·F6-15m)만 본다. MEG-262에서 새로 그린 모바일 보드의 상태는 agentMobileBoards.spec.ts(MEG-263)가 본다.
 // 노출 중단 플래그를 끈 빌드(playwright.config.ts의 agent-enabled)에서 돈다. 노트 선택 버튼이 'AI에게 질문'이다(MEG-259).
 // AGENT_SHOT_DIR을 주면 스크린샷을 '보드 ID.png'로 저장한다(AC-1, 캔버스 보드와 나란히 PR에 붙인다).
 
@@ -339,24 +339,6 @@ test('PC: 다른 문장으로 새 대화를 고르면 질문 준비 화면이 �
   await expect(panel.getByText(`선택: ‘${OTHER}’`)).toBeVisible()
   await expect(panel.getByText(`선택: ‘${SELECTED}’`)).toHaveCount(0)
   await expect(aiBox(panel)).toHaveCount(0)
-})
-
-test('모바일: 근거 일부·근거 없음·주제 전환·출처 회수는 T6g 전까지 카드 없이 질문만 보이고 보내기를 잠그지 않는다', async ({ page }) => {
-  await login(page, MOBILE)
-  const panel = await openPanel(page)
-  await firstAnswer(page, panel, 'no_evidence')
-  await expect(panel.getByText('이 부분을 자세히 설명해 줘.')).toBeVisible()
-  await expect.poll(async () => (await turnBodies(page)).length).toBe(1)
-  await expect(panel.getByText('참고할 수 있는 노트 자료를 찾지 못했어요.')).toHaveCount(0)
-  await expect(panel.getByRole('button', { name: '중단', exact: true })).toHaveCount(0, { timeout: 10_000 })
-  await mock(page, 'topic_check')
-  await input(panel).fill('다른 주제 질문')
-  await send(panel).click()
-  await expect(panel.getByText('다른 주제 질문', { exact: true })).toBeVisible()
-  await expect(panel.getByRole('button', { name: '중단', exact: true })).toHaveCount(0, { timeout: 10_000 })
-  await expect(panel.getByRole('button', { name: '새 대화로 질문' })).toHaveCount(0)
-  await input(panel).fill('또 다른 질문')
-  await expect(send(panel)).not.toHaveAttribute('aria-disabled', 'true')
 })
 
 // --- 리뷰 지적 재현(MEG-260 PR 전 리뷰) ---

@@ -2,16 +2,16 @@
 //  - PC(1024px 이상): 오른쪽 480px 패널. 모달이 아니라서 노트를 계속 읽고 고를 수 있다(F6-1~F6-19).
 //  - 모바일: 전체 높이 대화 화면(모달). 노트 화면은 뒤에 그대로 있어 닫으면 읽던 위치로 돌아간다(F6-1m~F6-18m).
 //  - 대화 상태는 노트 화면(NoteReadPage)이 useAgentConversation으로 가진다. 이 패널은 상태를 그리기만 하고, 닫아도 대화와 초안은 남는다.
-//  - 모바일 보드가 없는 상태(지연 안내, 단계 없는 준비 중, 긴 답변의 '새 답변 보기', 다시 넣기 확인, 사용 제한)는 모바일에서 그리지 않는다
-//    (2026-11-20 결정 8, MEG-262 디자인 → MEG-263에서 반영).
 //  - 예외 상태(MEG-260, T6d): 의미 확인(F6-11·F6-11m), 근거 일부만 확인(F6-12), 근거 없음(F6-12b), 확인된 교정(F6-13·F6-13m),
 //    주제 전환 확인(F6-20), 다른 영역 선택(F6-8·F6-8m), 노트 접근 변경(F6-15·F6-15m), 출처만 권한 회수(F6-15b).
-//    MEG-262에서 새로 그린 모바일 보드(F6-12m·F6-12bm·F6-15bm·F6-20m)의 상태는 T6g(MEG-263)가 반영한다. 그 전까지 모바일은 질문만 보인다.
+//  - 모바일 보충 보드(MEG-262 디자인, Version 102 승인 → MEG-263 반영): 단계 없는 준비 중(F6-2m), 응답 지연(F6-19m), 긴 대화 '새 답변 보기'(F6-10m),
+//    주제 전환 확인(F6-20m), 근거 일부만 확인(F6-12m), 근거 없음(F6-12bm), 다시 넣기 확인(F6-14bm), 출처만 권한 회수(F6-15bm),
+//    그림 표시 실패(F6-16m), 사용 제한(F6-17m). 모두 'PC와 같은 규칙'이라 PC와 같은 상태·카드를 모바일 머리와 입력 칸 안에 그린다.
 //  - PC 보기 전환(MEG-261, T6f): 패널(F6-3), 떠 있는 창(F6-3f), 전체 화면(F6-3x). 같은 dialog의 모양만 바꾸므로 대화·초안·스크롤이 그대로 남는다.
 //  - 다시 답하기 화면과 버튼은 만들지 않는다(MEG-228, spec 부록 A).
 //  - 새 질문 입구가 닫히면(closed: 노출 중단 플래그·503, MEG-259) 입력 칸·빠른 질문·추천 질문·'새 대화'·'중단한 질문 다시 넣기'를 숨긴다.
 //    지금 대화, 이전 대화 보기, 출처 보기, 진행 중인 답변의 중단은 그대로 둔다(E28·E30·E31·E32는 플래그와 무관하다).
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { Link } from 'react-router'
 import { AiBadge, Button } from '../components/index.ts'
@@ -176,8 +176,17 @@ export function AgentPanel(props: AgentPanelProps) {
 
   // Esc: 출처 보기면 대화로 돌아가고, 전체 화면이면 패널로 돌아가고(14.5 AI 제안), 아니면(패널·떠 있는 창) 닫고 진입점으로 돌아간다.
   // 모달(모바일)은 cancel 이벤트로, PC는 문서의 keydown으로 듣는다.
+  // 다시 넣기 확인 카드(F6-14b·F6-14bm)가 열려 있으면 그 카드만 닫는다. 모바일 뒤로 가기(Android 뒤로 버튼·제스처)는 keydown 없이
+  // dialog의 cancel로만 오므로 카드의 keydown 처리로는 막을 수 없다.
+  const escapeOverride = useRef<(() => void) | null>(null)
+  // 카드가 Esc·뒤로 가기를 가져간다. 돌려받는 함수를 준다(다른 카드가 이미 가져갔으면 건드리지 않는다).
+  const claimEscape = useCallback((handler: () => void) => {
+    escapeOverride.current = handler
+    return () => { if (escapeOverride.current === handler) escapeOverride.current = null }
+  }, [])
   const onEscape = () => {
-    if (latest.current.source) latest.current.onCloseSource()
+    if (escapeOverride.current) escapeOverride.current()
+    else if (latest.current.source) latest.current.onCloseSource()
     else if (latest.current.mode === 'fullscreen') latest.current.onView('panel')
     else latest.current.onClose()
   }
@@ -241,20 +250,19 @@ export function AgentPanel(props: AgentPanelProps) {
 
   const entries: Entry[] = state.turns.map((turn) => ({ kind: 'turn', key: turn.turn_id, turn }))
   if (pending) entries.push({ kind: 'pending', key: 'pending', pending })
-  // 모바일 사용 제한 보드가 없어(결정 8) 모바일에서는 사용 제한을 대화 항목으로 넣지 않는다. 넣으면 빈 항목이 앞 답변을 가린다.
-  else if (failure?.question && !(limitLike && !wide)) entries.push({ kind: 'failure', key: 'failure', failure })
+  else if (failure?.question) entries.push({ kind: 'failure', key: 'failure', failure })
   const lastEntry = entries.at(-1)
   const latestTurn = lastEntry?.kind === 'turn' && !lastEntry.turn.hidden ? lastEntry.turn : null
   const latestState = latestTurn?.status === 'completed' ? latestTurn.result?.state : undefined
   // 대화 중에 노트에서 새로 고른 문장(F6-8). 대화를 시작하기 전이면 노트 화면이 선택 문맥으로 바로 넣는다.
   // 새 질문 입구가 닫혔으면(MEG-259) 묻지 않는다. 추가·새 대화 모두 새 질문을 보내는 동작이다.
   const candidate = fresh || closed ? null : ui.candidate
-  // 주제 전환 확인 카드(F6-20). 모바일 보드(F6-20m)는 T6g(MEG-263)에서 반영한다.
-  const topicCheck = wide && latestState === 'topic_check'
+  // 주제 전환 확인 카드(F6-20·F6-20m)
+  const topicCheck = latestState === 'topic_check'
 
-  // 보내기 잠금: 생성 중, 다시 시도 전의 요청 실패(F6-6p), 다시 확인 전의 사용 제한(F6-17, 모바일 보드 없음),
-  // 고르기 전의 확인 카드(주제 전환 F6-20 결정 38, 다른 영역 선택 F6-8)
-  const failureLock = failure !== null && (limitLike ? wide : isRetryable(failure))
+  // 보내기 잠금: 생성 중, 다시 시도 전의 요청 실패(F6-6p·F6-6), 다시 확인 전의 사용 제한(F6-17·F6-17m),
+  // 고르기 전의 확인 카드(주제 전환 F6-20·F6-20m 결정 38, 다른 영역 선택 F6-8·F6-8m)
+  const failureLock = failure !== null && (limitLike || isRetryable(failure))
   const choiceLock = topicCheck || candidate !== null
   // 새 질문 입구가 닫혔으면(노출 중단 플래그·503, MEG-259) 보내지 않는다.
   const locked = pending !== null || failureLock || choiceLock || closed
@@ -279,7 +287,7 @@ export function AgentPanel(props: AgentPanelProps) {
     body.scrollTop = first ? Math.max(0, first.offsetTop - body.offsetTop) : 0
   }, [hiddenKey])
 
-  // 긴 대화(F6-10): 맨 아래를 보고 있을 때만 새 내용을 따라간다. 위에서 읽고 있으면 옮기지 않고 '새 답변 보기'를 띄운다(PC만).
+  // 긴 대화(F6-10·F6-10m): 맨 아래를 보고 있을 때만 새 내용을 따라간다. 위에서 읽고 있으면 옮기지 않고 '새 답변 보기'를 띄운다.
   const [atBottom, setAtBottom] = useState(true)
   const [unseen, setUnseen] = useState(false)
   const bottomRef = useRef(true)
@@ -315,7 +323,7 @@ export function AgentPanel(props: AgentPanelProps) {
     if (bottomRef.current) body.scrollTop = body.scrollHeight
     onScroll()
   }, [mode, sourceOpen])
-  const showNewAnswer = wide && !sourceOpen && !atBottom && (unseen || (pending !== null && !collapsed))
+  const showNewAnswer = !sourceOpen && !atBottom && (unseen || (pending !== null && !collapsed))
 
   // --- 동작 ---
 
@@ -445,9 +453,8 @@ export function AgentPanel(props: AgentPanelProps) {
     : fresh ? M.labelFirst
     : candidate ? M.labelNext
     : latestState === 'clarify' ? M.labelClarify
-    // 근거 일부·근거 없음의 모바일 보드(F6-12m·F6-12bm)는 T6g(MEG-263)에서 반영한다.
-    : wide && latestState === 'partial' ? M.labelPartial
-    : wide && latestState === 'no_evidence' ? M.labelNoEvidence
+    : latestState === 'partial' ? M.labelPartial
+    : latestState === 'no_evidence' ? M.labelNoEvidence
     : M.labelNext
 
   // 패널 머리 버튼은 대화 상태와 관계없이 늘 같다(MEG-261). 보기 전환 두 개 + 새 대화 + 닫기, 지금 보기의 버튼만 빠진다(결정 44, 14.5 AI 제안).
@@ -543,7 +550,7 @@ export function AgentPanel(props: AgentPanelProps) {
           </div>
         : null}
       <div ref={bodyRef} className={wide ? styles.body : styles.mobileBody} hidden={sourceOpen} onScroll={onScroll}
-        {...(wide && ui.expanded && entries.length > 1 ? { role: 'log', 'aria-label': M.log, tabIndex: 0 } : {})}>
+        {...(ui.expanded && entries.length > 1 ? { role: 'log', 'aria-label': M.log, tabIndex: 0 } : {})}>
         {fresh
           ? (closed ? null : <AskIntro disabled={!hasSelection} onPreset={(preset) => ask({ kind: 'preset', preset })} />)
           : <>
@@ -555,7 +562,7 @@ export function AgentPanel(props: AgentPanelProps) {
                 <EntryView entry={entry} latest={entry.key === lastKey} wide={wide} state={state} controller={controller}
                   hasSelection={hasSelection} locked={locked} closed={closed} draft={ui.draft} onRetry={retry}
                   onDraft={(draft) => { onUi({ draft }); focusInput() }} onAsk={ask} onSource={openSource} onClose={onClose} onFocusInput={focusInput}
-                  firstHidden={entry.kind === 'turn' && firstHidden.has(entry.turn.turn_id)} onAskAgain={askAgain}
+                  firstHidden={entry.kind === 'turn' && firstHidden.has(entry.turn.turn_id)} onAskAgain={askAgain} claimEscape={claimEscape}
                   onNewConversationAsk={askInNewConversation} />
               </div>)}
               {candidate
@@ -650,6 +657,8 @@ type EntryProps = {
   firstHidden: boolean
   onAskAgain: (turn: AgentTurn) => void
   onNewConversationAsk: (question: AskQuestion) => void
+  // 열려 있는 확인 카드가 Esc·뒤로 가기를 먼저 받는 자리(다시 넣기 확인)
+  claimEscape: (handler: () => void) => () => void
 }
 
 function Question({ question }: { question: Pick<AgentQuestion, 'kind' | 'text' | 'preset'> }) {
@@ -663,21 +672,21 @@ function Question({ question }: { question: Pick<AgentQuestion, 'kind' | 'text' 
 
 function EntryView(props: EntryProps) {
   const { entry } = props
-  if (entry.kind === 'pending') return <PendingView pending={entry.pending} wide={props.wide} hasSelection={props.hasSelection} />
+  if (entry.kind === 'pending') return <PendingView pending={entry.pending} hasSelection={props.hasSelection} />
   if (entry.kind === 'failure') return <FailureView {...props} failure={entry.failure} />
   return <TurnView {...props} turn={entry.turn} />
 }
 
-// S2 준비 중(F6-2)과 AI 추론 단계(F6-2b·F6-2bm), 응답 지연(F6-19). 끊긴 뒤 E30으로 결과를 받는 동안도 같은 화면이다(화면 목록 5번).
-function PendingView({ pending, wide, hasSelection }: { pending: PendingTurn; wide: boolean; hasSelection: boolean }) {
+// S2 준비 중(F6-2·F6-2m)과 AI 추론 단계(F6-2b·F6-2bm), 응답 지연(F6-19·F6-19m). 끊긴 뒤 E30으로 결과를 받는 동안도 같은 화면이다(화면 목록 5번).
+function PendingView({ pending, hasSelection }: { pending: PendingTurn; hasSelection: boolean }) {
   const badgeId = useId()
   const stepsId = useId()
   const steps = pending.steps
   const current = steps.find((step) => step.state === 'current') ?? null
-  const delayed = wide && pending.delayed
+  const delayed = pending.delayed
   return <>
     <Question question={pending.question} />
-    {wide && steps.length === 0
+    {steps.length === 0
       ? <>
           <span id={badgeId}><AiBadge>{M.aiBadge}</AiBadge></span>
           <div role="group" aria-labelledby={badgeId} className={styles.aiBox}>
@@ -714,8 +723,8 @@ function stepDetail(step: StepView, hasSelection: boolean): string {
   return M.stepDone
 }
 
-// S8 요청 실패(F6-6p·F6-6)와 S12 사용 제한(F6-17). 질문은 남기고, 쓰던 초안은 입력 칸에 그대로 둔다(AC-3).
-function FailureView({ failure, wide, controller, draft, onRetry, onClose, onFocusInput }: EntryProps & { failure: AgentFailure }) {
+// S8 요청 실패(F6-6p·F6-6)와 S12 사용 제한(F6-17·F6-17m). 질문은 남기고, 쓰던 초안은 입력 칸에 그대로 둔다(AC-3).
+function FailureView({ failure, controller, draft, onRetry, onClose, onFocusInput }: EntryProps & { failure: AgentFailure }) {
   // 503(노출 중단, MEG-259): 질문은 남기고, 새 질문을 받을 수 없다고 알린다. 지금 대화는 계속 읽을 수 있다. 보드가 없어 PC·모바일이 같다.
   if (isUnavailable(failure)) {
     return <>
@@ -734,16 +743,14 @@ function FailureView({ failure, wide, controller, draft, onRetry, onClose, onFoc
     const inDraft = failure.question !== null && draft.trim() !== '' && draft.trim() === questionText(failure.question).trim()
     return <>
       {inDraft ? null : <Question question={failure.question ?? { kind: 'free' }} />}
-      {wide
-        ? <div role="alert" className={styles.alertBox}>
-            <p className={styles.noticeTitle}>{M.limited}</p>
-            <p className={styles.noticeText}>{M.limitedHelp}</p>
-            <div className={styles.actions}>
-              <Button variant="primary" onClick={() => { controller.dismissFailure(); onFocusInput() }}>{M.recheck}</Button>
-              <Button onClick={onClose}>{M.keepReading}</Button>
-            </div>
-          </div>
-        : null}
+      <div role="alert" className={styles.alertBox}>
+        <p className={styles.noticeTitle}>{M.limited}</p>
+        <p className={styles.noticeText}>{M.limitedHelp}</p>
+        <div className={styles.actions}>
+          <Button variant="primary" onClick={() => { controller.dismissFailure(); onFocusInput() }}>{M.recheck}</Button>
+          <Button onClick={onClose}>{M.keepReading}</Button>
+        </div>
+      </div>
     </>
   }
   const retryable = isRetryable(failure)
@@ -765,16 +772,15 @@ function FailureView({ failure, wide, controller, draft, onRetry, onClose, onFoc
 }
 
 function TurnView(props: EntryProps & { turn: AgentTurn }) {
-  const { turn, latest, locked, closed, wide, onAsk, onSource, onClose } = props
+  const { turn, latest, locked, closed, onAsk, onSource, onClose } = props
   const badgeId = useId()
   if (turn.status === 'cancelled') return <StoppedView {...props} />
-  // 가린 턴은 답변·출처·추천 질문을 그리지 않는다(AC-2). 서버도 result를 빼고 보낸다. 모바일 보드(F6-15bm)는 T6g(MEG-263)다.
+  // 가린 턴은 답변·출처·추천 질문을 그리지 않는다(AC-2). 서버도 result를 빼고 보낸다(F6-15b·F6-15bm).
   if (turn.hidden) return <HiddenView {...props} />
   const state = turn.status === 'completed' ? turn.result?.state : undefined
   if (state === 'clarify') return <ClarifyView {...props} result={turn.result as ClarifyResult} />
-  // 근거 없음(F6-12b)과 주제 전환 확인(F6-20)의 모바일 보드는 T6g(MEG-263)에서 반영한다. 그 전까지 모바일은 질문만 보인다.
-  if (state === 'no_evidence') return wide ? <NoEvidenceView {...props} /> : <Question question={turn.question} />
-  if (state === 'topic_check') return wide ? <TopicCheckView {...props} /> : <Question question={turn.question} />
+  if (state === 'no_evidence') return <NoEvidenceView {...props} />
+  if (state === 'topic_check') return <TopicCheckView {...props} />
   const result = sectionsOf(turn.result)
   const sources: AgentSource[] = result?.sources ?? []
   const suggestions = latest && result && !closed ? (result.suggestions ?? []).slice(0, 3) : []
@@ -787,8 +793,8 @@ function TurnView(props: EntryProps & { turn: AgentTurn }) {
           <div role="group" aria-labelledby={badgeId} className={styles.aiBox}>
             <AiAnswer sections={result.sections} figures={figuresOf(result.figures)} sources={sources} onSource={openRef} />
             {result.state === 'correction' ? <CorrectionParts result={result} sources={sources} onSource={openRef} /> : null}
-            {/* 근거 일부만 확인(F6-12). 한계 문장에는 인용을 붙이지 않는다. 모바일 보드(F6-12m)는 T6g(MEG-263)다. */}
-            {result.state === 'partial' && wide && result.limitation
+            {/* 근거 일부만 확인(F6-12·F6-12m). 한계 문장에는 인용을 붙이지 않는다. */}
+            {result.state === 'partial' && result.limitation
               ? <>
                   <h3 className={styles.partHeading}>{M.partialUnconfirmed}</h3>
                   <p className={styles.partText}>{result.limitation}</p>
@@ -811,7 +817,7 @@ function TurnView(props: EntryProps & { turn: AgentTurn }) {
                 </div>
               </>
             : null}
-          {result.state === 'partial' && wide && latest ? <button type="button" className={styles.linkButton} onClick={onClose}>{M.backToNote}</button> : null}
+          {result.state === 'partial' && latest ?<button type="button" className={styles.linkButton} onClick={onClose}>{M.backToNote}</button> : null}
         </>
       : null}
   </>
@@ -867,7 +873,7 @@ function ClarifyView({ turn, result, latest, locked, onAsk }: EntryProps & { tur
   </>
 }
 
-// S5 근거 없음·무관(F6-12b). AI가 답변을 만들지 않은 서버 고정 안내라 AI 생성 표시와 인용이 없다(결정 4·16).
+// S5 근거 없음·무관(F6-12b·F6-12bm). AI가 답변을 만들지 않은 서버 고정 안내라 AI 생성 표시와 인용이 없다(결정 4·16).
 function NoEvidenceView({ turn, latest, onClose }: EntryProps & { turn: AgentTurn }) {
   return <>
     <Question question={turn.question} />
@@ -879,7 +885,7 @@ function NoEvidenceView({ turn, latest, onClose }: EntryProps & { turn: AgentTur
   </>
 }
 
-// 주제 전환 확인(F6-20, 결정 38·40). 고르기 전에는 답변을 만들지 않고 보내기를 잠근다(AC-3). 카드가 뜨면 포커스를 카드 제목으로 옮긴다.
+// 주제 전환 확인(F6-20·F6-20m, 결정 38·40). 고르기 전에는 답변을 만들지 않고 보내기를 잠근다(AC-3). 카드가 뜨면 포커스를 카드 제목으로 옮긴다.
 function TopicCheckView({ turn, latest, state, closed, onAsk, onNewConversationAsk, onClose }: EntryProps & { turn: AgentTurn }) {
   const titleRef = useRef<HTMLParagraphElement>(null)
   const titleId = useId()
@@ -911,9 +917,9 @@ function TopicCheckView({ turn, latest, state, closed, onAsk, onNewConversationA
   </>
 }
 
-// S9 변형: 출처만 권한 회수(F6-15b, 결정 7·11·15·17). 답변·출처·추천 질문은 그리지 않고 질문만 남긴다.
+// S9 변형: 출처만 권한 회수(F6-15b·F6-15bm, 결정 7·11·15·17). 답변·출처·추천 질문은 그리지 않고 질문만 남긴다.
 // 처음 영향받은 턴에 가림 안내와 '같은 질문 다시 하기'를 두고, 뒤쪽 턴은 함께 가렸다는 안내만 둔다. 뒤쪽 질문은 자동으로 다시 보내지 않는다.
-function HiddenView({ turn, wide, locked, closed, firstHidden, onAskAgain }: EntryProps & { turn: AgentTurn }) {
+function HiddenView({ turn, locked, closed, firstHidden, onAskAgain }: EntryProps & { turn: AgentTurn }) {
   const textless = questionText(turn.question) === ''
   const question = textless
     ? <>
@@ -921,7 +927,6 @@ function HiddenView({ turn, wide, locked, closed, firstHidden, onAskAgain }: Ent
         <p className={styles.hiddenText}>{M.hiddenSuggested}</p>
       </>
     : <Question question={turn.question} />
-  if (!wide) return question
   // 새 질문 입구가 닫혔으면(MEG-259) 다시 묻기도 새 질문이라 두지 않는다.
   const canAskAgain = turn.hidden?.retry_allowed === true && !closed
   return <>
@@ -961,21 +966,27 @@ function CandidateCard({ candidate, newLocked, onAdd, onNew, wide, canAdd }: { c
   </div>
 }
 
-// S7 중단(F6-14·F6-14b·F6-14m). 받다 만 답변은 숨기고, '중단한 질문 다시 넣기'로 질문을 입력 칸에 되돌린다(결정 1·5·12·13).
-function StoppedView({ turn, latest, wide, state, closed, draft, onDraft, onClose, onFocusInput }: EntryProps & { turn: AgentTurn }) {
+// S7 중단(F6-14·F6-14b·F6-14m·F6-14bm). 받다 만 답변은 숨기고, '중단한 질문 다시 넣기'로 질문을 입력 칸에 되돌린다(결정 1·5·12·13).
+function StoppedView({ turn, latest, wide, state, closed, draft, onDraft, onClose, onFocusInput, claimEscape }: EntryProps & { turn: AgentTurn }) {
   const [confirm, setConfirm] = useState(false)
   const confirmTitle = useRef<HTMLParagraphElement>(null)
   const confirmId = useId()
   const canReinsert = latest && !closed && state.cancelled?.turnId === turn.turn_id
   const question = questionText(state.cancelled?.question ?? turn.question)
   const hasDraft = draft.trim() !== ''
+  const cardOpen = canReinsert && confirm
   useEffect(() => {
     if (confirm) confirmTitle.current?.focus({ preventScroll: true })
   }, [confirm])
+  // 카드가 보이는 동안 패널의 Esc·뒤로 가기는 카드만 닫는다(취소와 같다).
+  useEffect(() => {
+    if (!cardOpen) return
+    return claimEscape(() => { setConfirm(false); onFocusInput() })
+  }, [cardOpen, claimEscape, onFocusInput])
   const reinsert = () => {
     if (!hasDraft) return onDraft(question)
-    // 쓰던 초안이 있으면 바꾸기 전에 묻는다(F6-14b). 모바일 확인 보드는 아직 없어(결정 8) 모바일에서는 버튼을 잠근다.
-    if (wide) setConfirm(true)
+    // 쓰던 초안이 있으면 바꾸기 전에 묻는다(F6-14b·F6-14bm).
+    setConfirm(true)
   }
   return <>
     <Question question={turn.question} />
@@ -985,7 +996,7 @@ function StoppedView({ turn, latest, wide, state, closed, draft, onDraft, onClos
         ? <>
             <p className={styles.noticeText}>{M.stoppedHidden}</p>
             <div className={styles.actions}>
-              <Button aria-disabled={hasDraft && !wide ? true : undefined} onClick={reinsert}>{M.reinsert}</Button>
+              <Button onClick={reinsert}>{M.reinsert}</Button>
             </div>
             <p className={styles.hintSmall}>{M.reinsertHint}</p>
           </>
