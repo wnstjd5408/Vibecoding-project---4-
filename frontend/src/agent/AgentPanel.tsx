@@ -11,7 +11,7 @@
 //  - 다시 답하기 화면과 버튼은 만들지 않는다(MEG-228, spec 부록 A).
 //  - 새 질문 입구가 닫히면(closed: 노출 중단 플래그·503, MEG-259) 입력 칸·빠른 질문·추천 질문·'새 대화'·'중단한 질문 다시 넣기'를 숨긴다.
 //    지금 대화, 이전 대화 보기, 출처 보기, 진행 중인 답변의 중단은 그대로 둔다(E28·E30·E31·E32는 플래그와 무관하다).
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { Link } from 'react-router'
 import { AiBadge, Button } from '../components/index.ts'
@@ -176,8 +176,17 @@ export function AgentPanel(props: AgentPanelProps) {
 
   // Esc: 출처 보기면 대화로 돌아가고, 전체 화면이면 패널로 돌아가고(14.5 AI 제안), 아니면(패널·떠 있는 창) 닫고 진입점으로 돌아간다.
   // 모달(모바일)은 cancel 이벤트로, PC는 문서의 keydown으로 듣는다.
+  // 다시 넣기 확인 카드(F6-14b·F6-14bm)가 열려 있으면 그 카드만 닫는다. 모바일 뒤로 가기(Android 뒤로 버튼·제스처)는 keydown 없이
+  // dialog의 cancel로만 오므로 카드의 keydown 처리로는 막을 수 없다.
+  const escapeOverride = useRef<(() => void) | null>(null)
+  // 카드가 Esc·뒤로 가기를 가져간다. 돌려받는 함수를 준다(다른 카드가 이미 가져갔으면 건드리지 않는다).
+  const claimEscape = useCallback((handler: () => void) => {
+    escapeOverride.current = handler
+    return () => { if (escapeOverride.current === handler) escapeOverride.current = null }
+  }, [])
   const onEscape = () => {
-    if (latest.current.source) latest.current.onCloseSource()
+    if (escapeOverride.current) escapeOverride.current()
+    else if (latest.current.source) latest.current.onCloseSource()
     else if (latest.current.mode === 'fullscreen') latest.current.onView('panel')
     else latest.current.onClose()
   }
@@ -553,7 +562,7 @@ export function AgentPanel(props: AgentPanelProps) {
                 <EntryView entry={entry} latest={entry.key === lastKey} wide={wide} state={state} controller={controller}
                   hasSelection={hasSelection} locked={locked} closed={closed} draft={ui.draft} onRetry={retry}
                   onDraft={(draft) => { onUi({ draft }); focusInput() }} onAsk={ask} onSource={openSource} onClose={onClose} onFocusInput={focusInput}
-                  firstHidden={entry.kind === 'turn' && firstHidden.has(entry.turn.turn_id)} onAskAgain={askAgain}
+                  firstHidden={entry.kind === 'turn' && firstHidden.has(entry.turn.turn_id)} onAskAgain={askAgain} claimEscape={claimEscape}
                   onNewConversationAsk={askInNewConversation} />
               </div>)}
               {candidate
@@ -648,6 +657,8 @@ type EntryProps = {
   firstHidden: boolean
   onAskAgain: (turn: AgentTurn) => void
   onNewConversationAsk: (question: AskQuestion) => void
+  // 열려 있는 확인 카드가 Esc·뒤로 가기를 먼저 받는 자리(다시 넣기 확인)
+  claimEscape: (handler: () => void) => () => void
 }
 
 function Question({ question }: { question: Pick<AgentQuestion, 'kind' | 'text' | 'preset'> }) {
@@ -956,16 +967,22 @@ function CandidateCard({ candidate, newLocked, onAdd, onNew, wide, canAdd }: { c
 }
 
 // S7 중단(F6-14·F6-14b·F6-14m·F6-14bm). 받다 만 답변은 숨기고, '중단한 질문 다시 넣기'로 질문을 입력 칸에 되돌린다(결정 1·5·12·13).
-function StoppedView({ turn, latest, wide, state, closed, draft, onDraft, onClose, onFocusInput }: EntryProps & { turn: AgentTurn }) {
+function StoppedView({ turn, latest, wide, state, closed, draft, onDraft, onClose, onFocusInput, claimEscape }: EntryProps & { turn: AgentTurn }) {
   const [confirm, setConfirm] = useState(false)
   const confirmTitle = useRef<HTMLParagraphElement>(null)
   const confirmId = useId()
   const canReinsert = latest && !closed && state.cancelled?.turnId === turn.turn_id
   const question = questionText(state.cancelled?.question ?? turn.question)
   const hasDraft = draft.trim() !== ''
+  const cardOpen = canReinsert && confirm
   useEffect(() => {
     if (confirm) confirmTitle.current?.focus({ preventScroll: true })
   }, [confirm])
+  // 카드가 보이는 동안 패널의 Esc·뒤로 가기는 카드만 닫는다(취소와 같다).
+  useEffect(() => {
+    if (!cardOpen) return
+    return claimEscape(() => { setConfirm(false); onFocusInput() })
+  }, [cardOpen, claimEscape, onFocusInput])
   const reinsert = () => {
     if (!hasDraft) return onDraft(question)
     // 쓰던 초안이 있으면 바꾸기 전에 묻는다(F6-14b·F6-14bm).

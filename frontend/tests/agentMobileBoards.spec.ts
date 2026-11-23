@@ -286,7 +286,29 @@ test('모바일: 그림을 그리지 못해도 본문과 출처는 남는다(F6-
 
 // --- 노출 중단(MEG-259·MEG-260 규칙을 모바일에서도 그대로) ---
 
-test('모바일: 503으로 새 질문 입구가 닫히면 주제 전환 카드의 선택지와 입력 칸을 숨긴다', async ({ page }) => {
+test('모바일: 새 질문 입구가 닫히면 마지막 주제 전환 카드의 선택지와 입력 칸을 숨긴다', async ({ page }) => {
+  await login(page)
+  const panel = await openPanel(page)
+  await mock(page, 'answered')
+  await panel.getByRole('button', { name: '자세히 설명' }).click()
+  await expect(aiBox(panel)).toBeVisible({ timeout: 10_000 })
+  await mock(page, 'topic_check')
+  await sendFree(panel, '운영체제의 교착 상태는 뭐야?')
+  const card = panel.getByRole('group', { name: /와 다른 질문 같아요\. 새 대화로 질문할까요\?$/ })
+  await expect(card.getByRole('button', { name: '이 대화에서 계속' })).toBeVisible({ timeout: 10_000 })
+  // 카드가 마지막 항목인 채로 입구를 닫는다(다른 화면에서 받은 503과 같다, agent/availability.ts)
+  await page.evaluate(async () => {
+    const a = await import(/* @vite-ignore */ '/src/agent/availability.ts')
+    a.closeAgentEntry()
+  })
+  await expect(panel.getByText('지금은 새 질문을 받을 수 없어요. 이 대화와 출처는 계속 볼 수 있어요.')).toBeVisible()
+  await expect(card).toBeVisible()
+  await expect(card.getByRole('button', { name: '이 대화에서 계속' })).toHaveCount(0)
+  await expect(card.getByRole('button', { name: '새 대화로 질문' })).toHaveCount(0)
+  await expect(panel.getByRole('textbox')).toHaveCount(0)
+})
+
+test('모바일: 503을 받으면 주제 전환 카드 뒤에 안내를 보이고 입력 칸을 숨긴다', async ({ page }) => {
   await login(page)
   const panel = await openPanel(page)
   await mock(page, 'answered')
@@ -338,4 +360,14 @@ test('모바일: 다시 넣기 확인 카드가 열려 있으면 뒤로(Esc)는 
   await expect(panel).toBeVisible()
   await expect(confirm).toHaveCount(0)
   await expect(input(panel)).toHaveValue('쓰던 초안')
+  // Android 뒤로 버튼·제스처는 keydown 없이 dialog에 닫기 요청(cancel)만 보낸다. 이때도 카드만 닫는다
+  await panel.getByRole('button', { name: '중단한 질문 다시 넣기' }).click()
+  await expect(confirm).toBeVisible()
+  await page.evaluate(() => (document.querySelector('dialog:modal') as any).requestClose())
+  await expect(confirm).toHaveCount(0)
+  await expect(panel).toBeVisible()
+  await expect(input(panel)).toHaveValue('쓰던 초안')
+  // 카드가 없으면 뒤로 가기는 노트로 돌아간다(대화와 초안은 남는다)
+  await page.evaluate(() => (document.querySelector('dialog:modal') as any).requestClose())
+  await expect(panel).toBeHidden()
 })
