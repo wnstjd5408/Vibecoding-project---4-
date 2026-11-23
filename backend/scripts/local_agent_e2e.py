@@ -18,6 +18,7 @@ import os
 import sys
 import threading
 import time
+from typing import Annotated
 
 from scripts import local_backend as lb
 
@@ -132,7 +133,7 @@ def build_app(origin: str):
 
     fake = FakeModel()
 
-    def runtime(supabase: SupabaseClient = Depends(get_supabase)) -> AiRuntime:
+    def runtime(supabase: Annotated[SupabaseClient, Depends(get_supabase)]) -> AiRuntime:
         return AiRuntime(store=SupabaseLedgerStore(supabase), client_factory=lambda *_a, **_k: fake, sleep=lambda _s: None)
 
     app.dependency_overrides[get_ai_runtime] = runtime
