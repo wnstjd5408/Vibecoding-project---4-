@@ -187,6 +187,7 @@ CS Agent "AI에게 질문"의 근거를 노트 임시 검색(D1)에서 위키(�
 
 1. 위 "켜기 전 조건"을 확인한다.
 2. Vercel 프로젝트의 **Settings → Environment Variables**에서 `CS_AGENT_WIKI_ENABLED`를 `1`로 등록한다. 비밀값이 아니므로 타입은 Config로 둔다.
+   - 같은 환경에 화면용 `VITE_CS_AGENT_WIKI_ENABLED`도 `1`로 등록한다(MEG-254). 위키 출처에서 연 용어 시트에 'AI에게 질문'이 생긴다. 끌 때도 두 값을 함께 바꾼다. 화면 값만 켜져 있으면 E27이 422를 돌려주고, 화면은 그 탭에서 위키 질문 입구를 닫는다.
 3. 환경을 고른다. 운영은 **Production**, 스테이징은 **Preview**의 Git Branch `staging`이다. 두 환경은 따로 켜고 끈다. 스테이징에서 먼저 켜고 확인한다.
 4. 그 환경의 새 배포를 만든다(위 "CS Agent 노출 중단"의 켜는 순서 3번과 같다).
 5. 아래 "적용 확인"을 한다.
@@ -194,7 +195,7 @@ CS Agent "AI에게 질문"의 근거를 노트 임시 검색(D1)에서 위키(�
 
 ### 끄는 순서
 
-1. 같은 환경에서 `CS_AGENT_WIKI_ENABLED`를 지우거나 `0`으로 바꾼다.
+1. 같은 환경에서 `CS_AGENT_WIKI_ENABLED`와 `VITE_CS_AGENT_WIKI_ENABLED`를 지우거나 `0`으로 바꾼다.
 2. 켜는 순서의 4~6번을 똑같이 한다. 이번에는 아래 확인에서 꺼짐 결과가 나와야 한다.
 
 ### 적용 확인

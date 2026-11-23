@@ -159,7 +159,16 @@ export const AGENT_MESSAGES = {
     kind === 'wiki'
       ? '왼쪽 위키에서 인용된 문단을 표시했어요. 질문할 때 선택한 노트 문장은 질문 문맥으로만 쓰였어요.'
       : '왼쪽에 인용한 노트 문단을 표시했어요. 질문할 때 선택한 문장은 근거로 쓰지 않았어요.',
-  sourceChanged: '인용한 뒤 노트가 바뀌었어요. 인용할 때의 문단을 보여 드려요.',
+  // 위키 문구는 14.5 표에 없어 노트 문구와 같은 규칙으로 만든 임시 문구다(MEG-254 결정 4).
+  sourceChanged: (kind: SourceKind) =>
+    kind === 'wiki' ? '인용한 뒤 위키 문단이 바뀌었어요. 인용할 때의 문단을 보여 드려요.' : '인용한 뒤 노트가 바뀌었어요. 인용할 때의 문단을 보여 드려요.',
+  // 위키 출처에서 그 용어 시트(E06)로 가는 버튼. 임시: 캔버스에 보드가 없다(MEG-254 결정 4).
+  openTermSheet: '용어 시트 열기',
+  // 위키 출처에서 연 용어 시트의 'AI에게 질문'(E27 origin wiki, MEG-254). 실패 문구는 모두 임시다.
+  wikiAsk: 'AI에게 질문',
+  wikiAskBusy: '대화를 여는 중이에요',
+  wikiAskUnavailable: '지금은 이 용어로 새 질문을 받을 수 없어요.',
+  wikiAskFailed: '오류: 대화를 열지 못했어요. 다시 시도해 주세요.',
   conversationKept: '대화는 그대로 있어요',
   sourceQuestion: (text: string) => `질문: ${text}`,
   sourceQuote: (text: string) => `답변에서 인용한 부분: “${text}”`,

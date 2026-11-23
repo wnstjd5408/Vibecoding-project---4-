@@ -95,6 +95,8 @@ def read_source(
     return {
         "ref": source["ref"],
         "source_kind": source["source_kind"],
+        # 출처 원본 식별자(노트 ID 문자열 또는 `glossary:{term_id}`). 화면이 위키 출처에서 용어 시트(E06)를 열 때 쓴다(MEG-254 결정 3, 필드 추가).
+        "source_id": source["source_id"],
         "title": source["title"],
         "section": source.get("section"),
         "cited_revision": source["cited_revision"],

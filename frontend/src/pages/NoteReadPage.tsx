@@ -17,12 +17,13 @@ import { sourceRangeOfSelection } from '../notes/selection.ts'
 import { userPaths } from '../routes/paths.ts'
 import type { ExplainTarget } from '../ai/explain.ts'
 import { AgentPanel } from '../agent/AgentPanel.tsx'
-import { INITIAL_AGENT_UI, agentAccessLost } from '../agent/agentUi.ts'
+import { FRESH_CONTEXT, INITIAL_AGENT_UI, agentAccessLost } from '../agent/agentUi.ts'
 import type { AgentUi } from '../agent/agentUi.ts'
 import { AgentAccessLostDocument, AgentSourceDocument } from '../agent/AgentSourceDocument.tsx'
 import { shownAgentView, useAgentView } from '../agent/agentView.ts'
 import { AGENT_MESSAGES } from '../agent/messages.ts'
-import { AGENT_DISABLED_BY_BUILD, closeAgentEntry, useAgentEntryClosed } from '../agent/availability.ts'
+import { AGENT_DISABLED_BY_BUILD, closeAgentEntry, closeWikiEntry, useAgentEntryClosed, useWikiEntryOpen, wikiRef } from '../agent/availability.ts'
+import type { TermSheetAsk } from '../glossary/TermSheet.tsx'
 import { useAgentConversation } from '../agent/useAgentConversation.ts'
 import { useAgentSource } from '../agent/useAgentSource.ts'
 import type { OpenSource } from '../agent/useAgentSource.ts'
@@ -58,7 +59,8 @@ function NoteRead({ noteId }: { noteId: string }) {
   const [attempt, setAttempt] = useState(0)
   const [result, setResult] = useState<Result | null>(null)
   // 열린 용어 시트. openId는 열 때마다 올라가 같은 용어를 다시 열어도 새로 불러온다.
-  const [openTerm, setOpenTerm] = useState<{ termId: number; openId: number } | null>(null)
+  // wikiLabel이 있으면 위키 출처의 '용어 시트 열기'로 연 시트다(MEG-254). 이 노트의 강조 용어가 아닐 수 있어 제목을 출처에서 받는다.
+  const [openTerm, setOpenTerm] = useState<{ termId: number; openId: number; wikiLabel?: string } | null>(null)
   const openCount = useRef(0)
   // 본문에서 고른 글(원문 위치와 버튼 위치). 위치를 계산하지 못하는 선택이면 null이라 AI 설명 버튼이 보이지 않는다.
   const [pick, setPick] = useState<PickedText | null>(null)
@@ -78,6 +80,10 @@ function NoteRead({ noteId }: { noteId: string }) {
   // CS Agent 'AI에게 질문'(MEG-258). 대화 상태는 이 노트 화면에 두어 패널을 닫았다 열어도 대화와 초안이 남는다(MEG-255 메모).
   // 노트 선택 버튼은 새 질문 입구가 열려 있으면 'AI에게 질문', 닫혀 있으면(노출 중단 플래그·503) 기존 'AI 설명'이다(MEG-259, agent/availability.ts).
   const agentClosed = useAgentEntryClosed()
+  // 위키 질문 입구(MEG-254 결정 1·2). 위키 출처에서 연 용어 시트의 'AI에게 질문'만 이 값을 따른다. 노트 강조 시트에는 버튼이 없다.
+  const wikiOpen = useWikiEntryOpen()
+  // 위키 대화를 여는 중(E27)인지와, 열지 못했을 때 시트에 보일 안내
+  const [wikiAsk, setWikiAsk] = useState<{ busy: boolean; notice: TermSheetAsk['notice'] }>({ busy: false, notice: null })
   const { state: agentState, controller: agent } = useAgentConversation(valid ? Number(noteId) : 0)
   // E27·E29가 503(노출 중단)을 돌려주면 입구를 닫는다. 열린 패널은 그대로 두어 지금 대화와 출처를 계속 읽게 한다.
   const agentFailureKind = agentState.failure?.kind
@@ -159,7 +165,10 @@ function NoteRead({ noteId }: { noteId: string }) {
     document.addEventListener('selectionchange', update)
     return () => document.removeEventListener('selectionchange', update)
   }, [noteRevision, noteBody, loginStatus])
-  const term = note?.glossary_terms.find((item) => item.term_id === openTerm?.termId)
+  // 노트 강조에서 연 시트의 용어. 위키 출처에서 연 시트는 이 값이 없고 제목을 wikiLabel로 받는다.
+  const term = openTerm?.wikiLabel === undefined ? note?.glossary_terms.find((item) => item.term_id === openTerm?.termId) : undefined
+  const termOpen = term !== undefined || openTerm?.wikiLabel !== undefined
+  const termLabel = openTerm?.wikiLabel ?? term?.label ?? ''
   // 시트 안 즐겨찾기가 401 login_required를 받으면 용어 시트를 먼저 닫고 로그인 안내를 연다. 안내를 닫으면 누른 용어 링크로 포커스가 돌아간다.
   const onFavoriteLoginRequired = (error: unknown) => {
     if (!isLoginRequired(error)) return false
@@ -263,9 +272,58 @@ function NoteRead({ noteId }: { noteId: string }) {
     openCount.current += 1
     setOpenTerm({ termId, openId: openCount.current })
   }
+  // 위키 출처의 '용어 시트 열기'(MEG-254 결정 4): 대화 패널을 닫고(대화와 초안은 이 화면에 남는다) 그 용어 시트를 연다.
+  // 시트를 닫으면 포커스는 노트 본문으로 돌아간다(누른 버튼은 패널과 함께 사라진다).
+  const openWikiTerm = (termId: number, label: string) => {
+    lastTermLink.current = articleRef.current
+    setOpenAi(null)
+    closeAgent()
+    if (loginPanelOpen) closeLoginPrompt()
+    setWikiAsk({ busy: false, notice: null })
+    openCount.current += 1
+    setOpenTerm({ termId, openId: openCount.current, wikiLabel: label })
+  }
+  // 위키 출처에서 연 시트의 'AI에게 질문'(MEG-254 결정 1): E27 origin wiki로 새 대화를 만들고 패널을 연다. 모델은 부르지 않는다(첫 질문은 E29).
+  // 지금 대화는 새 대화로 바뀐다(헤더의 '새 대화'와 같다). 생성 중에는 버튼을 두지 않는다(결정 11과 같은 잠금).
+  const askFromWiki = async () => {
+    if (!openTerm || openTerm.wikiLabel === undefined || wikiAsk.busy) return
+    if (auth.role === 'visitor') {
+      setOpenTerm(null)
+      return openLoginPrompt()
+    }
+    const termId = openTerm.termId
+    setWikiAsk({ busy: true, notice: null })
+    const created = await agent.newConversation({ origin: 'wiki', wiki_ref: wikiRef(termId) })
+    if (created) {
+      setWikiAsk({ busy: false, notice: null })
+      setAgentUi((previous) => ({ ...previous, ...FRESH_CONTEXT, selection: null }))
+      setOpenTerm(null)
+      setAgentOpen(true)
+      return
+    }
+    const failure = agent.getSnapshot().loadFailure
+    // 실패한 E27의 기록은 지운다. 404가 남으면 노트 접근 변경(F6-15)으로 읽히기 때문이다. 앞 대화는 newConversation이 이미 비웠다.
+    agent.reset()
+    if (failure?.kind === 'login_required') {
+      // 세션이 끝났다. 시트를 닫고 로그인 안내를 연다(질문 401과 같은 처리).
+      setWikiAsk({ busy: false, notice: null })
+      setOpenTerm(null)
+      return openLoginPrompt()
+    }
+    // 422(화면 플래그만 켜진 배포)·503(노출 중단)이면 이 탭의 위키 질문 입구를 닫는다. 404는 그 용어로 지금 질문할 수 없다는 뜻이다.
+    if (failure?.kind === 'service_unavailable') closeAgentEntry()
+    const unavailable = failure?.kind === 'invalid' || failure?.kind === 'service_unavailable' || failure?.kind === 'not_found'
+    if (failure?.kind === 'invalid' || failure?.kind === 'service_unavailable') closeWikiEntry()
+    setWikiAsk({ busy: false, notice: { text: unavailable ? AGENT_MESSAGES.wikiAskUnavailable : AGENT_MESSAGES.wikiAskFailed, unavailable } })
+  }
+  const wikiSheetAsk: TermSheetAsk | undefined =
+    openTerm?.wikiLabel !== undefined && !AGENT_DISABLED_BY_BUILD && !agentClosed && (wikiOpen || wikiAsk.notice !== null)
+      && agentState.pending === null
+      ? { label: AGENT_MESSAGES.wikiAsk, onAsk: () => { void askFromWiki() }, busy: wikiAsk.busy, busyLabel: AGENT_MESSAGES.wikiAskBusy, notice: wikiAsk.notice }
+      : undefined
   // 패널이 열려 있으면 본문 오른쪽 480px를 비워 패널이 본문을 가리지 않게 한다(PC 폭에서만).
   // 떠 있는 창이면 창 폭만큼 비운다(F6-3f). 전체 화면은 패널과 같은 배치를 둔 채 노트를 가려서, 패널로 돌아오면 읽던 위치가 그대로다(결정 43).
-  const panelReserved = wide && (term !== undefined || openAi !== null || loginPanelOpen || (agentOpen && agentShown !== 'floating'))
+  const panelReserved = wide && (termOpen || openAi !== null || loginPanelOpen || (agentOpen && agentShown !== 'floating'))
   // 전체 화면 동안에는 가린 노트가 굴러가지 않게 문서 스크롤을 잠근다. 잠근 동안 위치는 그대로라 패널로 돌아오면 읽던 위치다(결정 43).
   // inert는 포커스와 보조기기만 막고 휠·키보드 스크롤은 막지 않는다. 스크롤 막대가 있던 화면은 막대 자리를 남겨 머리가 옆으로 밀리지 않게 한다.
   // 위치를 따로 되돌리지 않는다. 출처 보기를 닫을 때 noteScroll로 옮기는 스크롤(아래 효과)을 덮어쓰지 않기 위해서다.
@@ -298,7 +356,7 @@ function NoteRead({ noteId }: { noteId: string }) {
             title={current.error === 'rate_limited' ? MESSAGES.rateLimited : MESSAGES.failed}
             action={<Button onClick={() => setAttempt((value) => value + 1)}>{MESSAGES.retry}</Button>} />
         : <>
-          {showingSource && agentSourceState ? <AgentSourceDocument state={agentSourceState} ref_={agentSource.ref} /> : null}
+          {showingSource && agentSourceState ? <AgentSourceDocument state={agentSourceState} ref_={agentSource.ref} onOpenTerm={openWikiTerm} /> : null}
           {/* 노트 접근 변경(F6-15, MEG-260): 노트를 더 볼 수 없으면 본문을 숨기고 안내만 둔다. */}
           {agentLost ? <AgentAccessLostDocument /> : null}
           <article ref={articleRef} className={styles.article} tabIndex={-1} hidden={showingSource || agentLost}>
@@ -320,10 +378,10 @@ function NoteRead({ noteId }: { noteId: string }) {
     {/* 노출 중단 플래그를 켠 빌드에서는 패널을 그리지 않는다(닫힌 dialog의 제목 'AI에게 질문'도 문서에 남기지 않는다). */}
     {AGENT_DISABLED_BY_BUILD ? null : <AgentPanel open={agentOpen} wide={wide} view={agentView} onView={setAgentView} state={agentState} controller={agent} ui={agentUi} onUi={onAgentUi}
       source={agentSource} sourceState={agentSourceState} onOpenSource={openAgentSource} onCloseSource={closeAgentSource}
-      onClose={closeAgent} onLoginRequired={onAgentLoginRequired} returnFocus={() => articleRef.current} closed={agentClosed} />}
+      onClose={closeAgent} onLoginRequired={onAgentLoginRequired} returnFocus={() => articleRef.current} closed={agentClosed} onOpenTerm={openWikiTerm} />}
     <AiExplainSheet open={openAi !== null} onClose={() => setOpenAi(null)} openId={openAi?.openId ?? 0} target={openAi?.target ?? null} text={openAi?.text ?? ''} onLoginRequired={onAiLoginRequired} onReloadNote={onReloadNote} returnFocus={() => articleRef.current} />
     {/* 용어를 누르면 열리는 시트(F1-3). 시트 안 즐겨찾기 버튼(MEG-90)과 로그인 안내 연결(MEG-77)이 이 안에 있다. */}
-    <TermSheet open={term !== undefined} onClose={() => setOpenTerm(null)} openId={openTerm?.openId ?? 0} termId={openTerm?.termId ?? null} label={term?.label ?? ''} onLoginRequired={onFavoriteLoginRequired}
-      panelId={panelId} returnFocus={() => lastTermLink.current} />
+    <TermSheet open={termOpen} onClose={() => setOpenTerm(null)} openId={openTerm?.openId ?? 0} termId={openTerm?.termId ?? null} label={termLabel} onLoginRequired={onFavoriteLoginRequired}
+      panelId={panelId} returnFocus={() => lastTermLink.current} ask={wikiSheetAsk} />
   </div>
 }

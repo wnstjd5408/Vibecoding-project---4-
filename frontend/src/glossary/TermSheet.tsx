@@ -41,14 +41,26 @@ type TermSheetProps = {
   // PC 폭에서 용어 링크가 aria-controls로 가리킬 패널 id와, 패널을 닫을 때 포커스를 돌려줄 요소(마지막으로 누른 용어 링크)
   panelId?: string
   returnFocus?: () => HTMLElement | null
+  // 'AI에게 질문'(MEG-254). 위키 출처에서 연 시트이고 위키 질문 입구가 열려 있을 때만 노트 화면이 넘긴다. 노트 강조에서 연 시트에는 없다.
+  ask?: TermSheetAsk
+}
+
+export type TermSheetAsk = {
+  label: string
+  onAsk: () => void
+  // 대화를 여는 중(E27). 버튼을 잠그고 busyLabel을 알린다.
+  busy: boolean
+  busyLabel: string
+  // 대화를 열지 못했을 때의 안내. unavailable이면 버튼을 숨긴다(위키 질문 입구가 닫혔다).
+  notice: { text: string; unavailable: boolean } | null
 }
 
 // 사전 용어 설명 바텀시트(F1-3). 1024px 이상에서는 같은 내용을 오른쪽 사이드 패널로 보인다(ResponsiveSheet). 열 때 E06으로 설명·이미지를 받고, 성공하면 E07로 열람을 한 번 기록한다.
 // 시트는 기존 BottomSheet를 그대로 쓴다. 제목 포커스, Esc·닫기·막 누르기, 연 요소로의 포커스 복귀는 BottomSheet가 맡는다.
-export function TermSheet({ open, onClose, openId, termId, label, onLoginRequired, panelId, returnFocus }: TermSheetProps) {
+export function TermSheet({ open, onClose, openId, termId, label, onLoginRequired, panelId, returnFocus, ask }: TermSheetProps) {
   return (
     <ResponsiveSheet open={open} onClose={onClose} badge={<Badge tone="dictionary">{MESSAGES.badge}</Badge>} title={<TermLink>{label}</TermLink>} panelId={panelId} returnFocus={returnFocus}>
-      {open && termId !== null ? <TermSheetContent key={openId} termId={termId} onLoginRequired={onLoginRequired} /> : null}
+      {open && termId !== null ? <TermSheetContent key={openId} termId={termId} onLoginRequired={onLoginRequired} ask={ask} /> : null}
     </ResponsiveSheet>
   )
 }
@@ -89,7 +101,7 @@ const NO_BROKEN: ReadonlySet<string> = new Set()
 function noop() {}
 
 // 시트가 열려 있는 동안만 있는 내용. 열 때마다 새로 만들어져 이전 용어의 응답·기록 상태가 남지 않는다.
-function TermSheetContent({ termId, onLoginRequired }: { termId: number; onLoginRequired: (error: unknown) => boolean }) {
+function TermSheetContent({ termId, onLoginRequired, ask }: { termId: number; onLoginRequired: (error: unknown) => boolean; ask?: TermSheetAsk }) {
   const auth = useAuth()
   const [attempt, setAttempt] = useState(0)
   const [result, setResult] = useState<Result | null>(null)
@@ -232,9 +244,14 @@ function TermSheetContent({ termId, onLoginRequired }: { termId: number; onLogin
       })}
       {showViewNotice ? <p className={styles.notice} role="status">{MESSAGES.viewNotRecorded}</p> : null}
       {favoriteFailed ? <p className={styles.notice} role="alert">{MESSAGES.favoriteFailed}</p> : null}
+      {ask?.notice ? <p className={styles.notice} role="alert">{ask.notice.text}</p> : null}
       <div className={styles.actions}>
         <FavoriteToggle pressed={favorite} aria-disabled={favoritePending} onPressedChange={changeFavorite} />
+        {ask && !ask.notice?.unavailable
+          ? <Button variant="primary" aria-disabled={ask.busy ? true : undefined} onClick={() => { if (!ask.busy) ask.onAsk() }}>{ask.label}</Button>
+          : null}
       </div>
+      {ask?.busy ? <p className={styles.srOnly} role="status">{ask.busyLabel}</p> : null}
       {/* 저장 결과를 스크린 리더에 알린다. 실패했을 때는 비워 두어 저장된 것처럼 읽히지 않는다. */}
       <p className={styles.srOnly} role="status">{favoriteFailed ? '' : favoriteMessage}</p>
     </>
