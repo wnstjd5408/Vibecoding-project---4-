@@ -428,6 +428,22 @@ def test_a_note_only_prompt_drops_the_correction_rule_and_fields():
     assert len(without) <= max_prompt_chars()
 
 
+def test_agent_v3_rules_cover_the_l1_failure_modes():
+    # MEG-275 4-C: CSA-DEV v1 L1에서 X가 난 동작마다 규칙이 하나씩 있다.
+    base = _worst_case_input("가")
+    prompt = build_prompt(base)
+    note_only = build_prompt(PromptInput(**{**base.__dict__, "allow_correction": False}))
+    assert "방법, 절차, 권고, 원인은 덧붙이지 않습니다" in prompt
+    assert "인용 번호를 붙이지 않고, 질문의 맥락으로만" in prompt
+    assert "근거 문단에서 이 질문의 답을 찾지 못했습니다." in prompt
+    assert "직전 질문과 답이 다룬 대상으로 해석합니다" in prompt
+    assert "서로 다른 대상을 가리키면" in prompt
+    assert "근거 문단이 있어도 답하지 말고 state를 topic_check로" in prompt
+    assert "선택한 노트 문장이 근거 문단과 다릅니다" in note_only
+    # 주제 확인이 꺼진 턴에는 주제 규칙이 없다.
+    assert "topic_check" not in build_prompt(PromptInput(**{**base.__dict__, "allow_topic_check": False}))
+
+
 def test_parse_correction_becomes_answered_when_not_allowed():
     payload = {
         "state": "correction",
