@@ -10,7 +10,7 @@ import re
 import time
 import unicodedata
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Annotated
 
@@ -33,7 +33,7 @@ from app.auth import SessionUser, require_login
 from app.bedrock import AiCallError, AiConfigError, BedrockSettings, make_client
 from app.errors import FIELD_MESSAGES, ApiError
 from app.glossary import glossary_payload, study_date
-from app.glossary_spans import code_mask, hidden_ranges, normalize_key, visible_text
+from app.glossary_spans import code_mask, hidden_ranges, markup_mask, normalize_key, visible_text
 from app.rate_limit import AI_EXPLAIN, RateLimiter, get_rate_limiter
 from app.supabase import SupabaseClient, SupabaseConfigError, SupabaseUnavailable, get_supabase
 
@@ -59,6 +59,8 @@ _UUID_SHAPE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA
 # 문장 끝: 마침표·물음표·느낌표 뒤에 공백이나 끝이 오는 곳, 그리고 줄바꿈. 문장 부호가 없는 목록·제목은 줄 단위다.
 _SENTENCE_BREAK = re.compile(r"[.!?。！？]+(?=\s|$)|\n")
 _SPACES = re.compile(r"\s+")
+# 노트에서 고른 용어 끝에 붙어 오는 조사(MEG-272). 두 번 눌러 고르면 어절 전체가 잡힌다. 짧은 것부터 둬서 덜 뗀 후보를 먼저 본다.
+PARTICLES = ("은", "는", "이", "가", "을", "를", "의", "에", "로", "와", "과", "도", "만", "에서", "으로")
 
 
 class SelectionBody(BaseModel):
@@ -156,23 +158,62 @@ def pick_term_and_sentence(text: str, start: int, end: int) -> Picked | None:
         return None
     # 코드 안의 백슬래시는 실제 글자다. 코드 밖의 이스케이프만 푼다(코드 `a\\+b`와 글 a\\+b는 다른 용어다).
     mask = code_mask(text)
-    label = unicodedata.normalize("NFC", _collapse(visible_text(text, start, end, mask, hidden)))
+    # 용어는 화면에 보이는 글자로 맞춘다(MEG-272): 인라인 코드의 구분 백틱과 짝이 맞은 `*`는 화면에 없다. 두 번 눌러
+    # 고르면 코드 밖의 조사까지 잡혀 "하이퍼바이저 `는"처럼 백틱이 낱말과 조사 사이에 끼기 때문이다.
+    label = unicodedata.normalize("NFC", _collapse(visible_text(text, start, end, mask, hidden, markup_mask(text))))
     key = normalize_key(label)
     # 글자나 숫자가 하나도 없는 선택(기호·공백만)은 설명할 용어가 아니다. AI를 부르지 않는다.
     if not key or not any(char.isalnum() for char in label):
         return None
 
+    # 노트 문장은 예전처럼 원문 표시를 지우지 않은 글로 만든다. 문장 해시(sentence_hash)가 바뀌지 않게 한다.
+    selected = unicodedata.normalize("NFC", _collapse(visible_text(text, start, end, mask, hidden)))
     left, right = sentence_bounds(text, start, end)
     # 선택이 숨김 구간에 걸치지 않으므로 숨김 구간은 선택 앞이나 뒤에 통째로 있다. 앞뒤를 따로 지워도 토큰이 잘리지 않는다.
     before = visible_text(text, left, start, mask, hidden)
     after = visible_text(text, end, right, mask, hidden)
-    budget = max(MAX_SENTENCE_CHARS - len(label), 0)
+    budget = max(MAX_SENTENCE_CHARS - len(selected), 0)
     if len(before) + len(after) > budget:
         keep_after = min(len(after), max(budget // 2, budget - len(before)))
         keep_before = min(len(before), budget - keep_after)
         before, after = before[len(before) - keep_before :], after[:keep_after]
-    sentence = _collapse(before + label + after)
+    sentence = _collapse(before + selected + after)
     return Picked(label=label, key=key, sentence=sentence)
+
+
+def particle_stripped(label: str) -> list[str]:
+    """label 끝의 조사(PARTICLES)를 뗀 후보. 덜 뗀 것(남은 글이 긴 것)부터다. 조사 앞이 공백이거나 남은 글에 글자·숫자가
+    없으면 후보가 아니다. 뗀 결과가 용어인지는 여기서 정하지 않는다(resolve_term).
+    """
+    out: list[str] = []
+    for particle in PARTICLES:
+        if not label.endswith(particle):
+            continue
+        rest = label[: -len(particle)]
+        if rest and not rest[-1].isspace() and any(char.isalnum() for char in rest):
+            out.append(rest)
+    return out
+
+
+def resolve_term(supabase: SupabaseClient, picked: Picked, user_id: str) -> tuple[Picked, dict | None]:
+    """고른 용어의 terms 행을 찾는다(5.5절 7·8단계의 읽기). E09와 노트 용어 질문의 퀴즈 자료(MEG-243)가 함께 쓴다.
+
+    끝의 조사는 뗀 나머지가 이미 있는 용어 key(사전이나 AI 용어, 설명이 무효화된 행 포함)와 같을 때만 뗀다(MEG-272,
+    2026-11-23 김준성 결정 (A)). 그대로의 key가 사전 용어면 떼지 않는다. 처음 보는 낱말은 조사가 붙은 채로 둔다
+    ("정의"·"경로"처럼 조사 글자로 끝나는 명사를 자르지 않는다). 뗐으면 label·key를 바꾼 Picked를 돌려준다.
+    노트 문장은 그대로다. 조사가 붙은 label이면 terms를 최대 세 번 읽는다.
+    """
+    row = supabase.find_term_for_explain(picked.key, user_id)
+    if row is not None and row.get("glossary_entries") is not None:
+        return picked, row
+    for rest in particle_stripped(picked.label):
+        key = normalize_key(rest)
+        if not key or key == picked.key:
+            continue
+        found = supabase.find_term_for_explain(key, user_id)
+        if found is not None:
+            return replace(picked, label=rest, key=key), found
+    return picked, row
 
 
 def _data(text: str) -> str:
@@ -331,8 +372,8 @@ def explain(
     # 6단계: 사용자별 요청 제한. 사전·캐시 응답도 세어 연결·인증 실패의 반복 호출을 막는다(AC-4).
     limiter.check(AI_EXPLAIN, f"user:{user.user_id}")
 
-    # 7·8단계: 사전, 공유 캐시. AI·원장은 없고 N에 세지 않는다.
-    row = supabase.find_term_for_explain(picked.key, user.user_id)
+    # 7·8단계: 사전, 공유 캐시. AI·원장은 없고 N에 세지 않는다. 끝의 조사는 이미 있는 용어일 때만 뗀다(MEG-272).
+    picked, row = resolve_term(supabase, picked, user.user_id)
     if row is not None:
         known = _known_term_response(supabase, user, row)
         if known is not None:
