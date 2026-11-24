@@ -14,8 +14,8 @@ POST /api/ai/conversations/{conversation_id}/turns — 질문을 받아 근거�
    409를 속도 제한보다 먼저 보는 것은 검사 순서의 예외다(spec E29 3단계): 같은 키 재전송이 한도를 쓰지 않게 한다.
 4. 응답 수명 안의 스레드에서 run_turn을 돌린다(Q2 확정: 응답 뒤의 작업은 멈추므로 202 후 백그라운드 실행은 쓰지 않는다).
    질문 이해 → 검색 → (근거 없으면 no_evidence로 끝, 모델 호출 없음) → 취소 확인 → run_ai_call(예약·Bedrock·정산) →
-   출력 검증 → 출처 확인 → agent_finish_turn(조건부 저장). 단계마다 턴 행의 step·lease_expires_at을 status = running 조건으로
-   갱신하고, 0행이면(중단·만료) 실행을 멈춘다.
+   출력 검증(인용 없는 설명은 정산 뒤 no_evidence로 바꿈, Q19) → 출처 확인 → agent_finish_turn(조건부 저장).
+   단계마다 턴 행의 step·lease_expires_at을 status = running 조건으로 갱신하고, 0행이면(중단·만료) 실행을 멈춘다.
 5. 응답은 SSE(text/event-stream)다. Accept가 application/json이면 끝날 때까지 기다려 E30과 같은 JSON을 준다.
    송신이 실패해도(연결 끊김) 남은 이벤트를 버리고 스레드가 끝날 때까지 요청을 끝내지 않는다. 결과는 E30으로 읽는다.
 

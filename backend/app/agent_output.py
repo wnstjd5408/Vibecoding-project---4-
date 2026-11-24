@@ -64,7 +64,8 @@ MAX_SUGGESTIONS = 3
 MAX_SUGGESTION_CHARS = 200
 
 MODEL_STATES = ("answered", "partial", "clarify", "correction", "topic_check")
-# 근거가 없을 때 서버가 고정으로 만드는 결과(spec 5절 no_evidence). 모델을 부르지 않는다.
+# 근거가 없을 때 서버가 고정으로 만드는 결과(spec 5절 no_evidence). 검색 문단이 0개면 모델을 부르지 않고 쓴다.
+# 모델이 인용 없는 설명을 냈을 때도 이 결과로 바꾼다(Q19, MEG-275). 그때는 원장 id와 모델 기록이 함께 남는다.
 NO_EVIDENCE_RESULT = {
     "state": "no_evidence",
     "notice_code": "no_evidence",
