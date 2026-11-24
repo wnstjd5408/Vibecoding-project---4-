@@ -230,10 +230,18 @@ def _bad_text(text: str) -> bool:
     return False
 
 
+NO_EVIDENCE_CONTEXT = "(근거 문단에서 답을 찾지 못해 답하지 않았습니다.)"
+
+
 def _answer_text(result: dict[str, Any]) -> str | None:
-    """이전 대화 문맥에 넣을 답 요약. 설명 본문이 있는 결과와 의미 확인만 쓴다."""
+    """이전 대화 문맥에 넣을 답 요약. 설명 본문이 있는 결과와 의미 확인, 근거 없음 안내를 쓴다.
+
+    근거 없음 턴도 질문은 대화의 흐름이다. 빼면 "그 방식"이 그보다 앞의 답을 가리키게 된다(MEG-275 4-C 리뷰).
+    """
     if result.get("state") == "clarify":
         return result["clarify"]["prompt"]
+    if result.get("state") == "no_evidence":
+        return NO_EVIDENCE_CONTEXT
     sections = result.get("sections")
     if isinstance(sections, list) and sections:
         return "\n".join(section.get("body", "") for section in sections if isinstance(section, dict))

@@ -906,6 +906,9 @@ def test_a_format_failure_fails_the_turn_without_retrying(client, fake, store, b
         answer_json(sections=[{"body": "인용 없는 설명"}]),
         json.dumps({"state": "partial", "sections": [{"body": "근거 문단에서 이 질문의 답을 찾지 못했습니다."}],
                     "limitation": "근거 문단이 이 질문을 다루지 않습니다."}, ensure_ascii=False),
+        # 한계 문장이 인용해도(그 자체로는 limitation 형식 실패) 본문 인용이 없으면 먼저 근거 없음으로 끝난다. 검사 순서를 고정한다.
+        json.dumps({"state": "partial", "sections": [{"body": "근거 문단에서 이 질문의 답을 찾지 못했습니다."}],
+                    "limitation": "[2]는 다른 개념을 다룹니다."}, ensure_ascii=False),
     ],
 )
 def test_an_answer_without_citations_ends_as_no_evidence_instead_of_failing(client, fake, store, bedrock, text, caplog):
@@ -922,9 +925,38 @@ def test_an_answer_without_citations_ends_as_no_evidence_instead_of_failing(clie
     [finish] = fake.finishes
     # 호출은 정산됐고 원장·실행 기록은 남는다. 출처는 저장하지 않는다.
     assert finish["p_ledger_id"] == 101 and finish["p_sources"] is None
-    assert (finish["p_model_id"], finish["p_prompt_version"]) == (SETTINGS.model_id, "agent-v3")
+    assert (finish["p_model_id"], finish["p_prompt_version"], finish["p_retrieval_version"]) == (
+        SETTINGS.model_id, "agent-v3", "fixed-test")
+    # 검색한 문단 수는 그대로 남긴다(모델에 문단을 보냈다). 저장한 뒤에만 compose 완료를 알린다(spec E29 10단계).
+    assert finish["p_paragraph_count"] == 2
+    steps = [data for name, data in parsed if name == "step"]
+    assert steps[-1] == {"step": "compose", "state": "done"}
     assert bedrock.calls == 1 and store.settled == [(101, "usage")] and fake.sources == []
     assert "output_invalid=no_citation" in caplog.text and "인용 없는 설명" not in caplog.text
+
+
+def test_a_cancel_during_an_uncited_answer_rejects_the_no_evidence_save(client, fake, store, bedrock):
+    # 인용 없는 답의 근거 없음 저장도 status = running 조건이다. 중단된 턴이면 저장하지 않고 compose 완료도 보내지 않는다.
+    bedrock.replies = [bedrock_reply(answer_json(sections=[{"body": "인용 없는 설명"}]))]
+    bedrock.during_call = lambda: fake.cancel_agent_turn(A, last_turn(fake)["id"])
+    parsed = events(ask(client, fake.conversation(A)))
+    assert parsed[-1][1]["status"] == "cancelled"
+    assert {"step": "compose", "state": "done"} not in [data for name, data in parsed if name == "step"]
+    row = last_turn(fake)
+    assert row["status"] == "cancelled" and row["result"] is None and row["ledger_id"] == 101
+    assert store.settled == [(101, "usage")]
+
+
+def test_a_no_evidence_turn_stays_in_the_recent_context_with_a_placeholder_answer(client, fake, bedrock):
+    # 근거 없음 턴의 질문도 대화의 흐름이다. 빼면 다음 질문의 "그 방식"이 그보다 앞의 답을 가리킨다(MEG-275 4-C 리뷰).
+    cid = fake.conversation(A)
+    fake.turn(cid, 1)
+    second = fake.turn(cid, 2)
+    fake.turns[second]["result"] = dict(agent_turns.NO_EVIDENCE_RESULT)
+    events(ask(client, cid))
+    prompt = bedrock.prompts[0]
+    assert "질문 1: 합성 질문입니다 1" in prompt and "답 1: 합성 답변 [1]" in prompt
+    assert "질문 2: 합성 질문입니다 2" in prompt and f"답 2: {agent_turns.NO_EVIDENCE_CONTEXT}" in prompt
 
 
 def test_a_model_error_fails_the_turn_with_ai_unavailable(client, fake, bedrock):
