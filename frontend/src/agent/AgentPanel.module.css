@@ -1,0 +1,255 @@
+/* CS Agent 'AI에게 질문' 패널(MEG-258). 크기·간격·글자는 캔버스 F6 보드(Version 96)를 따른다. */
+
+/* PC: 헤더 바로 아래부터 화면 아래까지, 폭 480px. 막이 없고 노트는 그대로 보인다(SidePanel과 같은 자리) */
+.panel {
+  position: fixed;
+  top: var(--app-header-height);
+  right: 0;
+  bottom: 0;
+  left: auto;
+  z-index: 5;
+  box-sizing: border-box;
+  width: 480px;
+  max-width: 100vw;
+  height: auto;
+  max-height: none;
+  margin: 0;
+  padding: 0 var(--space-6) var(--space-6);
+  border: 0;
+  border-left: 1px solid var(--surface-300);
+  background: var(--surface-200);
+  color: var(--ink);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+/* 모바일: 전체 높이 대화 화면(F6-1m 등). 노트 화면은 뒤에 그대로 있다 */
+.full {
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: var(--surface-200);
+  color: var(--ink);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.full::backdrop { background: transparent; }
+
+/* PC 떠 있는 창(F6-3f): 오른쪽 아래 고정, 420×620. 옮기기·접기는 없다(14.5 AI 제안). 노트 쪽은 NoteReadPage가 오른쪽 여백을 둔다 */
+.floating {
+  position: fixed;
+  top: auto;
+  right: var(--space-6);
+  bottom: var(--space-6);
+  left: auto;
+  z-index: 5;
+  box-sizing: border-box;
+  width: 420px;
+  max-width: calc(100vw - 2 * var(--space-6));
+  height: 620px;
+  max-height: calc(100dvh - var(--app-header-height) - 2 * var(--space-6));
+  margin: 0;
+  padding: 0 var(--space-4) var(--space-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-200);
+  color: var(--ink);
+  word-break: keep-all;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* PC 전체 화면(F6-3x): 헤더 아래 화면 전체. 대화만 가운데 읽기 폭(약 720px)으로 두고 노트는 가린다(결정 43) */
+.fullscreen {
+  position: fixed;
+  top: var(--app-header-height);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 5;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  height: auto;
+  max-height: none;
+  margin: 0;
+  padding: 0 var(--space-6) var(--space-6);
+  border: 0;
+  background: var(--surface-200);
+  color: var(--ink);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.panel[open], .floating[open], .fullscreen[open], .full[open] { display: flex; flex-direction: column; }
+/* 보기를 바꿔도 남는 틀. 머리·문맥·대화·입력 칸을 세로로 쌓는다 */
+.frame { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.fullscreen .frame { width: 100%; max-width: 720px; margin-inline: auto; }
+/* 대화 영역 끝에서 더 굴려도 뒤의 노트가 움직이지 않게 한다(노트 읽던 위치를 지킨다) */
+.floating .body, .fullscreen .body, .floating .sourceBody { overscroll-behavior: contain; }
+
+/* --- 머리 --- */
+.head { display: flex; align-items: center; justify-content: space-between; min-height: 56px; flex-shrink: 0; }
+.headActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
+.title { margin: 0; font-size: 17px; line-height: 26px; font-weight: 700; }
+.title:focus { outline: none; }
+.headButton { min-width: 44px; min-height: 44px; padding: 0 var(--space-3); border: 0; background: transparent; color: var(--ink-muted); font: inherit; font-size: 13px; line-height: 18px; font-weight: 500; cursor: pointer; }
+.headButton[aria-disabled='true'] { color: var(--line-strong); cursor: not-allowed; }
+.closeButton { margin-right: calc(var(--space-3) * -1); }
+.iconButton { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; }
+
+/* 떠 있는 창은 머리와 문맥을 줄인다(F6-3f): 제목 16px, 버튼 안쪽 여백 space-2, 주제와 '선택 내용 보기'를 한 줄에 */
+.floating .head { min-height: 52px; }
+.floating .title { font-size: 16px; line-height: 24px; }
+.floating .headButton { padding: 0 var(--space-2); }
+.floating .closeButton { margin-right: calc(var(--space-2) * -1); }
+.floating .context { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; column-gap: var(--space-2); margin-bottom: var(--space-1); }
+.floating .topic { font-size: 13px; line-height: 18px; }
+.floating .selectionFull { flex-basis: 100%; }
+.floating .body, .floating .sourceBody { padding: var(--space-4) 0; }
+
+.mobileHead { display: flex; align-items: center; justify-content: space-between; height: 56px; flex-shrink: 0; padding: 0 var(--space-2); border-bottom: 1px solid var(--surface-300); }
+.mobileTitle { padding-right: var(--space-3); }
+.mobileSourceTitle { flex: 1; }
+.mobileHead:has(.mobileSourceTitle) { justify-content: flex-start; gap: var(--space-2); }
+.textButton { display: inline-flex; align-items: center; min-height: 44px; padding: 0 var(--space-3); border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 14px; line-height: 22px; font-weight: 600; cursor: pointer; }
+
+/* --- 주제와 참고 문맥 --- */
+.context { margin-bottom: var(--space-4); flex-shrink: 0; }
+.mobileContext { flex-shrink: 0; padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--surface-300); }
+.topic { font-size: 14px; line-height: 22px; font-weight: 600; }
+.muted { color: var(--ink-muted); font-size: 13px; line-height: 18px; font-weight: 500; }
+.underline { display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 13px; line-height: 18px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.selectionFull { margin-bottom: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--surface-300); border-radius: var(--radius-sm); background: var(--surface-100); font-size: 14px; line-height: 22px; white-space: pre-wrap; }
+
+/* --- 대화 영역: 문서와 따로 스크롤한다(F6-10) --- */
+.body { flex: 1; min-height: 0; overflow-y: auto; border-top: 1px solid var(--surface-300); padding: var(--space-6) 0; }
+.mobileBody { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-4); }
+.sourceBody { flex: 1; min-height: 0; overflow-y: auto; border-top: 1px solid var(--surface-300); padding: var(--space-6) 0; }
+.body[hidden], .mobileBody[hidden] { display: none; }
+.body:focus-visible, .mobileBody:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+.entry + .entry { margin-top: var(--space-6); }
+
+.intro { margin: 0 0 var(--space-4); font-size: 14px; line-height: 22px; }
+.hint { margin: 0; color: var(--ink-muted); font-size: 13px; line-height: 18px; }
+.hintSmall { margin: var(--space-2) 0 0; color: var(--ink-muted); font-size: 13px; line-height: 18px; }
+.quick { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-2); }
+.quickChip { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; box-sizing: border-box; padding: 0 var(--space-4); border: 1px solid var(--ink); border-radius: var(--radius-pill); background: transparent; color: var(--ink); font: inherit; font-size: 14px; line-height: 22px; font-weight: 600; cursor: pointer; }
+.quickPrimary { background: var(--ink); color: var(--surface-200); }
+.quickChip[aria-disabled='true'] { border-color: var(--line-strong); background: transparent; color: var(--ink-muted); cursor: not-allowed; }
+
+.previous { display: inline-flex; align-items: center; min-height: 44px; margin-bottom: var(--space-2); padding: 0; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 13px; line-height: 18px; font-weight: 600; text-align: left; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.smallError { margin: 0 0 var(--space-4); font-size: 13px; line-height: 18px; font-weight: 600; }
+
+.caption { margin-bottom: var(--space-2); color: var(--ink-muted); font-size: 13px; line-height: 18px; font-weight: 500; }
+.question { margin: 0 0 var(--space-6); font-size: 14px; line-height: 22px; white-space: pre-wrap; }
+
+/* AI가 만든 답변: 연필 배지 + 점선 상자(디자인 시스템 규칙, 결정 34) */
+.aiBox { margin: var(--space-2) 0 var(--space-4); padding: var(--space-3); border: 1px dashed var(--pencil); border-radius: var(--radius-sm); }
+.aiBox h3 { margin: 0 0 var(--space-2); font-size: 16px; line-height: 24px; font-weight: 700; }
+.aiBox p, .aiBox li { font-size: 14px; line-height: 22px; }
+.preparing { margin: 0; font-size: 14px; line-height: 22px; }
+
+/* S2 추론 단계(F6-2b) */
+.stepsBox { margin-bottom: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--surface-300); border-radius: var(--radius-sm); background: var(--surface-100); }
+.stepsTitle { margin: 0 0 var(--space-3); font-size: 14px; line-height: 22px; font-weight: 600; }
+.steps { display: flex; flex-direction: column; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+.step { display: flex; align-items: flex-start; gap: var(--space-3); }
+.stepIcon { flex-shrink: 0; margin-top: 1px; }
+.stepName { font-size: 14px; line-height: 22px; }
+.stepNameCurrent { font-size: 14px; line-height: 22px; font-weight: 600; }
+.stepDetail { color: var(--ink-muted); font-size: 13px; line-height: 18px; }
+.srOnly { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* 안내 상자: 지연·중단(테두리 1px), 오류·사용 제한·확인(테두리 2px) */
+.noticeBox, .statusBox { margin-bottom: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-100); }
+.alertBox, .confirmBox { margin-bottom: var(--space-4); padding: var(--space-3) var(--space-4); border: 2px solid var(--ink); border-radius: var(--radius-sm); background: var(--surface-100); }
+.noticeTitle { margin: 0 0 var(--space-3); font-size: 14px; line-height: 22px; font-weight: 600; }
+.noticeTitleSmall { margin: 0 0 var(--space-2); font-size: 14px; line-height: 22px; font-weight: 600; }
+.noticeTitleSmall:focus { outline: none; }
+.noticeText { margin: 0 0 var(--space-3); font-size: 14px; line-height: 22px; }
+.noticeBox .noticeText:last-child { margin-bottom: 0; color: var(--ink-muted); font-size: 13px; line-height: 18px; }
+.confirmText { margin: 0 0 var(--space-2); font-size: 14px; line-height: 22px; }
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.linkButton { display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 14px; line-height: 22px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+
+/* 참고 자료와 추천 질문(F6-3) */
+.references { margin-bottom: var(--space-4); }
+.references .caption { margin-bottom: 0; }
+.reference { display: flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 14px; line-height: 22px; font-weight: 600; text-align: left; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.suggestions { display: flex; flex-direction: column; gap: var(--space-3); margin-bottom: var(--space-4); }
+.suggestion { display: flex; align-items: center; min-height: 44px; box-sizing: border-box; padding: var(--space-2) var(--space-4); border: 1px solid var(--ink); border-radius: var(--radius-md); background: transparent; color: var(--ink); font: inherit; font-size: 14px; line-height: 22px; font-weight: 600; text-align: left; cursor: pointer; }
+.suggestion[aria-disabled='true'] { border-color: var(--line-strong); color: var(--ink-muted); cursor: not-allowed; }
+
+/* 긴 대화의 '새 답변 보기'(F6-10) */
+.newAnswerBar { display: flex; justify-content: center; margin-top: calc(var(--space-6) * -1 - 44px); padding-bottom: var(--space-4); position: relative; z-index: 1; pointer-events: none; }
+/* 모바일(F6-10m)은 대화 영역의 안쪽 여백이 space-4라 같은 만큼만 끌어올린다 */
+.mobileBody + .newAnswerBar { margin-top: calc(var(--space-4) * -1 - 44px); }
+.newAnswer { pointer-events: auto; display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 var(--space-4); border: 1px solid var(--ink); border-radius: var(--radius-pill); background: var(--surface-200); color: var(--ink); font: inherit; font-size: 13px; line-height: 18px; font-weight: 600; cursor: pointer; }
+
+/* 출처 보기(F6-4 패널 쪽, F6-9 모바일) */
+.kept { padding-top: var(--space-4); border-top: 1px solid var(--surface-300); }
+.keptText { margin: 0 0 var(--space-2); font-size: 14px; line-height: 22px; }
+.sourceHeading { margin: 0 0 var(--space-2); font-size: 18px; line-height: 28px; font-weight: 700; }
+.cited { margin: var(--space-4) 0; }
+/* 위키 출처의 '용어 시트 열기'(MEG-254). 인용 문단 바로 아래에 둔다 */
+.sourceActions { display: flex; margin: 0 0 var(--space-4); }
+.citedSection { margin: 0 0 var(--space-2); font-size: 16px; line-height: 24px; font-weight: 700; }
+.citedPill { display: inline-flex; align-items: center; min-height: 26px; box-sizing: border-box; margin-bottom: var(--space-2); padding: 0 var(--space-3); border: 1px solid var(--ink); border-radius: var(--radius-pill); font-size: 13px; line-height: 18px; font-weight: 600; }
+.citedText { padding: var(--space-3) var(--space-4); border: 2px solid var(--ink); border-radius: var(--radius-sm); background: var(--surface-300); }
+.citedText > div > :last-child { margin-bottom: 0; }
+
+/* --- 입력 칸 --- */
+.composerArea { display: flex; flex-direction: column; gap: var(--space-2); flex-shrink: 0; }
+.mobileComposerArea { display: flex; flex-direction: column; gap: var(--space-1); flex-shrink: 0; padding: var(--space-2) var(--space-4) var(--space-4); border-top: 1px solid var(--surface-300); background: var(--surface-200); }
+.mobileComposerArea .chip { margin-bottom: var(--space-1); }
+.chip { display: flex; align-items: center; justify-content: space-between; padding-left: var(--space-3); border: 1px solid var(--surface-300); border-radius: var(--radius-sm); background: var(--surface-100); }
+.chipText { min-width: 0; overflow: hidden; color: var(--ink-muted); font-size: 13px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.chipActions { display: flex; flex-shrink: 0; }
+.chipButton { min-width: 44px; min-height: 44px; padding: 0 var(--space-2); border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 13px; line-height: 18px; font-weight: 600; cursor: pointer; }
+.label { color: var(--ink-muted); font-size: 13px; line-height: 18px; font-weight: 500; }
+/* 보내기·중단은 입력 칸 테두리 안 오른쪽 아래(결정 35). 포커스 링은 바깥 상자에 그린다 */
+.composer { display: flex; align-items: flex-end; gap: var(--space-3); box-sizing: border-box; padding: var(--space-1); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-100); }
+.composer:has(textarea:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
+.input { flex: 1; min-width: 0; box-sizing: border-box; padding: var(--space-2); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--ink); font: inherit; font-size: 16px; line-height: 24px; resize: none; }
+.input:focus-visible { outline: none; }
+.input::placeholder { color: var(--ink-muted); }
+.send { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 44px; height: 44px; padding: 0; border: 1px solid var(--ink); border-radius: var(--radius-md); background: var(--ink); color: var(--surface-200); cursor: pointer; }
+.send[aria-disabled='true'] { border-color: var(--line-strong); background: transparent; color: var(--ink-muted); cursor: not-allowed; }
+.stop { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; }
+.stop[aria-disabled='true'] { color: var(--ink-muted); cursor: progress; }
+
+/* --- 예외 상태(MEG-260, T6d) --- */
+/* 근거 일부(F6-12)·교정(F6-13)의 절 제목과 글. 제목 모양은 .aiBox h3을 따른다. */
+.aiBox .partHeading { margin-top: var(--space-4); }
+.partText { margin: 0 0 var(--space-3); font-size: 14px; line-height: 22px; }
+.correction { margin-bottom: var(--space-4); padding: var(--space-3); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-100); }
+.correction .caption { margin-bottom: var(--space-1); }
+/* 의미 확인(F6-11) 후보: 테두리 버튼을 세로로 쌓는다. */
+.clarifyPrompt { margin: 0 0 var(--space-3); font-size: 16px; line-height: 24px; font-weight: 700; }
+.options { display: flex; flex-direction: column; gap: var(--space-3); margin-bottom: var(--space-3); }
+.option { display: flex; align-items: center; min-height: 44px; padding: var(--space-2) var(--space-4); border: 1px solid var(--ink); border-radius: var(--radius-md); background: transparent; color: var(--ink); font: inherit; font-size: 14px; line-height: 22px; font-weight: 600; text-align: left; cursor: pointer; }
+.option[aria-disabled='true'] { border-color: var(--line-strong); color: var(--ink-muted); cursor: not-allowed; }
+/* 출처 회수(F6-15b)의 뒤쪽 가린 턴 */
+.hiddenBox { margin-bottom: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--surface-300); border-radius: var(--radius-sm); background: var(--surface-100); }
+.hiddenText { margin: 0; color: var(--ink-muted); font-size: 14px; line-height: 22px; }
+/* 다른 영역 선택(F6-8·F6-8m) */
+.choiceBox { margin-bottom: var(--space-4); padding: var(--space-3) var(--space-4); border: 2px solid var(--ink); border-radius: var(--radius-sm); }
+.choiceBoxMobile { border-width: 1px; border-color: var(--line-strong); background: var(--surface-100); }
+.choiceTitle { margin: 0 0 var(--space-2); font-size: 16px; line-height: 24px; font-weight: 700; }
+.choiceTitle:focus { outline: none; }
+.choiceQuote { margin: 0 0 var(--space-3); color: var(--ink-muted); font-size: 14px; line-height: 22px; }
+.choiceActions { display: flex; flex-direction: column; gap: var(--space-3); margin-bottom: var(--space-3); }
+/* 노트 접근 변경(F6-15m) */
+.accessBox { padding: var(--space-4); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface-100); }
+.accessTitle { margin: 0 0 var(--space-2); font-size: 17px; line-height: 26px; font-weight: 700; }
+.primaryLink { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 var(--space-4); border: 1px solid var(--ink); border-radius: var(--radius-md); background: var(--ink); color: var(--surface-100); font-size: 14px; line-height: 22px; font-weight: 600; text-decoration: none; }
+a.headButton, a.textButton { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
