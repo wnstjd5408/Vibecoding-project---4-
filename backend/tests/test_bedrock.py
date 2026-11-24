@@ -447,6 +447,83 @@ def test_malformed_usage_is_treated_as_missing(usage):
     assert (result.input_tokens, result.output_tokens) == (None, None)
 
 
+# --- 프롬프트 캐시 토큰 (MEG-275 4-A) ---
+# Converse의 inputTokens는 캐시를 거치지 않은 입력만 센다. 아래 값은 실측 모양을 따른다.
+# MEG-236 AC-5·MEG-275 L1의 agent 행은 inputTokens가 2였다. MEG-164 Luna 실측 가운데 v8 6회 실행은 일반 12 + 캐시 쓰기 8,272,
+# r3 90회 실행은 일반 180 + 캐시 쓰기 42,732 + 캐시 읽기 99,555였다(둘 다 Converse usage 합계).
+
+
+def test_usage_without_cache_fields_is_unchanged():
+    result = converse_once(GOOD_RESPONSE)
+
+    assert (result.input_tokens, result.output_tokens, result.cache_write_tokens) == (5, 2, 0)
+
+
+def test_zero_cache_fields_match_a_response_without_them():
+    usage = {**GOOD_RESPONSE["usage"], "cacheReadInputTokens": 0, "cacheWriteInputTokens": 0}
+
+    result = converse_once({**GOOD_RESPONSE, "usage": usage})
+
+    assert (result.input_tokens, result.output_tokens, result.cache_write_tokens) == (5, 2, 0)
+
+
+@pytest.mark.parametrize(
+    ("cache", "total_input", "cache_write"),
+    [
+        ({"cacheReadInputTokens": 3104}, 3106, 0),
+        ({"cacheWriteInputTokens": 8272}, 8274, 8272),
+        ({"cacheReadInputTokens": 3000, "cacheWriteInputTokens": 400}, 3402, 400),
+    ],
+)
+def test_cache_tokens_are_added_to_input(cache, total_input, cache_write):
+    usage = {"inputTokens": 2, "outputTokens": 180, "totalTokens": 182 + sum(cache.values()), **cache}
+
+    result = converse_once({**GOOD_RESPONSE, "usage": usage})
+
+    assert (result.input_tokens, result.output_tokens, result.cache_write_tokens) == (
+        total_input,
+        180,
+        cache_write,
+    )
+
+
+@pytest.mark.parametrize(
+    "cache",
+    [
+        {"cacheReadInputTokens": -1},
+        {"cacheWriteInputTokens": "8"},
+        {"cacheReadInputTokens": None},
+        {"cacheWriteInputTokens": True},
+        {"cacheReadInputTokens": 1.5},
+    ],
+)
+def test_malformed_cache_field_makes_usage_unknown(cache):
+    """캐시 몫을 모르면 입력을 작게 잡을 수 있으므로 usage 전체를 모르는 것으로 본다(예약액 정산)."""
+    result = converse_once({**GOOD_RESPONSE, "usage": {**GOOD_RESPONSE["usage"], **cache}})
+
+    assert (result.input_tokens, result.output_tokens, result.cache_write_tokens) == (None, None, 0)
+
+
+def test_cache_fields_without_input_or_output_tokens_are_unknown():
+    result = converse_once({**GOOD_RESPONSE, "usage": {"outputTokens": 3, "cacheReadInputTokens": 900}})
+
+    assert (result.input_tokens, result.output_tokens) == (None, None)
+
+
+def test_incomplete_answer_keeps_cache_tokens_for_settlement():
+    truncated = {
+        "output": {"message": {"content": [{"reasoningContent": {}}]}},
+        "stopReason": "max_tokens",
+        "usage": {"inputTokens": 2, "outputTokens": 1500, "cacheReadInputTokens": 700, "cacheWriteInputTokens": 50},
+    }
+
+    with pytest.raises(AiCallError) as error:
+        converse_once(truncated)
+
+    assert (error.value.input_tokens, error.value.output_tokens, error.value.cache_write_tokens) == (752, 1500, 50)
+    assert error.value.settlement == "usage"
+
+
 @pytest.mark.parametrize(
     ("step", "code", "settlement", "retryable"),
     [
