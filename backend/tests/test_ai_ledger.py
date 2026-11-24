@@ -365,8 +365,8 @@ def test_incomplete_answer_with_prompt_cache_settles_full_usage():
     ]
 
 
-def test_retry_after_cached_incomplete_answer_settles_each_attempt_with_cache():
-    """스로틀링 재시도 경로에서도 두 시도 모두 같은 규칙으로 정산한다."""
+def test_throttle_retry_settles_the_second_attempt_with_cache_tokens():
+    """스로틀링으로 다시 부른 두 번째 시도도 캐시 읽기를 포함해 정산한다. 첫 시도는 usage 없이 풀린다."""
     store = FakeStore()
     cached_ok = {**OK, "usage": {"inputTokens": 2, "outputTokens": 50, "cacheReadInputTokens": 98}}
 
