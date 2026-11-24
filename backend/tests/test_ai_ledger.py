@@ -153,6 +153,16 @@ def test_cost_rounds_up_to_micro_dollars():
     assert BUDGET.cost(0, 0) == Decimal("0")
 
 
+def test_cache_write_tokens_cost_a_quarter_more_than_plain_input():
+    """MEG-275 4-A 보수적 고정 규칙: 캐시 읽기는 일반 입력 단가, 캐시 쓰기는 1.25배."""
+    # 캐시 없음은 지금과 같다.
+    assert BUDGET.cost(100, 50, 0) == BUDGET.cost(100, 50)
+    # 입력 1,000(캐시 읽기 포함)은 1,000 × $2, 그 가운데 쓰기 400에 0.25배 웃돈 → (1,000 + 100) × $2 / 1M
+    assert BUDGET.cost(1000, 0, 400) == Decimal("0.002200")
+    # 1토큰 웃돈(0.25 × $2 / 1M)도 올림으로 남는다.
+    assert BUDGET.cost(0, 0, 1) == Decimal("0.000001")
+
+
 def test_input_estimate_is_conservative_for_korean_and_english():
     assert estimate_input_tokens("") == 64
     # 한글 한 글자 3바이트 → 1.5토큰, 영문 한 글자 → 0.5토큰
@@ -312,6 +322,70 @@ def test_missing_content_settles_usage_and_does_not_retry():
     assert (error.value.code, bedrock.calls) == ("NoContent", 1)
     assert store.settled == [(101, "usage", {"actual_usd": BUDGET.cost(30, 0), "input_tokens": 30, "output_tokens": 0})]
     assert api_error_for(error.value).code == "ai_unavailable"
+
+
+def test_success_with_prompt_cache_records_full_input_and_cost():
+    """MEG-275 AC-11. 캐시 토큰을 원장 입력 토큰과 비용에 넣는다. E09·퀴즈·agent 모두 run_ai_call로 같은 규칙이다."""
+    store = FakeStore()
+    cached = {
+        **OK,
+        "usage": {"inputTokens": 2, "outputTokens": 180, "cacheReadInputTokens": 3000, "cacheWriteInputTokens": 400},
+    }
+
+    run(store, FakeBedrock(cached), kind="agent")
+
+    # 입력 3,402 × $2 + 쓰기 웃돈 100 × $2 + 출력 180 × $8 = $0.008444
+    assert store.settled == [
+        (101, "usage", {"actual_usd": Decimal("0.008444"), "input_tokens": 3402, "output_tokens": 180})
+    ]
+
+
+def test_success_without_prompt_cache_is_recorded_as_before():
+    store = FakeStore()
+
+    run(store, FakeBedrock(OK))
+
+    assert store.settled == [(101, "usage", {"actual_usd": Decimal("0.000600"), "input_tokens": 100, "output_tokens": 50})]
+
+
+def test_incomplete_answer_with_prompt_cache_settles_full_usage():
+    store = FakeStore()
+    truncated = {
+        "output": {"message": {"content": [{"reasoningContent": {}}]}},
+        "stopReason": "max_tokens",
+        "usage": {"inputTokens": 2, "outputTokens": 1500, "cacheWriteInputTokens": 1000},
+    }
+
+    with pytest.raises(AiCallError):
+        run(store, FakeBedrock(truncated), kind="agent")
+
+    # 입력 1,002 × $2 + 쓰기 웃돈 250 × $2 + 출력 1,500 × $8 = $0.014504
+    assert store.settled == [
+        (101, "usage", {"actual_usd": Decimal("0.014504"), "input_tokens": 1002, "output_tokens": 1500})
+    ]
+
+
+def test_retry_after_cached_incomplete_answer_settles_each_attempt_with_cache():
+    """스로틀링 재시도 경로에서도 두 시도 모두 같은 규칙으로 정산한다."""
+    store = FakeStore()
+    cached_ok = {**OK, "usage": {"inputTokens": 2, "outputTokens": 50, "cacheReadInputTokens": 98}}
+
+    outcome = run(store, FakeBedrock(client_error("ThrottlingException"), cached_ok), kind="agent")
+
+    assert outcome.attempt_no == 2
+    assert store.settled == [
+        (101, "released", {}),
+        (102, "usage", {"actual_usd": BUDGET.cost(100, 50), "input_tokens": 100, "output_tokens": 50}),
+    ]
+
+
+def test_malformed_cache_usage_settles_with_reserved_fallback():
+    store = FakeStore()
+    bad = {**OK, "usage": {"inputTokens": 2, "outputTokens": 180, "cacheReadInputTokens": -5}}
+
+    run(store, FakeBedrock(bad))
+
+    assert store.settled == [(101, "reserved_fallback", {})]
 
 
 def test_missing_content_without_usage_settles_with_fallback():
