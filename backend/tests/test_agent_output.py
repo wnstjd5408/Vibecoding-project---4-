@@ -453,7 +453,11 @@ def test_agent_v4_rules_cover_the_remaining_l1_failure_modes():
     assert PROMPT_VERSION == "agent-v4"
     assert "그 내용을 빠뜨리지 말고 답의 중심으로 씁니다" in prompt
     assert "근거 문단에 나온 변경과 특징 가운데 질문과 관계있는 것을 사실대로 전합니다" in prompt
+    assert "다른 대상을 다룬 문단의 내용은 답으로 쓰지 않습니다" in prompt
     assert "\"근거에 없다\"거나 \"설명하지 않는다\"고 쓰지 않습니다" in prompt
+    # 답하는 문단이 없을 때의 고정 문장(서버가 no_evidence로 바꿈)은 그대로 쓰게 한다. 새 규칙이 이 경로를 막지 않는다.
+    assert "질문에 답하는 문단이 하나도 없을 때는 아래 규칙의 고정 문장을 그대로 씁니다" in prompt
+    assert prompt.index("고정 문장을 그대로 씁니다") < prompt.index("근거 문단에서 이 질문의 답을 찾지 못했습니다.")
     assert "sections와 limitation이 서로 어긋나지 않게 합니다" in prompt
     assert "근거 문단이 그중 하나만 다루더라도 그 하나로 답을 정하지 말고 state를 clarify로" in prompt
     assert "그 문장과 맞닿은 설명(정의, 차이, 동작)을 찾아" in note_only
