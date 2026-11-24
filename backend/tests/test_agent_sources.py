@@ -281,7 +281,8 @@ def test_e32_returns_the_cited_paragraph_and_reports_no_change(client, fake):
     response = get(client, source_path(turn["turn_id"]))
     assert response.status_code == 200, response.text
     assert response.json() == {
-        "ref": 1, "source_kind": "note", "title": "출처 노트", "section": "정의", "cited_revision": "3",
+        "ref": 1, "source_kind": "note", "source_id": str(SOURCE_NOTE), "title": "출처 노트", "section": "정의",
+        "cited_revision": "3",
         "paragraph_text": DEFINITION, "highlight": None, "changed_since_cited": False,
     }
 

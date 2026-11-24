@@ -1,0 +1,72 @@
+{
+  "format": "wrag-snapshot-v1",
+  "provenance": "synthetic",
+  "terms": [
+    {
+      "id": 101,
+      "key": "멱등성",
+      "label": "멱등성",
+      "source": "glossary",
+      "glossary_revision": 3,
+      "glossary_entries": {
+        "body_markdown": "# 정의\n멱등성은 같은 요청을 여러 번 보내도 결과가 한 번 보낸 것과 같은 성질이다.\n\n# 조건\n단, 요청마다 새 시각이나 일련번호를 넣어 서버 상태를 바꾸면 멱등하지 않다.\n\n# 예시\nHTTP PUT과 DELETE는 멱등하게 설계하고, POST는 보통 멱등하지 않다."
+      }
+    },
+    {
+      "id": 102,
+      "key": "dns",
+      "label": "DNS",
+      "source": "glossary",
+      "glossary_revision": 1,
+      "glossary_entries": {
+        "body_markdown": "# 정의\nDNS는 도메인 이름을 IP 주소로 바꾸는 이름 풀이 체계다.\n\n# 캐시\n리졸버는 받은 응답을 TTL 동안 캐시한다. 단, TTL이 0이면 캐시하지 않는다."
+      }
+    },
+    {
+      "id": 103,
+      "key": "tcp",
+      "label": "TCP",
+      "source": "glossary",
+      "glossary_revision": 0,
+      "glossary_entries": {
+        "body_markdown": "# 정의\nTCP는 순서와 재전송을 보장하는 연결형 전송 계층 프로토콜이다.\n\n# 연결 수립\nTCP는 3-way handshake로 연결을 맺는다. SYN, SYN-ACK, ACK 순서로 주고받는다.\n\n# 참고\n전송 계층 프로토콜 비교표는 네트워크 과목 노트에서 본다."
+      }
+    },
+    {
+      "id": 104,
+      "key": "udp",
+      "label": "UDP",
+      "source": "glossary",
+      "glossary_revision": 2,
+      "glossary_entries": {
+        "body_markdown": "# 정의\nUDP는 연결을 맺지 않고 순서를 보장하지 않는 비연결형 전송 계층 프로토콜이다.\n\n# 참고\n전송 계층 프로토콜 비교표는 네트워크 과목 노트에서 본다."
+      }
+    },
+    {
+      "id": 105,
+      "key": "캐시",
+      "label": "캐시",
+      "source": "ai",
+      "glossary_revision": 4,
+      "glossary_entries": null
+    },
+    {
+      "id": 106,
+      "key": "라우팅",
+      "label": "라우팅",
+      "source": "ai",
+      "glossary_revision": 1,
+      "glossary_entries": {
+        "body_markdown": "# 정의\nCANARY-DELETED-7f3a 라우팅 표는 삭제된 항목의 본문이다."
+      }
+    },
+    {
+      "id": 107,
+      "key": "포트",
+      "label": "포트",
+      "source": "glossary",
+      "glossary_revision": 1,
+      "glossary_entries": null
+    }
+  ]
+}

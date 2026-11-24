@@ -1,0 +1,23 @@
+/* CS Agent 답변 본문. 글자 크기와 블록 간격은 노트 본문(NoteBody.module.css)을 그대로 쓴다. */
+.answer { display: flex; flex-direction: column; gap: var(--space-4); }
+.section > :last-child > :last-child { margin-bottom: 0; }
+.heading { margin: 0 0 var(--space-2); font-size: 18px; line-height: 28px; }
+
+/* 인용 번호 [n]: 글 흐름 안의 작은 버튼. 터치 목표는 글줄을 넘지 않게 패딩으로 넓힌다. */
+.citation { display: inline; margin: 0 1px; padding: 2px 4px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: transparent; color: var(--ink); font: inherit; font-size: 13px; line-height: 18px; font-weight: 600; vertical-align: baseline; cursor: pointer; }
+.citation:hover { background: var(--surface-300); }
+.citation:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+/* 그림: 관련 절 바로 아래. 넓은 그림은 그림 영역만 가로로 스크롤한다(디자인 F6-18m). 그리는 중 안내도 노트와 같다. */
+.figure { margin: 0; }
+/* 상자 모양은 노트 그림(NoteBody.module.css .diagram)을 그대로 쓰고, 캡션과 붙도록 아래 여백만 없앤다. */
+.figure .scroll { margin: 0; }
+.scroll:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.caption { margin-top: var(--space-2); color: var(--ink-muted); font-size: 14px; line-height: 22px; }
+.captionSources { margin-left: var(--space-2); }
+.captionSources > span + span { margin-left: var(--space-2); }
+
+/* 그림 실패 카드(F6-16). 글은 그대로 읽히고, 머리만 빨간펜으로 오류를 알린다. */
+.failure { padding: var(--space-3); border: 1px solid var(--red-pen); border-radius: var(--radius-sm); font-size: 14px; line-height: 22px; }
+.failureTitle { margin: 0 0 var(--space-1); color: var(--red-pen); font-weight: 600; }
+.failureText { margin: 0; color: var(--ink); }

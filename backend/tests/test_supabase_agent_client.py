@@ -8,7 +8,7 @@ import json
 import httpx
 import pytest
 
-from app.supabase import SupabaseClient, SupabaseConfigError, SupabaseUnavailable
+from app.supabase import WIKI_PAGE_SIZE, SupabaseClient, SupabaseConfigError, SupabaseUnavailable
 
 USER_ID = "00000000-0000-4000-8000-00000000000a"
 CONVERSATION = "11111111-1111-4111-8111-111111111111"
@@ -161,6 +161,38 @@ def test_note_search_reads_only_published_note_bodies():
     assert dict(request.url.params) == {
         "is_published": "eq.true", "select": "id,revision,title,body_markdown", "order": "id.asc",
     }
+
+
+def test_wiki_search_reads_only_current_dictionary_entries_with_their_revision():
+    rows = [{"id": 1, "key": "dns", "label": "DNS", "source": "glossary", "glossary_revision": 3,
+             "glossary_entries": {"body_markdown": "b"}}]
+    client, seen = recording_client([httpx.Response(200, json=rows)])
+    assert client.list_wiki_entries() == rows
+    request = seen[0]
+    assert request.method == "GET" and request.url.path == "/rest/v1/terms"
+    # 항목이 있다는 판정(MEG-251 AC-1): glossary_entries 행(!inner)과 source = glossary. 개정은 T4a 열이다.
+    assert dict(request.url.params) == {
+        "select": "id,key,label,source,glossary_revision,glossary_entries!inner(body_markdown)",
+        "source": "eq.glossary", "order": "id.asc", "limit": str(WIKI_PAGE_SIZE),
+    }
+
+
+def test_wiki_search_pages_by_id_and_refuses_a_partial_list(monkeypatch):
+    monkeypatch.setattr("app.supabase.WIKI_PAGE_SIZE", 2)
+    monkeypatch.setattr("app.supabase.WIKI_MAX_PAGES", 2)
+    page = lambda *ids: httpx.Response(200, json=[{"id": i} for i in ids])  # noqa: E731
+    client, seen = recording_client([page(1, 2), page(3)])
+    assert [row["id"] for row in client.list_wiki_entries()] == [1, 2, 3]
+    assert dict(seen[1].url.params)["id"] == "gt.2"
+
+    client, seen = recording_client([page(1, 2), page(3, 4), page()])
+    assert [row["id"] for row in client.list_wiki_entries()] == [1, 2, 3, 4]
+    probe = dict(seen[2].url.params)
+    assert probe["id"] == "gt.4" and probe["limit"] == "1" and "glossary_entries!inner" in probe["select"]
+
+    client, _ = recording_client([page(1, 2), page(3, 4), page(5)])
+    with pytest.raises(SupabaseConfigError):
+        client.list_wiki_entries()
 
 
 def test_reading_a_cited_source_reads_the_snapshot_of_that_turn_and_ref():
@@ -319,3 +351,32 @@ def test_rejected_e29_writes_are_config_errors(call):
     client, _ = recording_client([httpx.Response(400, json={"code": "23514"})])
     with pytest.raises(SupabaseConfigError):
         call(client)
+
+
+def test_wiki_entry_states_read_only_current_entries_without_their_body():
+    rows = [{"id": 3, "label": "DNS", "glossary_entries": {"term_id": 3}},
+            {"id": 7, "label": "멱등성", "glossary_entries": {"term_id": 7}}]
+    client, seen = recording_client([httpx.Response(200, json=rows)])
+    assert client.get_wiki_entry_states([7, 3, 7]) == {3: {"id": 3, "label": "DNS"}, 7: {"id": 7, "label": "멱등성"}}
+    request = seen[0]
+    assert request.method == "GET" and request.url.path == "/rest/v1/terms"
+    # 항목이 있다는 판정(MEG-252, 설계 3.2): glossary_entries 행(!inner)과 source = glossary. 본문은 읽지 않는다.
+    assert dict(request.url.params) == {
+        "id": "in.(3,7)", "source": "eq.glossary", "select": "id,label,glossary_entries!inner(term_id)",
+    }
+
+
+def test_wiki_entry_states_of_no_ids_do_not_call_the_db():
+    client, seen = recording_client([])
+    assert client.get_wiki_entry_states([]) == {} and seen == []
+
+
+def test_reading_one_wiki_entry_for_e32_reads_its_body_only_if_it_exists_now():
+    row = {"id": 7, "label": "멱등성", "glossary_entries": {"body_markdown": "b"}}
+    client, seen = recording_client([httpx.Response(200, json=[row]), httpx.Response(200, json=[])])
+    assert client.get_wiki_entry(7) == row
+    assert dict(seen[0].url.params) == {
+        "id": "eq.7", "source": "eq.glossary", "select": "id,label,glossary_entries!inner(body_markdown)",
+        "limit": "1",
+    }
+    assert client.get_wiki_entry(8) is None

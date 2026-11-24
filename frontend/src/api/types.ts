@@ -14,6 +14,8 @@ export type ApiErrorBody = {
     detail?: string
     fields?: FieldError[]
     retry_after_seconds?: number
+    // CS Agent E29의 409 in_progress·turn_in_progress에만 온다. 진행 중인 그 턴을 E30으로 이어 볼 때 쓴다(MEG-255).
+    turn_id?: string
   }
 }
 

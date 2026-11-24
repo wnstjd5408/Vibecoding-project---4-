@@ -2,6 +2,7 @@
 
 현재 내부 위키 설명 프롬프트와 무과금 요청 준비는 [WIKI_V044.md](WIKI_V044.md)를 사용한다.
 기존 live 실행기는 과거 계약 재현용으로 유지한다.
+CS Agent 위키 검색의 무과금 검색 평가(WRAG-DEV, E1~E6)는 [WIKI_RETRIEVAL.md](WIKI_RETRIEVAL.md)를 사용한다.
 
 ## 사람 채점 집계
 

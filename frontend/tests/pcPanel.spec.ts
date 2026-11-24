@@ -163,6 +163,7 @@ test.describe('PC 폭 로그인 안내', () => {
     await expectBelowHeader(page, loginDialog(page)) // 용어 패널과 같은 자리
     expect(await loginDialog(page).evaluate((element) => element.matches(':modal'))).toBe(false) // 비모달
     await expect(page.locator('[class*="scrim"]:visible')).toHaveCount(0)
+    // 노출 중단 플래그를 켠 빌드의 본문이다. 끈 빌드의 캔버스 문구는 agentEntry.spec.ts가 시험한다(MEG-259).
     await expect(loginDialog(page).getByText('로그인하면 AI 설명, 즐겨찾기, 오늘의 퀴즈를 쓸 수 있어요.')).toBeVisible()
     // 본문은 패널 때문에 다시 가운데로 움직이지 않고 그대로 왼쪽 영역에 남는다
     await expectColumnBesidePanel(page, loginDialog(page))
