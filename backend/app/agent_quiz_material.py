@@ -28,6 +28,7 @@ from app.ai_explain import (
     known_term,
     pick_term_and_sentence,
     record_view,
+    resolve_term,
     store_explanation,
 )
 from app.ai_ledger import (
@@ -92,7 +93,8 @@ def _make(job: Any, supabase: SupabaseClient, runtime: AiRuntime, started_at: fl
     if picked is None:
         return "not_term"
 
-    row = supabase.find_term_for_explain(picked.key, user.user_id)
+    # E09와 같은 규칙으로 용어를 찾는다. 끝의 조사는 이미 있는 용어일 때만 뗀다(MEG-272).
+    picked, row = resolve_term(supabase, picked, user.user_id)
     if known_term(row):
         record_view(supabase, user.user_id, row["id"])
         return "known"
