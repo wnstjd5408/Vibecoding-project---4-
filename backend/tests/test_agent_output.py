@@ -25,6 +25,7 @@ from app.agent_output import (
     MAX_SOURCE_SECTION_CHARS,
     MAX_SOURCE_TITLE_CHARS,
     MAX_TOPIC_CHARS,
+    PROMPT_VERSION,
     OutputInvalid,
     PromptInput,
     _data,
@@ -442,6 +443,22 @@ def test_agent_v3_rules_cover_the_l1_failure_modes():
     assert "선택한 노트 문장이 근거 문단과 다릅니다" in note_only
     # 주제 확인이 꺼진 턴에는 주제 규칙이 없다.
     assert "topic_check" not in build_prompt(PromptInput(**{**base.__dict__, "allow_topic_check": False}))
+
+
+def test_agent_v4_rules_cover_the_remaining_l1_failure_modes():
+    # MEG-275 5-B: CSA-DEV v2 L1의 남은 X(핵심 누락, "근거에 없다" 오판, 노트 문장 확인, 한 뜻만 다룬 다의어)마다 규칙이 있다.
+    base = _worst_case_input("가")
+    prompt = build_prompt(base)
+    note_only = build_prompt(PromptInput(**{**base.__dict__, "allow_correction": False}))
+    assert PROMPT_VERSION == "agent-v4"
+    assert "그 내용을 빠뜨리지 말고 답의 중심으로 씁니다" in prompt
+    assert "근거 문단에 나온 변경과 특징 가운데 질문과 관계있는 것을 사실대로 전합니다" in prompt
+    assert "\"근거에 없다\"거나 \"설명하지 않는다\"고 쓰지 않습니다" in prompt
+    assert "sections와 limitation이 서로 어긋나지 않게 합니다" in prompt
+    assert "근거 문단이 그중 하나만 다루더라도 그 하나로 답을 정하지 말고 state를 clarify로" in prompt
+    assert "그 문장과 맞닿은 설명(정의, 차이, 동작)을 찾아" in note_only
+    # 교정이 허용된 턴(위키 근거)에는 노트 문장 확인 규칙 대신 교정 규칙이 들어간다.
+    assert "그 문장과 맞닿은 설명" not in prompt
 
 
 def test_parse_correction_becomes_answered_when_not_allowed():
