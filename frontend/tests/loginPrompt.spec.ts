@@ -5,6 +5,7 @@ import { goInApp } from './inApp.ts'
 // MEG-77 로그인 안내 시트(F1-1c·F2-2b). playwright.config.ts가 VITE_API_MOCK=true로 서버를 띄우므로 가짜 응답(E08·E09는 방문자에게 401 login_required)으로 시험한다.
 // 실제 백엔드의 401과 실제 즐겨찾기·AI 설명 화면 연결은 이 시험이 확인하지 못한다(MEG-76·90·106이 맡는다).
 const TITLE = '로그인이 필요해요'
+// 노출 중단 플래그를 켠 빌드(playwright.config.ts의 agent-disabled)의 본문이다. 끈 빌드의 캔버스 문구는 agentEntry.spec.ts가 시험한다(MEG-259).
 const DEFAULT_BODY = '로그인하면 AI 설명, 즐겨찾기, 오늘의 퀴즈를 쓸 수 있어요. 계정은 운영자가 만들어 줘요.'
 const QUIZ_BODY = '오늘의 퀴즈는 로그인한 뒤에 볼 수 있어요. 계정은 운영자가 만들어 줘요.'
 

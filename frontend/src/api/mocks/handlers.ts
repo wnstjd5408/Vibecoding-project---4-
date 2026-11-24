@@ -9,6 +9,7 @@ import { adminReportRoutes } from './adminReportMocks.ts'
 export type MockRequest = { method: string; path: string; query: URLSearchParams; body: unknown }
 export type MockResponse = { status: number; body?: unknown }
 import { adminGlossaryRoutes, readOperatorTerm } from './adminGlossaryMocks.ts'
+import { agentRoutes } from './agent.ts'
 
 export type Route = {
   method: string
@@ -120,6 +121,8 @@ const FIELD_MESSAGES: Record<string, string> = {
 
 const routes: Route[] = [
   ...adminReportRoutes,
+  // CS Agent E27·E28·E30·E31·E32(MEG-255). E29의 가짜 SSE는 agent.ts의 openMockTurnStream이 따로 준다.
+  ...agentRoutes,
   // 백엔드 상태 확인. 개발 서버 프록시가 실제 백엔드의 /health로 이어 주는 경로와 같은 모양이다.
   { method: 'GET', pattern: /^\/api\/health$/, handle: () => ({ status: 200, body: { status: 'ok' } }) },
   ...adminNoteRoutes,

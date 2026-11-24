@@ -2,14 +2,18 @@
 
 검색은 `retrieve(user, question, context) -> [Paragraph]` 하나로 둔다. 실행 파이프라인(agent_turns)은 이 인터페이스만 안다.
 
-- 앱 기본값은 노트 임시 검색(D1, T3b MEG-237, agent_note_search.NoteRetriever)이다. 위키 검색은 T4(MEG-238)가 이
-  인터페이스로 구현을 바꿔 끼운다. 그때 retrieve의 모양과 E32 응답 모양은 바꾸지 않는다(기술 검토 4절).
+- 앱 기본값은 노트 임시 검색(D1, T3b MEG-237, agent_note_search.NoteRetriever)이다. 위키 플래그(WIKI_ENV, T4c
+  MEG-252)를 켜면 위키 검색(agent_wiki_search.WikiRetriever, T4b MEG-251)으로 바꿔 끼운다. 그때 노트는 질문 문맥으로만
+  쓰고 근거로 쓰지 않는다(MEG-163 W2). retrieve의 모양과 E32 응답 모양은 바꾸지 않는다(기술 검토 4절).
+- 위키 플래그는 기본 꺼짐이다. 켜는 것은 검색 평가 뒤 사람이 정한다(T4d MEG-253, W3). 같은 플래그가 E27 origin wiki와
+  위키에서 연 대화(agent_access)도 함께 켜고 끈다. 절차는 docs/deployment-guide.md "CS Agent 위키 플래그" 절에 있다.
 - NoEvidenceRetriever는 문단을 돌려주지 않는 구현이다(모든 질문이 모델 호출 없이 no_evidence로 끝난다). 시험용 고정 문단
   (FixedRetriever)을 운영에 쓰면 근거 없는 답이 근거 있는 것처럼 보이므로 기본값으로 두지 않는다.
 - 검색은 사용자 권한 안에서만 한다(spec 8절 "위키 근거"). 권한 확인은 구현의 책임이다. 파이프라인은 인용 직전에
-  노트 출처를 한 번 더 확인한다(spec E29 9단계).
+  출처(노트·위키)를 한 번 더 확인한다(spec E29 9단계).
 """
 
+import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -21,10 +25,20 @@ from app.supabase import SupabaseClient, get_supabase
 
 SOURCE_KINDS = ("note", "wiki")
 
+# 위키 플래그(MEG-252). 켜는 값(1·true·yes·on)일 때만 켠다. 빈 값·잘못 쓴 값은 꺼짐이다. 꺼진 쪽이 지금 동작(노트 임시
+# 검색, E27 origin wiki 422)이라 잘못 쓴 값이 위키 경로를 열지 않게 한다. 노출 중단(CS_AGENT_DISABLED)과 방향이 반대다.
+WIKI_ENV = "CS_AGENT_WIKI_ENABLED"
+_ON_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def wiki_enabled() -> bool:
+    """위키 플래그가 켜졌는가. 요청마다 환경변수를 읽는다(배포 환경변수를 바꾸고 재배포하면 반영된다)."""
+    return os.environ.get(WIKI_ENV, "").strip().lower() in _ON_VALUES
+
 
 @dataclass(frozen=True)
 class Paragraph:
-    """근거 문단 하나. source_id·revision은 문자열이다(노트 id·개정을 문자열로, 위키 형태는 Q1에서 정한다).
+    """근거 문단 하나. source_id·revision은 문자열이다(노트는 id·개정, 위키는 `glossary:{term_id}`·사전 개정 번호, MEG-163 W7).
 
     text는 모델에 보내고 인용 당시 원문(paragraph_snapshot)으로 저장한다. section은 문단이 속한 제목이다.
     """
@@ -55,6 +69,9 @@ class RetrievalContext:
     # 선택 문맥의 위치: (노트 id, 저장한 노트 개정, 시작, 끝). selection_texts와 같은 순서다. 노트 근거 기간에 선택 문장이 든
     # 문단을 위치로 빼는 데 쓴다(MEG-237). 모르면 비워 둔다(그때는 원문 포함 여부로 본다).
     selection_spans: tuple[tuple[int, int, int, int], ...] = ()
+    # 위키에서 연 대화(origin wiki)가 가리키는 사전 항목. `glossary:{term_id}` 형식이다(MEG-163 W7). 위키 검색
+    # (agent_wiki_search)은 이 항목의 문단에 가산점을 준다. 노트 검색은 쓰지 않는다. 모르면 None이다(MEG-251).
+    wiki_ref: str | None = None
 
 
 class Retriever(Protocol):
@@ -101,8 +118,15 @@ class FixedRetriever:
 
 
 def get_retriever(supabase: SupabaseClient = Depends(get_supabase)) -> Retriever:
-    """FastAPI 의존성. T4 전에는 공개 노트 임시 검색이다(D1). 시험은 dependency_overrides로 바꾼다."""
-    # agent_note_search가 이 모듈의 Paragraph를 쓰므로 순환 import를 피해 여기서 가져온다.
+    """FastAPI 의존성. 위키 플래그가 켜져 있으면 위키 검색, 아니면 공개 노트 임시 검색(D1)이다.
+
+    시험은 dependency_overrides로 바꾼다.
+    """
+    # 두 구현이 이 모듈의 Paragraph를 쓰므로 순환 import를 피해 여기서 가져온다.
+    if wiki_enabled():
+        from app.agent_wiki_search import WikiRetriever
+
+        return WikiRetriever(supabase)
     from app.agent_note_search import NoteRetriever
 
     return NoteRetriever(supabase)

@@ -7,7 +7,7 @@ const WEB = 'http://127.0.0.1:4187'
 const API = 'http://127.0.0.1:8187'
 
 export default defineConfig({
-  testDir: './tests-local', fullyParallel: false, workers: 1, retries: 0, reporter: 'list',
+  testDir: './tests-local', testMatch: ['quizLocal.spec.ts'], fullyParallel: false, workers: 1, retries: 0, reporter: 'list',
   use: { baseURL: WEB, browserName: 'chromium', viewport: { width: 390, height: 844 }, screenshot: 'only-on-failure' },
   webServer: [
     {

@@ -57,6 +57,7 @@ from app.agent_access import (
     read_turns,
     source_checker,
     visible_turns,
+    wiki_source_term,
 )
 from app.agent_output import (
     MAX_QUESTION_CHARS,
@@ -145,7 +146,8 @@ class ReplyBody(BaseModel):
 
 class TurnRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    question: QuestionBody
+    # 다시 묻기(retry_of_turn_id)에서는 생략할 수 있다. 서버가 대상 턴에 저장된 질문을 쓴다(MEG-257). 그 밖에는 필수다.
+    question: QuestionBody | None = None
     add_selections: Annotated[list[SelectionAdd], Field(max_length=MAX_ADD_SELECTIONS)] = []
     exclude_selection_ids: Annotated[list[StrictStr], Field(max_length=MAX_EXCLUDE_SELECTIONS)] = []
     reply: ReplyBody | None = None
@@ -243,11 +245,51 @@ def check_request(
     turns: list[dict[str, Any]],
     supabase: SupabaseClient,
     user: SessionUser,
+    rows: list[dict[str, Any]],
 ) -> Checked:
-    """spec E29 1단계의 질문·선택·확인 선택·다시 묻기 검사. turns는 가림을 적용한 turn 객체(오래된 순)다."""
-    question = body.question
+    """spec E29 1단계의 질문·선택·확인 선택·다시 묻기 검사.
+
+    turns는 가림을 적용한 turn 객체(오래된 순)이고, rows는 같은 턴의 저장 행이다. 다시 묻기는 대상 턴에 저장된 질문을
+    rows에서 읽는다. 가린 추천 질문 턴은 turn 객체에서 질문 글이 빠지기 때문이다(MEG-257).
+    """
     by_id = {turn["turn_id"]: turn for turn in turns}
 
+    if body.question is None:
+        # 질문을 생략한 다시 묻기: 대상 턴에 저장된 질문을 그대로 쓴다. prepare_turn이 retry_of_turn_id가 있는 것을 확인했다.
+        checked = _retry_target(body, by_id, rows)
+    else:
+        checked = _check_question(body.question, by_id)
+
+    if body.reply is not None:
+        _check_reply(body, checked, turns, by_id)
+
+    if body.retry_of_turn_id is not None and body.question is not None:
+        stored = _retry_target(body, by_id, rows)
+        # 질문을 함께 보냈으면 대상 턴의 질문과 같아야 한다(주제 전환 확인의 question.text 규칙과 같다). 실행은 저장된 질문으로 한다.
+        if not _same_question(checked, stored):
+            raise _field_error("question", "invalid_value")
+        checked.kind, checked.text = stored.kind, stored.text
+        checked.preset, checked.from_turn_id = stored.preset, stored.from_turn_id
+        checked.retry_of_turn_id = stored.retry_of_turn_id
+
+    _check_selections(body, checked, access, supabase, user)
+
+    if not any(turn["status"] == "completed" for turn in turns):
+        # 앞에 끝난 답이 없으면 이 질문이 주제를 정한다. 주제 전환 확인을 하지 않는다.
+        checked.allow_topic_check = False
+
+    for turn in turns:
+        if turn.get("hidden") is not None or turn["status"] != "completed" or "result" not in turn:
+            continue
+        answer = _answer_text(turn["result"])
+        text = turn["question"].get("text")
+        if answer and text:
+            checked.recent.append((text, answer))
+    return checked
+
+
+def _check_question(question: QuestionBody, by_id: dict[str, dict[str, Any]]) -> Checked:
+    """요청 본문의 질문(spec E29 question.kind)을 검사한다."""
     if question.kind == "preset":
         if question.preset is None:
             raise _field_error("question.preset", "required")
@@ -275,33 +317,37 @@ def check_request(
             if source is None or source.get("hidden") is not None or question.text not in suggestions:
                 raise _field_error("question.text", "invalid_value")
             checked.from_turn_id = from_id
-
-    if body.reply is not None:
-        _check_reply(body, checked, turns, by_id)
-
-    if body.retry_of_turn_id is not None:
-        retry_id = _uuid_or_422(body.retry_of_turn_id, "retry_of_turn_id")
-        target = by_id.get(retry_id)
-        if target is None:
-            raise _field_error("retry_of_turn_id", "invalid_value")
-        if not (target.get("hidden") or {}).get("retry_allowed"):
-            raise ApiError("conflict", "turn_not_retryable", stage="validate")
-        checked.retry_of_turn_id = retry_id
-
-    _check_selections(body, checked, access, supabase, user)
-
-    if not any(turn["status"] == "completed" for turn in turns):
-        # 앞에 끝난 답이 없으면 이 질문이 주제를 정한다. 주제 전환 확인을 하지 않는다.
-        checked.allow_topic_check = False
-
-    for turn in turns:
-        if turn.get("hidden") is not None or turn["status"] != "completed" or "result" not in turn:
-            continue
-        answer = _answer_text(turn["result"])
-        text = turn["question"].get("text")
-        if answer and text:
-            checked.recent.append((text, answer))
     return checked
+
+
+def _retry_target(body: TurnRequest, by_id: dict[str, dict[str, Any]], rows: list[dict[str, Any]]) -> Checked:
+    """다시 묻기 대상(spec E29 retry_of_turn_id)을 검사하고, 대상 턴에 저장된 질문을 Checked로 돌려준다.
+
+    대상은 이 대화의 턴이고 hidden.retry_allowed가 true여야 한다(처음 가린 턴, 다시 묻기 한 번). 판정은 가림 함수를 따른다.
+    """
+    retry_id = _uuid_or_422(body.retry_of_turn_id, "retry_of_turn_id")
+    target = by_id.get(retry_id)
+    if target is None:
+        raise _field_error("retry_of_turn_id", "invalid_value")
+    if not (target.get("hidden") or {}).get("retry_allowed"):
+        raise ApiError("conflict", "turn_not_retryable", stage="validate")
+    row = next(row for row in rows if row["id"] == retry_id)
+    return Checked(
+        kind=row["question_kind"],
+        text=row["question_text"],
+        preset=row.get("preset"),
+        from_turn_id=row.get("from_turn_id"),
+        retry_of_turn_id=retry_id,
+    )
+
+
+def _same_question(sent: Checked, stored: Checked) -> bool:
+    """보낸 질문이 다시 묻기 대상의 질문과 같은가. 빠른 질문은 칩 종류로, 나머지는 문구(추천 질문은 고른 턴도)로 본다."""
+    if sent.kind != stored.kind:
+        return False
+    if sent.kind == "preset":
+        return sent.preset == stored.preset
+    return sent.text == stored.text and sent.from_turn_id == stored.from_turn_id
 
 
 def _check_reply(body: TurnRequest, checked: Checked, turns: list[dict[str, Any]], by_id: dict) -> None:
@@ -515,12 +561,17 @@ def _execute(
         selection_texts=tuple(text for _, text in checked.selections),
         selection_spans=tuple(checked.selection_spans),
         recent_questions=tuple(question for question, _ in checked.recent),
+        # 위키에서 연 대화의 사전 항목. 위키 검색이 그 항목 문단에 가산점을 준다(MEG-251·MEG-252). 노트 검색은 쓰지 않는다.
+        wiki_ref=conversation.get("wiki_ref"),
     )
     emit(sse("step", {"step": "understand", "state": "done"}))
 
     _touch(job, supabase, "retrieve")
     emit(sse("step", {"step": "retrieve", "state": "current"}))
     paragraphs = usable_paragraphs(retriever.retrieve(job.user, checked.text, context))
+    if conversation["origin"] == "wiki":
+        # 위키에서 연 대화는 위키 문단만 근거로 쓴다(MEG-163 W2, 설계 독립 리뷰 R1). 검색 구현과 관계없이 여기서 거른다.
+        paragraphs = [paragraph for paragraph in paragraphs if paragraph.source_kind == "wiki"]
     _touch(job, supabase, "retrieve", len(paragraphs))
     done: dict[str, Any] = {"step": "retrieve", "state": "done", "paragraph_count": len(paragraphs)}
     # 화면이 "노트 문단 N개"와 "위키 문단 N개"를 고르는 값이다(spec 6절, 2026-11-18 결정).
@@ -621,7 +672,10 @@ def _execute(
 
 
 def _check_sources(job: TurnJob, supabase: SupabaseClient, sources: list[dict[str, Any]], ledger_id: int) -> None:
-    """인용한 문단이 지금도 볼 수 있는 출처인지 다시 본다(spec E29 9단계). 가림 함수와 같은 판정이다."""
+    """인용한 문단이 지금도 볼 수 있는 출처인지 다시 본다(spec E29 9단계). 가림 함수와 같은 판정이다.
+
+    노트 출처는 지금 공개이고 존재하는지, 위키 출처는 그 사전 항목이 지금 있는지 본다(MEG-252).
+    """
     if not sources:
         return
     note_ids = []
@@ -630,7 +684,11 @@ def _check_sources(job: TurnJob, supabase: SupabaseClient, sources: list[dict[st
         note_id = note_source_id(source) if source["source_kind"] == "note" else None
         if note_id is not None:
             note_ids.append(note_id)
-    visible = source_checker(supabase.get_note_states(note_ids) if note_ids else {})
+    term_ids = sorted({term_id for source in sources if (term_id := wiki_source_term(source)) is not None})
+    visible = source_checker(
+        supabase.get_note_states(note_ids) if note_ids else {},
+        supabase.get_wiki_entry_states(term_ids) if term_ids else {},
+    )
     if not all(visible(source) for source in sources):
         logger.warning("stage=sources turn_id=%s source_not_visible", job.turn_id)
         raise _Failed("error", "internal_error", ledger_id)
@@ -878,6 +936,9 @@ def prepare_turn(
     runtime: AiRuntime,
 ) -> TurnJob | Replay:
     """spec E29 1~3단계. 실행할 턴(TurnJob)이나 재생할 턴(Replay)을 돌려준다. 동기 함수다(스레드 풀에서 돈다)."""
+    if body.question is None and body.retry_of_turn_id is None:
+        # 요청 형식 검사다. question을 생략할 수 있는 것은 다시 묻기뿐이다(MEG-257). 다른 형식 오류처럼 맨 앞에서 거절한다.
+        raise _field_error("question", "required")
     if agent_disabled():
         raise ApiError("service_unavailable", stage="flag")
     target = path_uuid(conversation_id)
@@ -897,8 +958,9 @@ def prepare_turn(
         raise api_error_for(error) from None
 
     access = load_conversation(supabase, user, target)
-    turns = visible_turns(supabase, access, read_turns(supabase, user, target))
-    checked = check_request(body, access, turns, supabase, user)
+    rows = read_turns(supabase, user, target)
+    turns = visible_turns(supabase, access, rows)
+    checked = check_request(body, access, turns, supabase, user, rows)
 
     claim = supabase.claim_agent_turn(
         {
