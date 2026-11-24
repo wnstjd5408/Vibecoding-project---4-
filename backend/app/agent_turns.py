@@ -63,6 +63,7 @@ from app.agent_output import (
     MAX_QUESTION_CHARS,
     MAX_REPLY_TEXT_CHARS,
     MAX_SELECTION_TOTAL_CHARS,
+    NO_CITATION,
     NO_EVIDENCE_RESULT,
     PRESET_TEXTS,
     PROMPT_VERSION,
@@ -647,9 +648,26 @@ def _execute(
             allow_correction=allow_correction,
         )
     except OutputInvalid as invalid:
-        # 형식 실패는 재시도 없이 failed다(Q19 임시). 호출은 이미 정산됐다. 원문은 남기지 않는다.
         logger.warning("stage=validate turn_id=%s output_invalid=%s", job.turn_id, invalid.reason)
-        raise _Failed("error", "ai_unavailable", outcome.ledger_id) from None
+        if invalid.reason != NO_CITATION:
+            # 형식 실패는 재시도 없이 failed다. 호출은 이미 정산됐다. 원문은 남기지 않는다.
+            raise _Failed("error", "ai_unavailable", outcome.ledger_id) from None
+        # 인용 없는 답(Q19, 사용자 결정 2026-11-24, MEG-275): 근거로 뒷받침되지 않은 설명은 보이지 않는다. 모델 출력을 버리고
+        # 근거 없음 안내(no_evidence)로 끝낸다. 호출은 이미 정산됐으므로 원장과 실행 기록은 남긴다. 출처는 없다.
+        if not _finish(
+            job,
+            supabase,
+            "completed",
+            result=dict(NO_EVIDENCE_RESULT),
+            ledger_id=outcome.ledger_id,
+            paragraph_count=len(paragraphs),
+            model_id=job.settings.model_id,
+            prompt_version=PROMPT_VERSION,
+            retrieval_version=retriever.version,
+        ):
+            raise _Stopped()
+        emit(sse("step", {"step": "compose", "state": "done"}))
+        return
 
     sources = source_rows(paragraphs, parsed.refs)
     _check_sources(job, supabase, sources, outcome.ledger_id)

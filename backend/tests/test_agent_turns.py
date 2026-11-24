@@ -369,7 +369,7 @@ def test_the_stream_sends_steps_in_order_and_saves_the_result_with_agent_finish_
          "excerpt": PARAGRAPHS[0].text, "paragraph_snapshot": PARAGRAPHS[0].text, "section": "정의"}
     ]
     assert (finish["p_model_id"], finish["p_prompt_version"], finish["p_retrieval_version"]) == (
-        SETTINGS.model_id, "agent-v2", "fixed-test")
+        SETTINGS.model_id, "agent-v3", "fixed-test")
     assert row["status"] == "completed" and row["paragraph_count"] == 2
     # 원장: 사전 확인 1회, 예약 1회(agent 키 형식), 정산 1회. 모델 호출 1회.
     assert store.reserves == [{"kind": "agent", "key": f"{A}:agent:{key}:1", "daily_count_limit": 20}]
@@ -884,7 +884,6 @@ def test_a_limit_at_the_real_reservation_fails_the_turn_with_ai_limit_reached(cl
     [
         ("이건 JSON이 아니다", "json"),
         (answer_json(state="unknown"), "state"),
-        (answer_json(sections=[{"body": "인용 없는 설명"}]), "no_citation"),
         (answer_json(sections=[{"body": "없는 문단 [3]"}]), "citation_range"),
         (json.dumps({"state": "partial", "sections": [{"body": "부분 [1]"}], "limitation": "한계 [1]"}), "limitation"),
     ],
@@ -899,6 +898,33 @@ def test_a_format_failure_fails_the_turn_without_retrying(client, fake, store, b
     # 호출은 정산됐고 원장 연결은 남는다. 재시도는 없다(Q19).
     assert bedrock.calls == 1 and store.settled == [(101, "usage")] and row["ledger_id"] == 101
     assert f"output_invalid={reason}" in caplog.text and text not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        answer_json(sections=[{"body": "인용 없는 설명"}]),
+        json.dumps({"state": "partial", "sections": [{"body": "근거 문단에서 이 질문의 답을 찾지 못했습니다."}],
+                    "limitation": "근거 문단이 이 질문을 다루지 않습니다."}, ensure_ascii=False),
+    ],
+)
+def test_an_answer_without_citations_ends_as_no_evidence_instead_of_failing(client, fake, store, bedrock, text, caplog):
+    # Q19(사용자 결정 2026-11-24, MEG-275): 인용 없는 답은 버리고 근거 없음 안내로 끝낸다. 재시도는 없다.
+    bedrock.replies = [bedrock_reply(text)]
+    parsed = events(ask(client, fake.conversation(A)))
+    final = parsed[-1]
+    assert final[0] == "result" and final[1]["status"] == "completed"
+    assert final[1]["result"] == {"state": "no_evidence", "notice_code": "no_evidence",
+                                  "next_actions": ["rephrase", "new_conversation"]}
+    assert "sources" not in final[1]["result"]
+    row = last_turn(fake)
+    assert row["status"] == "completed" and row["failure"] is None
+    [finish] = fake.finishes
+    # 호출은 정산됐고 원장·실행 기록은 남는다. 출처는 저장하지 않는다.
+    assert finish["p_ledger_id"] == 101 and finish["p_sources"] is None
+    assert (finish["p_model_id"], finish["p_prompt_version"]) == (SETTINGS.model_id, "agent-v3")
+    assert bedrock.calls == 1 and store.settled == [(101, "usage")] and fake.sources == []
+    assert "output_invalid=no_citation" in caplog.text and "인용 없는 설명" not in caplog.text
 
 
 def test_a_model_error_fails_the_turn_with_ai_unavailable(client, fake, bedrock):
