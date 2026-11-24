@@ -939,7 +939,7 @@ def test_the_response_uses_the_explanation_read_back_not_the_id_the_save_returne
 
 # --- MEG-272: 두 번 눌러 고른 어절의 서식 문자와 조사 (2026-11-23 김준성 결정 (A) + 화면 글자 기준 정리) ---
 # 두 번 누르면 조사와 뒤 공백까지 잡히고, 인라인 코드 안의 낱말이면 코드 밖의 조사까지 잡혀 원문 범위에 닫는 백틱이 들어간다
-# (prd 노트 1에서 재현, term 11 "하이퍼바이저는"·term 12 "하이퍼바이저 `는"). 아래 본문과 설명은 모두 합성이다.
+# (그래서 "하이퍼바이저는"·"하이퍼바이저 `는" 같은 key가 생겼다). 아래 본문과 설명은 모두 합성이다.
 
 HYPER = "하이퍼바이저는 VM에 자원을 나눈다. ` 하이퍼바이저 `는 이 문제를 해결한다. **하이퍼바이저**는 굵게 쓴다."
 
@@ -971,7 +971,7 @@ def test_the_note_sentence_keeps_the_original_text_so_its_hash_does_not_change()
     picked = pick_term_and_sentence(HYPER, start, end)
 
     # 문장은 원문 표시(백틱)를 지우지 않은 예전 방식 그대로다. 선택 끝 공백이 붙어 사라지는 것("는이")도 예전과 같다.
-    assert picked.sentence.startswith("` 하이퍼바이저 `는")
+    assert picked.sentence == "` 하이퍼바이저 `는이 문제를 해결한다."
 
 
 @pytest.mark.parametrize(
@@ -990,10 +990,28 @@ def test_only_markup_that_the_screen_hides_is_removed(text, selected, label):
     assert pick_term_and_sentence(text, start, start + len(selected)).label == label
 
 
-def test_a_selection_of_only_code_backticks_is_not_a_term():
-    text = "빈 코드 `x` 와 글."
-    start = text.index("`")
-    assert pick_term_and_sentence(text, start, start + 1) is None
+def test_a_whole_code_span_selection_is_the_code_text_and_a_crlf_edge_counts_as_a_space():
+    text = "코드 `x1` 와 ` 용어\r\n`는 글."
+    start = text.index("`x1`")
+    assert pick_term_and_sentence(text, start, start + 4).label == "x1"
+    start = text.index("용어")
+    end = text.index("는") + 1
+    assert pick_term_and_sentence(text, start, end).label == "용어는"
+
+
+def test_a_one_letter_ai_term_does_not_capture_a_longer_noun(client, fake, bedrock):
+    # 사용자가 실수로 고른 한 글자 AI 용어("경")가 "경로"를 가로채지 않는다. 사전 용어라면 한 글자여도 뗀다.
+    fake.notes[0]["body_markdown"] = "소개. 경로 를 고른다. 키를 쓴다."
+    fake.terms["경"] = term_row(50, "경", "경", explanations=[{"id": 75, "body": "엉뚱한 설명", "review_status": "pending"}])
+    fake.terms["키"] = term_row(51, "키", "키", source="glossary", glossary_entries={"body_markdown": "사전 키"})
+    fake.glossary.append({"id": 51, "key": "키", "label": "키"})
+    text = fake.notes[0]["body_markdown"]
+
+    route = explain(client, start=text.index("경로"), end=text.index("경로") + 2)
+    key = explain(client, start=text.index("키를"), end=text.index("키를") + 2, key=KEY2)
+
+    assert route.json()["term"]["key"] == "경로" and bedrock.calls == 1
+    assert key.json()["source"] == "glossary" and key.json()["body_markdown"] == "사전 키"
 
 
 def _hyper_note(fake):
@@ -1031,21 +1049,31 @@ def test_an_unseen_word_keeps_its_particle_and_all_three_selections_share_one_ke
     assert bedrock.calls == 1
 
 
-def test_the_stripped_term_is_preferred_over_an_existing_term_with_the_particle(client, fake, bedrock):
-    # prd term 11처럼 조사가 붙은 AI 용어가 이미 있어도, 조사를 뗀 용어가 있으면 그쪽으로 모인다.
+def test_an_existing_full_word_term_is_kept_even_when_a_shorter_term_also_exists(client, fake, bedrock):
+    # "결합도"와 "결합"은 다른 용어다. 그대로의 key가 이미 있으면 조사처럼 보이는 끝 글자를 떼지 않는다.
+    fake.notes[0]["body_markdown"] = "소개. 결합도 를 낮춘다."
+    fake.terms["결합도"] = term_row(60, "결합도", "결합도", explanations=[{"id": 76, "body": "결합도 설명", "review_status": "pending"}])
+    fake.terms["결합"] = term_row(61, "결합", "결합", explanations=[{"id": 77, "body": "결합 설명", "review_status": "pending"}])
+    start = fake.notes[0]["body_markdown"].index("결합도")
+
+    response = explain(client, start=start, end=start + 3)
+
+    assert response.json()["term"]["id"] == 60 and response.json()["explanation"]["body"] == "결합도 설명"
+    assert [key for key, _ in fake.find_calls] == ["결합도"] and bedrock.calls == 0
+
+
+def test_an_existing_ai_term_with_a_particle_stays_where_it_is(client, fake, bedrock):
+    # 이미 조사가 붙은 채로 생긴 AI 용어는 DB를 바꾸지 않기로 했으므로(2026-11-23 결정) 같은 선택은 그 용어를 그대로 쓴다.
     _hyper_note(fake)
     fake.terms["하이퍼바이저는"] = term_row(
-        11, "하이퍼바이저는", "하이퍼바이저는", explanations=[{"id": 71, "body": "갈라진 설명", "review_status": "pending"}]
+        41, "하이퍼바이저는", "하이퍼바이저는", explanations=[{"id": 71, "body": "기존 설명", "review_status": "pending"}]
     )
-    fake.terms["하이퍼바이저"] = term_row(
-        40, "하이퍼바이저", "하이퍼바이저", explanations=[{"id": 72, "body": "모인 설명", "review_status": "pending"}]
-    )
-    start, end = _double_click(HYPER, "하이퍼바이저", 0, "는 ")
+    fake.terms["하이퍼바이저"] = term_row(40, "하이퍼바이저", "하이퍼바이저")
+    start, end = _double_click(HYPER, "하이퍼바이저", 1, "는 ")
 
     response = explain(client, start=start, end=end)
 
-    assert response.json()["term"]["id"] == 40 and response.json()["explanation"]["body"] == "모인 설명"
-    assert bedrock.calls == 0
+    assert response.json()["term"]["id"] == 41 and bedrock.calls == 0
 
 
 def test_a_stripped_term_without_a_valid_explanation_gets_a_new_one_under_the_stripped_key(client, fake, bedrock):

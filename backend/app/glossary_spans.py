@@ -141,9 +141,12 @@ def markup_mask(text: str) -> bytearray:
             markup[opener_start:opener_end] = b"\x01" * (opener_end - opener_start)
             markup[closer_start:closer_end] = b"\x01" * (closer_end - closer_start)
             content = text[opener_end:closer_start]
-            if content[:1] in (" ", "\n") and content[-1:] in (" ", "\n") and content.strip(" \n"):
-                markup[opener_end] = 1
-                markup[closer_start - 1] = 1
+            # CommonMark은 줄 끝(\r\n 포함)을 공백 하나로 바꾼 뒤 앞뒤 공백 한 칸을 지운다.
+            if content[:1] in (" ", "\n", "\r") and content[-1:] in (" ", "\n", "\r") and content.strip(" \r\n"):
+                lead = 2 if content.startswith("\r\n") else 1
+                trail = 2 if content.endswith("\r\n") else 1
+                markup[opener_end : opener_end + lead] = b"\x01" * lead
+                markup[closer_start - trail : closer_start] = b"\x01" * trail
     if "*" in text:
         hidden = bytearray(len(text))
         lowered = _ascii_lower(text)

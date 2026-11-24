@@ -199,19 +199,23 @@ def resolve_term(supabase: SupabaseClient, picked: Picked, user_id: str) -> tupl
     """고른 용어의 terms 행을 찾는다(5.5절 7·8단계의 읽기). E09와 노트 용어 질문의 퀴즈 자료(MEG-243)가 함께 쓴다.
 
     끝의 조사는 뗀 나머지가 이미 있는 용어 key(사전이나 AI 용어, 설명이 무효화된 행 포함)와 같을 때만 뗀다(MEG-272,
-    2026-11-23 김준성 결정 (A)). 그대로의 key가 사전 용어면 떼지 않는다. 처음 보는 낱말은 조사가 붙은 채로 둔다
-    ("정의"·"경로"처럼 조사 글자로 끝나는 명사를 자르지 않는다). 뗐으면 label·key를 바꾼 Picked를 돌려준다.
+    2026-11-23 김준성 결정 (A)). 그대로의 key가 이미 있는 용어면 떼지 않는다. 처음 보는 낱말은 조사가 붙은 채로 둔다
+    ("정의"·"경로"처럼 조사 글자로 끝나는 명사를 자르지 않는다). 뗀 나머지가 한 글자면 사전 용어일 때만 뗀다.
+    뗐으면 label·key를 바꾼 Picked를 돌려준다.
     노트 문장은 그대로다. 조사가 붙은 label이면 terms를 최대 세 번 읽는다.
     """
     row = supabase.find_term_for_explain(picked.key, user_id)
-    if row is not None and row.get("glossary_entries") is not None:
+    if row is not None:
+        # 그대로의 key가 이미 용어(사전이나 AI)면 떼지 않는다. "결합도"와 "결합"이 둘 다 있을 때 다른 용어로 합치지 않는다.
         return picked, row
     for rest in particle_stripped(picked.label):
         key = normalize_key(rest)
         if not key or key == picked.key:
             continue
         found = supabase.find_term_for_explain(key, user_id)
-        if found is not None:
+        # AI 용어는 사용자가 아무 글자나 골라 생기므로 한 글자 key("경")가 "경로" 같은 명사를 가로채지 않게 한다.
+        # 사전 용어는 사람이 등록하므로 한 글자여도 뗀다.
+        if found is not None and (found.get("glossary_entries") is not None or len(key) >= 2):
             return replace(picked, label=rest, key=key), found
     return picked, row
 
