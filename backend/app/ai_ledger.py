@@ -56,9 +56,12 @@ CALL_SPECS: dict[str, CallSpec] = {
     KIND_EXPLAIN: CallSpec(max_tokens=600, effort="none", daily_count_limit=20),
     KIND_QUIZ: CallSpec(max_tokens=3000, effort="low", daily_count_limit=None),
     KIND_FOLLOWUP: CallSpec(max_tokens=400, effort="none", daily_count_limit=None),
-    # CS Agent E29(MEG-236). 출력 1,500토큰은 Q4 임시값, 하루 20턴은 D4(사용자 결정 2026-11-18, 시작값)다.
+    # CS Agent E29(MEG-236). 하루 20턴은 D4(사용자 결정 2026-11-18, 시작값)다.
     # agent 금액 몫 70%는 SQL 기본값을 쓴다(MEG-232 결정 1). 실측(MEG-236 AC-5) 뒤 다시 정한다.
-    KIND_AGENT: CallSpec(max_tokens=1500, effort="none", daily_count_limit=20),
+    # MEG-282(사용자 결정 2026-11-25): 근거 문장 누락을 프롬프트만으로 못 고쳐 추론 강도를 none → low로 올렸다.
+    # 추론 토큰도 maxTokens 안에서 세므로, 잘려서 턴이 실패(재시도 없음)하지 않게 출력 상한을 1,500 → 3,000으로 올렸다
+    # (퀴즈와 같은 설정). 예약액은 출력 상한만큼 늘지만 사전 확인액은 최대 입력이 대부분이라 약 8%만 는다.
+    KIND_AGENT: CallSpec(max_tokens=3000, effort="low", daily_count_limit=20),
 }
 # 한 사용자가 하루 전체 예산에서 쓸 수 있는 몫(5.3)
 USER_DAILY_SHARE = Decimal("0.5")

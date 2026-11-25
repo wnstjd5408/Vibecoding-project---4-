@@ -49,7 +49,7 @@ MAX_SOURCE_SECTION_CHARS = 200
 # 출처 발췌(excerpt) 길이. 문단 앞부분을 쓴다.
 EXCERPT_CHARS = 200
 
-# 출력 상한. 출력 1,500토큰 안에서 넉넉히 잡았다. 넘으면 형식 실패다.
+# 출력 상한. 본문 출력 1,500토큰 안에서 넉넉히 잡았다(maxTokens는 추론 토큰을 더해 3,000, ai_ledger.CALL_SPECS). 넘으면 형식 실패다.
 MAX_SECTIONS = 8
 MAX_HEADING_CHARS = 100
 MAX_BODY_CHARS = 4000

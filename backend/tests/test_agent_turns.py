@@ -88,7 +88,9 @@ class AgentBedrock:
 
     def converse(self, **kwargs):
         self.prompts.append(kwargs["messages"][0]["content"][0]["text"])
-        assert kwargs["inferenceConfig"] == {"maxTokens": 1500}
+        # MEG-282: 추론 low, 출력 상한 3,000(추론 토큰 포함).
+        assert kwargs["inferenceConfig"] == {"maxTokens": 3000}
+        assert kwargs["additionalModelRequestFields"] == {"reasoning": {"effort": "low"}}
         assert "toolConfig" not in kwargs
         if self.during_call is not None:
             self.during_call()

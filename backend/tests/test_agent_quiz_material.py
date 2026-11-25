@@ -31,7 +31,7 @@ from test_agent_turns import (
 
 from app import agent_quiz_material, agent_turns
 from app.agent_retrieval import FixedRetriever
-from app.ai_ledger import AiLimitReached, LedgerKeyExists
+from app.ai_ledger import CALL_SPECS, KIND_AGENT, KIND_EXPLAIN, AiLimitReached, LedgerKeyExists
 from app.glossary import study_date
 from app.glossary_spans import normalize_key
 from app.supabase import SupabaseUnavailable
@@ -133,7 +133,10 @@ class MixedBedrock:
 
     def converse(self, **kwargs):
         prompt = kwargs["messages"][0]["content"][0]["text"]
-        kind = {1500: "agent", 600: "explain"}[kwargs["inferenceConfig"]["maxTokens"]]
+        # 호출 설정(출력 상한)으로 agent와 explain을 가른다. 값은 CALL_SPECS를 따른다(MEG-282에서 agent 상한이 바뀜).
+        kind = {CALL_SPECS[KIND_AGENT].max_tokens: "agent", CALL_SPECS[KIND_EXPLAIN].max_tokens: "explain"}[
+            kwargs["inferenceConfig"]["maxTokens"]
+        ]
         self.log.append((kind, prompt))
         if kind == "agent":
             step = self.agent_steps.pop(0) if self.agent_steps else bedrock_reply(answer_json())

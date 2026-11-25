@@ -268,7 +268,16 @@ def test_success_without_usage_settles_with_reserved_fallback():
     assert store.settled == [(101, "reserved_fallback", {})]
 
 
-@pytest.mark.parametrize(("kind", "max_tokens", "effort", "limit"), [("quiz", 3000, "low", None), ("followup", 400, "none", None)])
+@pytest.mark.parametrize(
+    ("kind", "max_tokens", "effort", "limit"),
+    [
+        ("quiz", 3000, "low", None),
+        ("followup", 400, "none", None),
+        ("explain", 600, "none", 20),
+        # MEG-282: CS Agent는 추론 low, 출력 상한 3,000(추론 토큰 포함), 하루 20턴.
+        ("agent", 3000, "low", 20),
+    ],
+)
 def test_kind_sets_tokens_effort_and_count_limit(kind, max_tokens, effort, limit):
     seen = {}
     store = FakeStore()
