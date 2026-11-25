@@ -26,6 +26,7 @@ import { AGENT_MESSAGES as M, PRESETS, questionLabel, questionText, topicLabelOf
 import { FRESH_CONTEXT, MAX_ADD_SELECTIONS, MAX_QUESTION, MAX_REPLY, agentAccessLost, quoteOf, sectionsOf } from './agentUi.ts'
 import type { AgentContextSelection, AgentUi } from './agentUi.ts'
 import { shownAgentView } from './agentView.ts'
+import { PANEL_WIDTH_DEFAULT, PANEL_WIDTH_MIN, PANEL_WIDTH_STEP, clampPanelWidth, maxPanelWidth, viewportWidth } from './panelWidth.ts'
 import type { AgentView } from './agentView.ts'
 import type {
   AgentFigure,
@@ -66,6 +67,9 @@ type AgentPanelProps = {
   returnFocus: () => HTMLElement | null
   // 새 질문 입구가 닫혔다(노출 중단 플래그 또는 E27·E29의 503, agent/availability.ts)
   closed?: boolean
+  // PC 패널 보기의 폭(MEG-285). 노트 화면이 가지고 본문 여백에도 쓴다. 주지 않으면 기본 480px이고 손잡이를 그리지 않는다.
+  width?: number
+  onWidth?: (width: number) => void
 }
 
 type Entry =
@@ -126,9 +130,13 @@ function firstHiddenIds(turns: AgentTurn[]): Set<string> {
 }
 
 export function AgentPanel(props: AgentPanelProps) {
-  const { open, wide, view, onView, state, controller, ui, onUi, source, onClose, onCloseSource, returnFocus, closed = false } = props
+  const { open, wide, view, onView, state, controller, ui, onUi, source, onClose, onCloseSource, returnFocus, closed = false, width, onWidth } = props
   // 지금 그리는 보기. 전체 화면에서 출처를 열면 잠시 패널로 그린다(agentView.ts).
   const mode = shownAgentView(view, wide, source !== null)
+  // 폭 조절은 PC 패널 보기에서만 한다(F6-21a~e). 다른 보기는 기존 폭을 쓴다.
+  const resizable = wide && mode === 'panel' && width !== undefined && onWidth !== undefined
+  const dialogStyle = resizable ? { width: `${width}px` } : undefined
+  const resizer = resizable ? <PanelResizer width={width} onWidth={onWidth} /> : null
   const dialogRef = useRef<HTMLDialogElement>(null)
   const titleRef = useRef<HTMLHeadingElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -509,8 +517,9 @@ export function AgentPanel(props: AgentPanelProps) {
   if (accessLost) {
     // S9 노트 접근 변경(F6-15·F6-15m, 결정 3): 대화와 출처를 닫고 노트 목록으로 가는 길만 둔다. PC 노트 자리는 노트 화면이 같은 안내로 바꾼다.
     return (
-      <dialog ref={dialogRef} className={wide ? styles[mode] : styles.full} aria-labelledby={titleId}
+      <dialog ref={dialogRef} className={wide ? styles[mode] : styles.full} aria-labelledby={titleId} style={dialogStyle}
         onCancel={(event) => { event.preventDefault(); onEscape() }}>
+        {resizer}
         <div className={styles.frame} role={mode === 'fullscreen' ? 'main' : undefined}>
         {wide
           ? <div className={styles.head}>
@@ -541,8 +550,9 @@ export function AgentPanel(props: AgentPanelProps) {
   }
 
   return (
-    <dialog ref={dialogRef} className={wide ? styles[mode] : styles.full} aria-labelledby={titleId}
+    <dialog ref={dialogRef} className={wide ? styles[mode] : styles.full} aria-labelledby={titleId} style={dialogStyle}
       onCancel={(event) => { event.preventDefault(); onEscape() }}>
+      {resizer}
       {/* 보기를 바꿔도 같은 요소를 쓰도록 늘 두는 틀. 전체 화면에서는 노트가 숨으므로 이 틀이 main 영역이다(F6-3x). 안쪽 줄은 다른 작업과 겹치지 않게 들여쓰기를 바꾸지 않았다. */}
       <div className={styles.frame} role={mode === 'fullscreen' ? 'main' : undefined}>
       {header}
@@ -615,6 +625,58 @@ export function AgentPanel(props: AgentPanelProps) {
 }
 
 // 입력 칸은 약 4줄까지 늘어난 뒤 칸 안에서 스크롤한다(14.2). 보이지 않는 동안(높이 0)에는 기본 높이(2줄)로 둔다.
+// 패널 왼쪽 경계의 폭 조절 손잡이(F6-21a~e, MEG-285). WAI-ARIA 창 분할자(separator) 모양이다.
+//  - 끌기: 경계에서 패널 안쪽 24px를 잡는다(노트 스크롤 막대와 겹치지 않게). 끄는 동안 노트 글자가 선택되지 않게 막는다.
+//  - 키보드: 패널이 오른쪽에 있어 ←가 넓히고 →가 좁힌다(16px씩). Home 최소, End 최대.
+//  - 두 번 누르면 기본 480px로 돌아간다.
+function PanelResizer({ width, onWidth }: { width: number; onWidth: (width: number) => void }) {
+  const drag = useRef<{ x: number; width: number; restore: () => void } | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const set = (next: number) => onWidth(clampPanelWidth(next, viewportWidth()))
+  const end = () => {
+    drag.current?.restore()
+    drag.current = null
+    setDragging(false)
+  }
+  // 끄는 중에 패널이 닫히면(Esc 등) 문서에 걸어 둔 선택 막기를 풀어 준다.
+  useEffect(() => () => drag.current?.restore(), [])
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const next = event.key === 'ArrowLeft' ? width + PANEL_WIDTH_STEP
+      : event.key === 'ArrowRight' ? width - PANEL_WIDTH_STEP
+        : event.key === 'Home' ? PANEL_WIDTH_MIN
+          : event.key === 'End' ? Number.POSITIVE_INFINITY
+            : null
+    if (next === null) return
+    event.preventDefault()
+    set(next)
+  }
+  return (
+    <div role="separator" tabIndex={0} aria-orientation="vertical" aria-label={M.resizePanel}
+      aria-valuemin={PANEL_WIDTH_MIN} aria-valuemax={maxPanelWidth(viewportWidth())} aria-valuenow={width} aria-valuetext={M.resizeValue(width)}
+      className={styles.resizer} data-dragging={dragging || undefined}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return
+        event.preventDefault()
+        event.currentTarget.setPointerCapture(event.pointerId)
+        const root = document.documentElement
+        const previous = { userSelect: root.style.userSelect, cursor: root.style.cursor }
+        root.style.userSelect = 'none'
+        root.style.cursor = 'col-resize'
+        drag.current = { x: event.clientX, width, restore: () => { root.style.userSelect = previous.userSelect; root.style.cursor = previous.cursor } }
+        setDragging(true)
+      }}
+      onPointerMove={(event) => {
+        const start = drag.current
+        if (start) set(start.width + start.x - event.clientX)
+      }}
+      onPointerUp={end}
+      onPointerCancel={end}
+      onLostPointerCapture={end}
+      onDoubleClick={() => set(PANEL_WIDTH_DEFAULT)}
+      onKeyDown={onKeyDown} />
+  )
+}
+
 function resizeInput(input: HTMLTextAreaElement | null) {
   if (!input) return
   input.style.height = 'auto'
