@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from app.glossary_spans import Span, find_spans, normalize_key
+from app.glossary_spans import Span, find_spans, markup_mask, normalize_key
 from scripts.notion_content import convert
 from support import unescape_markdown
 
@@ -467,3 +467,29 @@ def test_emphasis_delimiters_match_the_real_markdown_parser(source, delimiters):
     from app.glossary_spans import _emphasis_delimiters
 
     assert sorted(set(_emphasis_delimiters(source, lambda index: False))) == delimiters
+
+
+# --- MEG-272: markup_mask (E09가 고른 용어를 화면 글자로 맞출 때 지우는 표시) ---
+
+
+def _shown(text: str) -> str:
+    markup = markup_mask(text)
+    return "".join(char for index, char in enumerate(text) if not markup[index])
+
+
+@pytest.mark.parametrize(
+    ("text", "shown"),
+    [
+        ("` 하이퍼바이저 `는", "하이퍼바이저는"),  # 앞뒤가 모두 공백이면 한 칸씩 지운다(CommonMark)
+        ("` 하이퍼바이저`는", " 하이퍼바이저는"),  # 한쪽만 공백이면 그대로다
+        ("`  `는", "  는"),  # 공백만 있는 코드는 공백을 지우지 않는다
+        ("``a`b``는", "a`b는"),  # 긴 묶음으로 연 코드 안의 백틱은 글자다
+        ("\\`a` 글", "\\`a` 글"),  # 이스케이프된 백틱은 코드를 열지 못한다
+        ("**굵게**는 *기울임*도", "굵게는 기울임도"),
+        ("2 * 3 과 A*", "2 * 3 과 A*"),  # 짝이 없는 `*`는 글자다
+        ("[링크](https://x.example/**a**) 끝", "[링크](https://x.example/**a**) 끝"),  # 링크 주소 안은 강조가 아니다
+        ("`**x**` 코드", "**x** 코드"),
+    ],
+)
+def test_markup_mask_hides_only_what_the_screen_does_not_show(text, shown):
+    assert _shown(text) == shown

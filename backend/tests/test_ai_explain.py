@@ -935,3 +935,222 @@ def test_the_response_uses_the_explanation_read_back_not_the_id_the_save_returne
 
     assert response.json()["explanation"] == {
         "id": 777, "body": "다른 요청이 저장한 설명", "review_status": "pending", "cached": True}
+
+
+# --- MEG-272: 두 번 눌러 고른 어절의 서식 문자와 조사 (2026-11-23 김준성 결정 (A) + 화면 글자 기준 정리) ---
+# 두 번 누르면 조사와 뒤 공백까지 잡히고, 인라인 코드 안의 낱말이면 코드 밖의 조사까지 잡혀 원문 범위에 닫는 백틱이 들어간다
+# (그래서 "하이퍼바이저는"·"하이퍼바이저 `는" 같은 key가 생겼다). 아래 본문과 설명은 모두 합성이다.
+
+HYPER = "하이퍼바이저는 VM에 자원을 나눈다. ` 하이퍼바이저 `는 이 문제를 해결한다. **하이퍼바이저**는 굵게 쓴다."
+
+
+def _double_click(text: str, word: str, nth: int = 0, tail: str = " ") -> tuple[int, int]:
+    """브라우저가 두 번 누른 낱말에 잡는 원문 범위: 낱말 시작부터 tail(기본은 다음 공백) 뒤까지.
+
+    인라인 코드 안의 낱말은 코드 안쪽 공백·닫는 백틱을 지나 조사 뒤 공백까지 잡힌다. 그래서 HYPER에서는 tail을 "는 "로 준다.
+    """
+    start = -1
+    for _ in range(nth + 1):
+        start = text.index(word, start + 1)
+    end = text.index(tail, start + len(word)) + len(tail)
+    return start, end
+
+
+@pytest.mark.parametrize("nth", [0, 1, 2], ids=["plain", "inline_code", "bold"])
+def test_label_is_the_on_screen_text_without_code_backticks_or_emphasis(nth):
+    start, end = _double_click(HYPER, "하이퍼바이저", nth, "는 ")
+
+    picked = pick_term_and_sentence(HYPER, start, end)
+
+    assert (picked.label, picked.key) == ("하이퍼바이저는", "하이퍼바이저는")
+
+
+def test_the_note_sentence_keeps_the_original_text_so_its_hash_does_not_change():
+    start, end = _double_click(HYPER, "하이퍼바이저", 1, "는 ")
+
+    picked = pick_term_and_sentence(HYPER, start, end)
+
+    # 문장은 원문 표시(백틱)를 지우지 않은 예전 방식 그대로다. 선택 끝 공백이 붙어 사라지는 것("는이")도 예전과 같다.
+    assert picked.sentence == "` 하이퍼바이저 `는이 문제를 해결한다."
+
+
+@pytest.mark.parametrize(
+    ("text", "selected", "label"),
+    [
+        ("곱셈은 2 * 3 이다.", "2 * 3", "2 * 3"),  # 짝이 없는 `*`는 화면에 보이는 글자다
+        ("기호 A* 설명이다.", "A*", "A*"),
+        ("이스케이프 \\*A\\* 글이다.", "\\*A\\*", "*A*"),  # 이스케이프된 `*`는 글자다
+        ("코드 `**x**` 안이다.", "**x**", "**x**"),  # 코드 안의 `*`는 강조가 아니다
+        ("코드 `a b` 이다.", "`a b`", "a b"),  # 앞뒤가 공백이 아닌 코드는 안쪽 공백을 그대로 둔다
+    ],
+)
+def test_only_markup_that_the_screen_hides_is_removed(text, selected, label):
+    start = text.index(selected)
+
+    assert pick_term_and_sentence(text, start, start + len(selected)).label == label
+
+
+def test_a_whole_code_span_selection_is_the_code_text_and_a_crlf_edge_counts_as_a_space():
+    text = "코드 `x1` 와 ` 용어\r\n`는 글."
+    start = text.index("`x1`")
+    assert pick_term_and_sentence(text, start, start + 4).label == "x1"
+    start = text.index("용어")
+    end = text.index("는") + 1
+    assert pick_term_and_sentence(text, start, end).label == "용어는"
+
+
+def test_a_one_letter_ai_term_does_not_capture_a_longer_noun(client, fake, bedrock):
+    # 사용자가 실수로 고른 한 글자 AI 용어("경")가 "경로"를 가로채지 않는다. 사전 용어라면 한 글자여도 뗀다.
+    fake.notes[0]["body_markdown"] = "소개. 경로 를 고른다. 키를 쓴다."
+    fake.terms["경"] = term_row(50, "경", "경", explanations=[{"id": 75, "body": "엉뚱한 설명", "review_status": "pending"}])
+    fake.terms["키"] = term_row(51, "키", "키", source="glossary", glossary_entries={"body_markdown": "사전 키"})
+    fake.glossary.append({"id": 51, "key": "키", "label": "키"})
+    text = fake.notes[0]["body_markdown"]
+
+    route = explain(client, start=text.index("경로"), end=text.index("경로") + 2)
+    key = explain(client, start=text.index("키를"), end=text.index("키를") + 2, key=KEY2)
+
+    assert route.json()["term"]["key"] == "경로" and bedrock.calls == 1
+    assert key.json()["source"] == "glossary" and key.json()["body_markdown"] == "사전 키"
+
+
+def _hyper_note(fake):
+    fake.notes[0]["body_markdown"] = HYPER
+
+
+@pytest.mark.parametrize("nth", [0, 1, 2], ids=["plain", "inline_code", "bold"])
+def test_a_particle_is_stripped_when_the_rest_is_an_existing_ai_term(client, fake, ledger, bedrock, nth):
+    _hyper_note(fake)
+    fake.terms["하이퍼바이저"] = term_row(
+        31, "하이퍼바이저", "하이퍼바이저", explanations=[{"id": 70, "body": "공유 설명", "review_status": "approved"}]
+    )
+    start, end = _double_click(HYPER, "하이퍼바이저", nth, "는 ")
+
+    response = explain(client, start=start, end=end)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["term"] == {"id": 31, "key": "하이퍼바이저", "label": "하이퍼바이저"}
+    assert response.json()["explanation"]["cached"] is True
+    assert bedrock.calls == 0 and ledger.reserve_calls == []
+    assert [key for key, _ in fake.find_calls] == ["하이퍼바이저는", "하이퍼바이저"]
+
+
+@pytest.mark.parametrize("nth", [0, 1, 2], ids=["plain", "inline_code", "bold"])
+def test_an_unseen_word_keeps_its_particle_and_all_three_selections_share_one_key(client, fake, bedrock, nth):
+    # (A)의 한계: 처음 보는 낱말이면 조사를 떼지 않는다. 그래도 서식 문자 때문에 갈라지지는 않는다.
+    _hyper_note(fake)
+    start, end = _double_click(HYPER, "하이퍼바이저", nth, "는 ")
+
+    response = explain(client, start=start, end=end)
+
+    assert response.status_code == 200, response.text
+    [stored] = fake.store_calls
+    assert (stored["term_key"], stored["term_label"]) == ("하이퍼바이저는", "하이퍼바이저는")
+    assert bedrock.calls == 1
+
+
+def test_an_existing_full_word_term_is_kept_even_when_a_shorter_term_also_exists(client, fake, bedrock):
+    # "결합도"와 "결합"은 다른 용어다. 그대로의 key가 이미 있으면 조사처럼 보이는 끝 글자를 떼지 않는다.
+    fake.notes[0]["body_markdown"] = "소개. 결합도 를 낮춘다."
+    fake.terms["결합도"] = term_row(60, "결합도", "결합도", explanations=[{"id": 76, "body": "결합도 설명", "review_status": "pending"}])
+    fake.terms["결합"] = term_row(61, "결합", "결합", explanations=[{"id": 77, "body": "결합 설명", "review_status": "pending"}])
+    start = fake.notes[0]["body_markdown"].index("결합도")
+
+    response = explain(client, start=start, end=start + 3)
+
+    assert response.json()["term"]["id"] == 60 and response.json()["explanation"]["body"] == "결합도 설명"
+    assert [key for key, _ in fake.find_calls] == ["결합도"] and bedrock.calls == 0
+
+
+def test_an_existing_ai_term_with_a_particle_stays_where_it_is(client, fake, bedrock):
+    # 이미 조사가 붙은 채로 생긴 AI 용어는 DB를 바꾸지 않기로 했으므로(2026-11-23 결정) 같은 선택은 그 용어를 그대로 쓴다.
+    _hyper_note(fake)
+    fake.terms["하이퍼바이저는"] = term_row(
+        41, "하이퍼바이저는", "하이퍼바이저는", explanations=[{"id": 71, "body": "기존 설명", "review_status": "pending"}]
+    )
+    fake.terms["하이퍼바이저"] = term_row(40, "하이퍼바이저", "하이퍼바이저")
+    start, end = _double_click(HYPER, "하이퍼바이저", 1, "는 ")
+
+    response = explain(client, start=start, end=end)
+
+    assert response.json()["term"]["id"] == 41 and bedrock.calls == 0
+
+
+def test_a_stripped_term_without_a_valid_explanation_gets_a_new_one_under_the_stripped_key(client, fake, bedrock):
+    # 뗀 나머지가 terms에 있으면(설명이 무효화돼 없어도) 그 key로 새 설명을 만든다. 조사 붙은 key를 새로 만들지 않는다.
+    _hyper_note(fake)
+    fake.terms["하이퍼바이저"] = term_row(40, "하이퍼바이저", "하이퍼바이저")
+    start, end = _double_click(HYPER, "하이퍼바이저", 0, "는 ")
+
+    response = explain(client, start=start, end=end)
+
+    assert response.status_code == 200, response.text
+    [stored] = fake.store_calls
+    assert (stored["term_key"], stored["term_label"]) == ("하이퍼바이저", "하이퍼바이저")
+    assert "용어: 하이퍼바이저\n" in bedrock.sent[0]["messages"][0]["content"][0]["text"]
+    assert response.json()["term"]["id"] == 40
+
+
+def test_an_english_glossary_term_with_a_korean_particle_gets_the_glossary(client, fake, bedrock):
+    fake.notes[0]["body_markdown"] = "소개. DNS를 먼저 조회한다."
+    fake.terms["dns"] = term_row(15, "dns", "DNS", source="glossary", glossary_entries={"body_markdown": "사전 DNS"})
+    fake.glossary.append({"id": 15, "key": "dns", "label": "DNS"})
+    fake.ai_terms = set()
+    start, end = _double_click(fake.notes[0]["body_markdown"], "DNS")
+
+    response = explain(client, start=start, end=end)
+
+    assert response.json()["source"] == "glossary" and response.json()["body_markdown"] == "사전 DNS"
+    assert bedrock.calls == 0
+
+
+def test_a_glossary_term_that_ends_like_a_particle_is_not_stripped(client, fake, bedrock):
+    # 그대로의 key가 사전 용어면 떼지 않는다(조사 글자로 끝나는 사전 용어를 잃지 않는다).
+    fake.notes[0]["body_markdown"] = "소개. 해시가 다르다."
+    fake.terms["해시가"] = term_row(8, "해시가", "해시가", source="glossary", glossary_entries={"body_markdown": "사전 해시가"})
+    fake.terms["해시"] = term_row(9, "해시", "해시", explanations=[{"id": 73, "body": "AI 해시", "review_status": "pending"}])
+    fake.glossary.append({"id": 8, "key": "해시가", "label": "해시가"})
+    start, end = _double_click(fake.notes[0]["body_markdown"], "해시가")
+
+    response = explain(client, start=start, end=end)
+
+    assert response.json()["source"] == "glossary" and response.json()["body_markdown"] == "사전 해시가"
+
+
+def test_the_shorter_cut_is_tried_first_and_a_two_letter_particle_still_works(client, fake, bedrock):
+    fake.notes[0]["body_markdown"] = "소개. 트랜잭션으로 묶는다."
+    fake.terms["트랜잭션"] = term_row(
+        27, "트랜잭션", "트랜잭션", explanations=[{"id": 74, "body": "공유 트랜잭션", "review_status": "approved"}]
+    )
+    start, end = _double_click(fake.notes[0]["body_markdown"], "트랜잭션")
+
+    response = explain(client, start=start, end=end)
+
+    assert response.json()["term"]["key"] == "트랜잭션"
+    assert [key for key, _ in fake.find_calls] == ["트랜잭션으로", "트랜잭션으", "트랜잭션"]
+
+
+@pytest.mark.parametrize("word", ["정의", "서버", "경로", "게이트웨이", "재시도"])
+def test_words_that_end_like_a_particle_are_not_cut_when_no_shorter_term_exists(client, fake, bedrock, word):
+    # AC-3: 조사 글자로 끝나는 명사는 뗀 나머지가 이미 있는 용어가 아니면 그대로다.
+    fake.notes[0]["body_markdown"] = f"소개. {word} 를 설명한다."
+    start = fake.notes[0]["body_markdown"].index(word)
+
+    response = explain(client, start=start, end=start + len(word))
+
+    assert response.status_code == 200, response.text
+    [stored] = fake.store_calls
+    assert (stored["term_key"], stored["term_label"]) == (word, word)
+
+
+def test_a_particle_after_a_space_is_not_stripped(client, fake, bedrock):
+    # "하이퍼바이저 는"처럼 조사 앞이 공백이면 조사로 보지 않는다.
+    fake.notes[0]["body_markdown"] = "소개. 하이퍼바이저 는 끝."
+    fake.terms["하이퍼바이저"] = term_row(31, "하이퍼바이저", "하이퍼바이저")
+    start = fake.notes[0]["body_markdown"].index("하이퍼바이저")
+
+    response = explain(client, start=start, end=start + len("하이퍼바이저 는"))
+
+    assert response.status_code == 200, response.text
+    assert {key for key, _ in fake.find_calls} == {"하이퍼바이저 는"}
+    assert [call["term_key"] for call in fake.store_calls] == ["하이퍼바이저 는"]

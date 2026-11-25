@@ -73,6 +73,12 @@ MAX_ATTEMPTS = 2
 THROTTLING_CODE = "ThrottlingException"
 THROTTLE_BACKOFF_SECONDS = 1.0
 
+# 프롬프트 캐시 토큰의 단가(MEG-275 4-A, 사용자 결정 2026-11-24: 보수적 고정 규칙).
+# 캐시 읽기는 일반 입력 단가로 센다(실제로는 더 싸다). 캐시 쓰기는 일반 입력 단가의 1.25배다
+# (AWS 문서의 Luna·Claude 5분 캐시 쓰기 단가). 비용을 실제보다 작게 잡지 않으려는 선택이다.
+# 요청에 cachePoint(1시간 TTL 포함)를 넣지 않는다는 가정이다. 1시간 캐시를 쓰면 쓰기 단가가 더 높을 수 있으니 다시 정한다.
+CACHE_WRITE_RATE_MULTIPLIER = Decimal("1.25")
+
 _USD_STEP = Decimal("0.000001")
 _MILLION = Decimal(1_000_000)
 
@@ -144,9 +150,17 @@ class AiBudget:
             values[field] = value
         return cls(**values)
 
-    def cost(self, input_tokens: int, output_tokens: int) -> Decimal:
+    def cost(self, input_tokens: int, output_tokens: int, cache_write_tokens: int = 0) -> Decimal:
+        """input_tokens는 캐시 읽기·쓰기를 포함한 전체 입력이다. 그 가운데 cache_write_tokens에는 웃돈을 붙인다.
+
+        cache_write_tokens는 input_tokens의 일부여야 한다(bedrock._usage가 보장한다).
+        """
+        cache_write_surcharge = Decimal(cache_write_tokens) * (CACHE_WRITE_RATE_MULTIPLIER - 1)
         return _usd(
-            (Decimal(input_tokens) * self.input_usd_per_mtok + Decimal(output_tokens) * self.output_usd_per_mtok)
+            (
+                (Decimal(input_tokens) + cache_write_surcharge) * self.input_usd_per_mtok
+                + Decimal(output_tokens) * self.output_usd_per_mtok
+            )
             / _MILLION
         )
 
@@ -369,7 +383,7 @@ def _settle_failure(store: LedgerStore, budget: AiBudget, reservation: Reservati
             store,
             reservation,
             SETTLE_USAGE,
-            actual_usd=budget.cost(error.input_tokens, error.output_tokens),
+            actual_usd=budget.cost(error.input_tokens, error.output_tokens, error.cache_write_tokens),
             input_tokens=error.input_tokens,
             output_tokens=error.output_tokens,
         )
@@ -525,7 +539,7 @@ def _call_attempts(
                 store,
                 reservation,
                 SETTLE_USAGE,
-                actual_usd=budget.cost(result.input_tokens, result.output_tokens),
+                actual_usd=budget.cost(result.input_tokens, result.output_tokens, result.cache_write_tokens),
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
             )

@@ -579,3 +579,55 @@ def test_an_output_format_failure_is_not_a_provider_failure_and_still_calls_expl
     parsed = events(ask(client, cid))
     assert parsed[-1][0] == "error" and parsed[-1][1]["error"]["code"] == "ai_unavailable"
     assert bedrock.kinds() == ["agent", "explain"] and fake.terms[KEY]["explanations"]
+
+
+# --- MEG-272: 두 번 눌러 고른 어절의 서식 문자와 조사는 E09와 같은 규칙이다 ---
+# 합성 본문. 일반 글, 인라인 코드(``` ` 하이퍼바이저 `는 ```), 굵게 쓴 낱말을 두 번 누른 범위(조사와 뒤 공백 포함)다.
+
+HYPER = "하이퍼바이저는 VM에 자원을 나눈다. ` 하이퍼바이저 `는 이 문제를 해결한다. **하이퍼바이저**는 굵게 쓴다."
+
+
+def _select_hyper(fake, nth):
+    fake.note_rows[PUBLIC]["body_markdown"] = HYPER
+    start = -1
+    for _ in range(nth + 1):
+        start = HYPER.index("하이퍼바이저", start + 1)
+    end = HYPER.index("는 ", start) + 2
+    fake.selections[-1].update(start=start, end=end, text_snapshot=HYPER[start:end])
+
+
+@pytest.mark.parametrize("nth", [0, 1, 2], ids=["plain", "inline_code", "bold"])
+def test_a_selection_with_a_particle_joins_the_existing_term_like_e09(client, fake, store, bedrock, nth):
+    term = fake.add_term("하이퍼바이저", explanation="이미 있는 설명")
+    cid = fake.conversation(A)
+    _select_hyper(fake, nth)
+
+    events(ask(client, cid))
+
+    assert bedrock.kinds() == ["agent"] and fake.store_calls == []
+    assert fake.term_views == {(A, term["id"], _kst_today())}
+
+
+@pytest.mark.parametrize("nth", [0, 1, 2], ids=["plain", "inline_code", "bold"])
+def test_an_unseen_word_is_stored_under_one_key_for_all_three_selections(client, fake, store, bedrock, nth):
+    cid = fake.conversation(A)
+    _select_hyper(fake, nth)
+
+    events(ask(client, cid))
+
+    [stored] = fake.store_calls
+    assert (stored["term_key"], stored["term_label"]) == ("하이퍼바이저는", "하이퍼바이저는")
+    [(_, prompt)] = [entry for entry in bedrock.log if entry[0] == "explain"]
+    assert "용어: 하이퍼바이저는\n" in prompt
+
+
+def test_the_stripped_existing_term_without_an_explanation_gets_one_under_its_own_key(client, fake, store, bedrock):
+    term = fake.add_term("하이퍼바이저")
+    cid = fake.conversation(A)
+    _select_hyper(fake, 1)
+
+    events(ask(client, cid))
+
+    [stored] = fake.store_calls
+    assert (stored["term_key"], stored["term_label"]) == ("하이퍼바이저", "하이퍼바이저")
+    assert fake.term_views == {(A, term["id"], _kst_today())}
