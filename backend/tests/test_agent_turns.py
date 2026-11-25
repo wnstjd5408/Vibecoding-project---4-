@@ -55,6 +55,10 @@ PARAGRAPHS = [
 ]
 
 
+# 2차 점검·보완 프롬프트의 첫 줄(agent_output._REVIEW_RULES). 가짜 Bedrock이 1차와 2차를 가른다.
+REVIEW_HEAD = "당신은 학습 도우미가 쓴 답(1차 답)을 점검하는 검토자입니다."
+
+
 def answer_json(**overrides) -> str:
     body = {
         "state": "answered",
@@ -79,17 +83,32 @@ class AgentBedrock:
     def __init__(self):
         self.replies: list = []
         self.prompts: list[str] = []
+        # 2차 점검·보완(MEG-282 D2) 호출은 따로 기록한다. 정해 둔 답이 없으면 "변경 없음"을 준다.
+        self.review_replies: list = []
+        self.review_prompts: list[str] = []
         self.during_call = None
         self.delay = 0.0
 
     @property
     def calls(self) -> int:
+        """1차(agent) 호출 수. 2차는 review_calls로 센다."""
         return len(self.prompts)
 
+    @property
+    def review_calls(self) -> int:
+        return len(self.review_prompts)
+
     def converse(self, **kwargs):
-        self.prompts.append(kwargs["messages"][0]["content"][0]["text"])
+        prompt = kwargs["messages"][0]["content"][0]["text"]
         assert kwargs["inferenceConfig"] == {"maxTokens": 1500}
         assert "toolConfig" not in kwargs
+        if prompt.startswith(REVIEW_HEAD):
+            self.review_prompts.append(prompt)
+            step = self.review_replies.pop(0) if self.review_replies else bedrock_reply('{"unchanged": true}')
+            if isinstance(step, Exception):
+                raise step
+            return step
+        self.prompts.append(prompt)
         if self.during_call is not None:
             self.during_call()
         if self.delay:
@@ -371,13 +390,20 @@ def test_the_stream_sends_steps_in_order_and_saves_the_result_with_agent_finish_
     assert (finish["p_model_id"], finish["p_prompt_version"], finish["p_retrieval_version"]) == (
         SETTINGS.model_id, "agent-v5", "fixed-test")
     assert row["status"] == "completed" and row["paragraph_count"] == 2
-    # 원장: 사전 확인 1회, 예약 1회(agent 키 형식), 정산 1회. 모델 호출 1회.
-    assert store.reserves == [{"kind": "agent", "key": f"{A}:agent:{key}:1", "daily_count_limit": 20}]
-    assert store.settled == [(101, "usage")]
+    # 원장: 사전 확인 1회, 예약은 1차(agent 키 형식)와 2차(agent-review 키, 횟수 한도 없음) 1회씩, 정산 2회.
+    assert store.reserves == [
+        {"kind": "agent", "key": f"{A}:agent:{key}:1", "daily_count_limit": 20},
+        {"kind": "agent_review", "key": f"{A}:agent-review:{key}:1", "daily_count_limit": None},
+    ]
+    assert store.settled == [(101, "usage"), (102, "usage")]
     assert len(store.checks) == 1 and store.checks[0]["kind"] == "agent" and store.checks[0]["daily_count_limit"] == 20
-    assert bedrock.calls == 1
-    # 단계마다 실행 만료를 갱신했다.
-    assert fake.touches == [("understand", None), ("retrieve", None), ("retrieve", 2), ("compose", None)]
+    assert bedrock.calls == 1 and bedrock.review_calls == 1
+    # 2차가 "변경 없음"이면 1차 결과를 그대로 저장하고, 2차 기록(상태·원장·버전·해시)을 따로 남긴다(MEG-282 D2).
+    assert (finish["p_review_status"], finish["p_review_ledger_id"]) == ("unchanged", 102)
+    assert (finish["p_review_prompt_version"], finish["p_review_prompt_sha256"]) == (
+        agent_turns.REVIEW_PROMPT_VERSION, agent_turns.REVIEW_PROMPT_SHA256)
+    # 단계마다 실행 만료를 갱신했다. 2차 직전에 한 번 더 갱신한다.
+    assert fake.touches == [("understand", None), ("retrieve", None), ("retrieve", 2), ("compose", None), ("compose", None)]
 
 
 def test_json_accept_waits_and_returns_the_e30_turn_object(client, fake):
@@ -554,7 +580,7 @@ def test_the_same_key_replays_the_finished_turn_without_calling_the_model_again(
     assert second[0][1] == first[0][1] and second[1][1] == first[-1][1]
     as_json = ask(client, cid, key=key, accept="application/json").json()
     assert as_json == first[-1][1]
-    assert bedrock.calls == 1 and len(store.reserves) == 1 and len(fake.finishes) == 1
+    assert bedrock.calls == 1 and bedrock.review_calls == 1 and len(store.reserves) == 2 and len(fake.finishes) == 1
     # 같은 키 재전송은 속도 제한을 쓰지 않는다(선점이 먼저다).
     assert fake.hits(f"{AI_AGENT.name}:{fake.keyed_hash(f'user:{A}')}", AI_AGENT.window_seconds) == 1
 
@@ -931,7 +957,10 @@ def test_an_answer_without_citations_ends_as_no_evidence_instead_of_failing(clie
     assert finish["p_paragraph_count"] == 2
     steps = [data for name, data in parsed if name == "step"]
     assert steps[-1] == {"step": "compose", "state": "done"}
-    assert bedrock.calls == 1 and store.settled == [(101, "usage")] and fake.sources == []
+    # 인용 없는 답도 2차 점검 대상이다(MEG-282 9절 결정 3). 2차가 "변경 없음"이면 그대로 근거 없음이다.
+    assert bedrock.calls == 1 and bedrock.review_calls == 1 and fake.sources == []
+    assert store.settled == [(101, "usage"), (102, "usage")]
+    assert (finish["p_review_status"], finish["p_review_ledger_id"]) == ("unchanged", 102)
     assert "output_invalid=no_citation" in caplog.text and "인용 없는 설명" not in caplog.text
 
 
@@ -1037,8 +1066,11 @@ def test_a_failure_after_spending_keeps_the_last_ledger_id(client, fake, store, 
     assert parsed[-1][0] == "error"
     row = last_turn(fake)
     assert row["status"] == "failed"
-    expected = 100 + len(store.reserves)
-    assert store.reserves and fake.finishes[-1]["p_ledger_id"] == expected and row["ledger_id"] == expected
+    # failed 턴의 원장 칸은 1차(agent) 마지막 예약이다. 2차를 불렀으면 2차 원장은 review_ledger_id에 따로 남는다.
+    ids = {kind: [100 + n for n, r in enumerate(store.reserves, start=1) if r["kind"] == kind] for kind in ("agent", "agent_review")}
+    expected = ids["agent"][-1]
+    assert fake.finishes[-1]["p_ledger_id"] == expected and row["ledger_id"] == expected
+    assert fake.finishes[-1]["p_review_ledger_id"] == (ids["agent_review"][-1] if ids["agent_review"] else None)
 
 
 def _raise(error):
@@ -1470,3 +1502,165 @@ def test_a_hidden_suggested_turn_whose_source_turn_is_hidden_cannot_be_retried(c
     assert turns[2]["hidden"] == {"reason": "source_revoked", "retry_allowed": False}
     assert_error(ask(client, cid, body={"retry_of_turn_id": hidden}), 409, "conflict", "turn_not_retryable")
     assert "claim_agent_turn" not in fake.calls and bedrock.calls == 0
+
+
+# --- MEG-282 D2: 2차 점검·보완 ---
+
+
+def _partial_json(**overrides) -> str:
+    body = {"state": "partial", "sections": [{"body": "일부 설명 [1]"}], "limitation": "재시도는 근거에 없습니다.", **overrides}
+    return json.dumps(body, ensure_ascii=False)
+
+
+def test_a_revised_review_replaces_the_answer_keeps_its_citations_and_records_revised(client, fake, store, bedrock):
+    # 1차 partial → 2차가 빠진 문장을 [2]로 보완하고 answered로 올린다. 저장 결과·출처는 2차 것이다.
+    bedrock.replies = [bedrock_reply(_partial_json())]
+    revised = {"state": "answered", "sections": [{"body": "일부 설명 [1]"}, {"body": "재시도는 멱등한 요청에만 안전합니다 [2]"}]}
+    bedrock.review_replies = [bedrock_reply(json.dumps(revised, ensure_ascii=False))]
+    parsed = events(ask(client, fake.conversation(A)))
+    result = parsed[-1][1]["result"]
+    assert result["state"] == "answered" and [s["ref"] for s in result["sources"]] == [1, 2]
+    [finish] = fake.finishes
+    assert finish["p_result"]["sections"] == revised["sections"]
+    assert finish["p_review_status"] == "revised" and finish["p_review_ledger_id"] == 102
+    assert finish["p_ledger_id"] == 101 and finish["p_prompt_version"] == "agent-v5"
+    # 2차 입력: 1차와 같은 자료 구역 + 1차 답 구역.
+    [prompt] = bedrock.review_prompts
+    for name in ("현재 주제", "선택 문맥", "이전 대화", "근거 문단", "질문", "1차 답"):
+        assert f"<<<{name} 시작>>>" in prompt
+    assert "재시도는 근거에 없습니다." in prompt.split("<<<1차 답 시작>>>")[1]
+
+
+@pytest.mark.parametrize(
+    ("review", "reason"),
+    [
+        (json.dumps({"state": "answered", "sections": [{"body": "다른 설명 [2]"}]}, ensure_ascii=False), "citation_dropped"),
+        (json.dumps({"state": "clarify", "clarify": {"prompt": "어느 뜻?", "options": ["가", "나"]}}, ensure_ascii=False),
+         "state_change"),
+        (json.dumps({"state": "topic_check"}), "state"),
+        ("JSON이 아님", "json"),
+        (json.dumps({"state": "answered", "sections": [{"body": "인용 없음"}]}, ensure_ascii=False), "no_citation"),
+    ],
+    ids=["citation_dropped", "clarify", "topic_check", "not_json", "no_citation"],
+)
+def test_a_rejected_review_falls_back_to_the_first_answer(client, fake, store, bedrock, review, reason, caplog):
+    bedrock.review_replies = [bedrock_reply(review)]
+    parsed = events(ask(client, fake.conversation(A)))
+    assert parsed[-1][1]["status"] == "completed"
+    [finish] = fake.finishes
+    assert finish["p_result"]["sections"] == json.loads(answer_json())["sections"]
+    assert finish["p_review_status"] == "fallback" and finish["p_review_ledger_id"] == 102
+    assert f"outcome=fallback reason={reason}" in caplog.text
+
+
+def test_an_answered_first_answer_may_not_drop_to_partial(client, fake, bedrock):
+    bedrock.review_replies = [bedrock_reply(_partial_json())]
+    events(ask(client, fake.conversation(A)))
+    assert fake.finishes[-1]["p_review_status"] == "fallback"
+    assert fake.finishes[-1]["p_result"]["state"] == "answered"
+
+
+def test_a_review_model_error_is_not_retried_and_keeps_the_first_answer(client, fake, store, bedrock):
+    # 2차는 앱 안 재시도가 없다. 재시도 가능한 오류(시간 초과)도 한 번만 부르고 1차 결과를 쓴다.
+    bedrock.review_replies = [agent_turns.AiCallError("bedrock", "ReadTimeoutError")]
+    parsed = events(ask(client, fake.conversation(A)))
+    assert parsed[-1][1]["status"] == "completed" and parsed[-1][1]["result"]["state"] == "answered"
+    assert bedrock.review_calls == 1
+    assert [r["kind"] for r in store.reserves] == ["agent", "agent_review"]
+    assert fake.finishes[-1]["p_review_status"] == "fallback" and fake.finishes[-1]["p_review_ledger_id"] == 102
+
+
+def test_a_review_limit_skips_the_review_and_keeps_the_first_answer(client, fake, store, bedrock, monkeypatch):
+    real = store.reserve
+
+    def reserve(**kwargs):
+        if kwargs["kind"] == "agent_review":
+            raise AiLimitReached()
+        return real(**kwargs)
+
+    monkeypatch.setattr(store, "reserve", reserve)
+    parsed = events(ask(client, fake.conversation(A)))
+    assert parsed[-1][1]["status"] == "completed"
+    finish = fake.finishes[-1]
+    assert finish["p_review_status"] == "skipped" and finish["p_review_ledger_id"] is None
+    assert finish["p_review_prompt_version"] is None and bedrock.review_calls == 0
+
+
+def test_a_review_settlement_failure_fails_the_turn_without_the_first_answer(client, fake, store, bedrock, monkeypatch):
+    # 9절 결정 4: 2차 정산 실패면 1차 결과도 주지 않는다(지금 규칙). 1차·2차 원장 연결은 남긴다.
+    real = store.settle
+
+    def settle(ledger_id, outcome, **values):
+        if ledger_id == 102:
+            raise OSError("down")
+        return real(ledger_id, outcome, **values)
+
+    monkeypatch.setattr(store, "settle", settle)
+    parsed = events(ask(client, fake.conversation(A)))
+    assert parsed[-1][0] == "error" and parsed[-1][1]["error"]["code"] == "internal_error"
+    row = last_turn(fake)
+    assert row["status"] == "failed" and row["result"] is None
+    finish = fake.finishes[-1]
+    assert finish["p_ledger_id"] == 101 and finish["p_review_ledger_id"] == 102
+
+
+def test_an_uncited_first_answer_can_be_rescued_by_the_review(client, fake, bedrock):
+    # Q19 인용 없는 답 → 2차가 근거 문장으로 답을 쓰면 그 답을 저장한다(9절 결정 3).
+    bedrock.replies = [bedrock_reply(answer_json(sections=[{"body": "인용 없는 설명"}]))]
+    bedrock.review_replies = [bedrock_reply(answer_json())]
+    parsed = events(ask(client, fake.conversation(A)))
+    assert parsed[-1][1]["result"]["state"] == "answered"
+    assert fake.finishes[-1]["p_review_status"] == "revised"
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        json.dumps({"state": "clarify", "clarify": {"prompt": "어느 뜻?", "options": ["가", "나"]}}, ensure_ascii=False),
+        _partial_json(limitation="선택한 노트 문장이 근거 문단과 다릅니다."),
+        json.dumps({"state": "correction", "sections": [{"body": "설명 [1]"}],
+                    "corrections": [{"note_excerpt": "노트", "corrected": "고침 [1]", "source_refs": [1]}]},
+                   ensure_ascii=False),
+    ],
+    ids=["clarify", "note_mismatch_partial", "note_only_correction"],
+)
+def test_turns_outside_the_review_targets_make_no_review_call(client, fake, store, bedrock, first):
+    bedrock.replies = [bedrock_reply(first)]
+    events(ask(client, fake.conversation(A)))
+    assert bedrock.review_calls == 0 and [r["kind"] for r in store.reserves] == ["agent"]
+    assert fake.finishes[-1]["p_review_status"] == "not_applicable"
+
+
+def test_a_cancel_before_the_review_skips_it_and_ends_cancelled(client, fake, store, bedrock):
+    bedrock.during_call = lambda: fake.cancel_agent_turn(A, last_turn(fake)["id"])
+    parsed = events(ask(client, fake.conversation(A)))
+    assert parsed[-1][1]["status"] == "cancelled" and bedrock.review_calls == 0
+    assert [r["kind"] for r in store.reserves] == ["agent"]
+    assert last_turn(fake)["ledger_id"] == 101
+
+
+def test_a_first_answer_too_long_for_the_review_input_is_skipped(client, fake, bedrock):
+    body = "가" * 3990 + " [1]"
+    bedrock.replies = [bedrock_reply(answer_json(sections=[{"body": body}, {"body": body}]))]
+    events(ask(client, fake.conversation(A)))
+    assert bedrock.review_calls == 0 and fake.finishes[-1]["p_review_status"] == "skipped"
+
+
+def test_the_pre_check_reserves_both_calls(client, fake, store, bedrock):
+    from app.agent_output import max_prompt_tokens, max_review_prompt_tokens
+
+    events(ask(client, fake.conversation(A)))
+    [check] = store.checks
+    expected = BUDGET.cost(max_prompt_tokens(), 1500) + BUDGET.cost(max_review_prompt_tokens(), 1500)
+    assert check["reserved_usd"] == expected
+
+
+def test_the_review_head_used_by_fakes_matches_the_review_prompt():
+    # 가짜 Bedrock(시험·로컬 e2e 도구)이 2차 호출을 이 첫 줄로 가른다. 프롬프트를 바꾸면 함께 바꿔야 한다.
+    from pathlib import Path
+
+    from app.agent_output import _REVIEW_RULES
+
+    assert _REVIEW_RULES.startswith(REVIEW_HEAD)
+    script = (Path(__file__).resolve().parents[1] / "scripts" / "local_agent_e2e.py").read_text(encoding="utf-8")
+    assert f'REVIEW_HEAD = "{REVIEW_HEAD}"' in script

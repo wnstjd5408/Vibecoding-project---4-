@@ -138,7 +138,9 @@ def test_tables_constraints_and_indexes_match_the_design(database):
         "ai_turns." + c for c in
         ("id", "conversation_id", "user_id", "seq", "idempotency_key", "question_kind", "question_text", "preset",
          "from_turn_id", "reply", "retry_of_turn_id", "status", "failure", "step", "paragraph_count", "result",
-         "ledger_id", "model_id", "prompt_version", "retrieval_version", "lease_expires_at", "created_at", "finished_at")
+         "ledger_id", "model_id", "prompt_version", "retrieval_version", "lease_expires_at", "created_at", "finished_at",
+         # 2차 점검·보완 기록(MEG-282 D2, 20261125120000)
+         "review_status", "review_ledger_id", "review_prompt_version", "review_prompt_sha256")
     ]
 
     indexes = sql(database, """
@@ -169,6 +171,7 @@ def test_tables_constraints_and_indexes_match_the_design(database):
         "ai_turns.from_turn_id->ai_turns:n",
         "ai_turns.ledger_id->ai_usage_ledger:n",
         "ai_turns.retry_of_turn_id->ai_turns:n",
+        "ai_turns.review_ledger_id->ai_usage_ledger:n",
         "ai_turns.user_id->profiles:c",
     ]
 
@@ -644,3 +647,109 @@ def test_only_service_role_can_use_the_new_functions_and_tables(clean):
                            'ai_claim_quiz_set')
          and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute')
               or not has_function_privilege('service_role', p.oid, 'execute'));""") == "0"
+
+
+# --- MEG-282 D2: 2차 점검·보완 원장 kind와 턴 기록 (20261125120000) ---
+
+
+def test_agent_review_rows_share_the_agent_70_percent_but_not_the_turn_count(clean):
+    a, b = new_user(clean), new_user(clean)
+    # 횟수 한도 1: agent 첫 시도 1건 뒤 새 agent는 막히지만 agent_review(한도 null)는 횟수에 들지 않는다.
+    assert reserve(clean, a, "a:agent:1", "0.1", limit="1") == "reserved"
+    assert reserve(clean, a, "a:agent-review:1", "0.1", kind="agent_review") == "reserved"
+    assert reserve(clean, a, "a:agent2:1", "0.01", limit="1") == "limit_reached"
+    # agent_review 행은 agent의 횟수에 세지 않는다(같은 kind 첫 시도만 센다).
+    sql(clean, "delete from public.ai_usage_ledger where kind = 'agent';")
+    assert reserve(clean, a, "a:agent3:1", "0.1", limit="1") == "reserved"
+    # agent 몫(하루 예산 1의 70%)은 agent + agent_review 합계로 본다. 지금 0.1 + 0.1.
+    assert reserve(clean, b, "b:agent-review:1", "0.45", kind="agent_review") == "reserved"
+    assert reserve(clean, b, "b:agent:1", "0.1") == "limit_reached"
+    assert reserve(clean, b, "b:agent-review:2", "0.1", kind="agent_review") == "limit_reached"
+    assert check_limit(clean, b, "0.05") == "t" and check_limit(clean, b, "0.06", kind="agent_review") == "f"
+    # 다른 kind는 agent 묶음과 관계없다(하루 예산 전체를 쓸 수 있는 기존 동작).
+    assert reserve(clean, b, "b:explain:1", "0.25", kind="explain") == "reserved"
+
+
+def test_unknown_kinds_are_still_rejected(clean):
+    a = new_user(clean)
+    error = sql_error(clean, "set role service_role; select public.ai_check_limit("
+                             f"'{a}', 'agent_other', 0.1, 1, 7, 1, null, null, 1);")
+    assert "invalid ai limit arguments" in error
+    error = sql_error(clean, "insert into public.ai_usage_ledger (user_id, kind, idempotency_key, reserved_usd, attempt_no, kst_date) "
+                             f"values ('{a}', 'agent_other', 'x', 0.1, 1, current_date);")
+    assert "ai_usage_ledger_kind_check" in error
+
+
+def _ledger(database, user, kind, key):
+    return last(sql(database, "insert into public.ai_usage_ledger (user_id, kind, idempotency_key, reserved_usd, attempt_no, kst_date) "
+                              f"values ('{user}', '{kind}', '{key}', 0.1, 1, current_date) returning id;"))
+
+
+def _finish_review(database, user, turn_id, status, *, result="null", ledger="null", review_status="null",
+                   review_ledger="null", version="null", sha="null", failure="null"):
+    return last(sql(database, "set role service_role; select public.agent_finish_turn("
+                              f"p_user_id => '{user}', p_turn_id => '{turn_id}', p_status => '{status}', "
+                              f"p_failure => {failure}, p_result => {result}, p_ledger_id => {ledger}, "
+                              f"p_review_status => {review_status}, p_review_ledger_id => {review_ledger}, "
+                              f"p_review_prompt_version => {version}, p_review_prompt_sha256 => {sha});"))
+
+
+def test_finish_records_the_review_fields(clean):
+    a = new_user(clean)
+    conversation = new_conversation(clean, a)
+    _, turn_id, _, _ = claim(clean, a, conversation)
+    first, second = _ledger(clean, a, "agent", "a:agent:t:1"), _ledger(clean, a, "agent_review", "a:agent-review:t:1")
+    sha = "a" * 64
+    assert _finish_review(clean, a, turn_id, "completed", result="'{\"state\": \"answered\"}'", ledger=first,
+                          review_status="'revised'", review_ledger=second, version="'agent-review-v1'",
+                          sha=f"'{sha}'") == "t"
+    assert turn(clean, turn_id, "ledger_id, review_status, review_ledger_id, review_prompt_version, review_prompt_sha256") \
+        == f"{first}|revised|{second}|agent-review-v1|{sha}"
+
+
+def test_finish_rejects_bad_review_arguments(clean):
+    a, b = new_user(clean), new_user(clean)
+    conversation = new_conversation(clean, a)
+    _, turn_id, _, _ = claim(clean, a, conversation)
+    agent_row = _ledger(clean, a, "agent", "a:agent:x:1")
+    foreign_review = _ledger(clean, b, "agent_review", "b:agent-review:x:1")
+    ok = "'{\"state\": \"answered\"}'"
+    for kwargs in (
+        {"review_status": "'maybe'"},
+        {"sha": "'not-a-hash'"},
+        # 2차 원장 칸은 같은 사용자의 agent_review 행만 받는다.
+        {"review_ledger": agent_row},
+        {"review_ledger": foreign_review},
+    ):
+        error = sql_error(clean, "set role service_role; select public.agent_finish_turn("
+                                 f"p_user_id => '{a}', p_turn_id => '{turn_id}', p_status => 'completed', p_result => {ok}, "
+                                 f"p_review_status => {kwargs.get('review_status', 'null')}, "
+                                 f"p_review_ledger_id => {kwargs.get('review_ledger', 'null')}, "
+                                 f"p_review_prompt_sha256 => {kwargs.get('sha', 'null')});")
+        assert "invalid agent finish arguments" in error
+    assert turn(clean, turn_id, "status") == "running"
+
+
+def test_a_rejected_transition_still_links_the_review_ledger(clean):
+    # 이미 취소된 턴에 completed를 쓰지 못해도 비용과 턴을 잇는다(1차 원장과 같은 규칙).
+    a = new_user(clean)
+    conversation = new_conversation(clean, a)
+    _, turn_id, _, _ = claim(clean, a, conversation)
+    assert _finish_review(clean, a, turn_id, "cancelled") == "t"
+    second = _ledger(clean, a, "agent_review", "a:agent-review:c:1")
+    assert _finish_review(clean, a, turn_id, "completed", result="'{\"state\": \"answered\"}'",
+                          review_status="'unchanged'", review_ledger=second) == "f"
+    assert turn(clean, turn_id, "status, review_ledger_id, coalesce(review_status, '-')") == f"cancelled|{second}|-"
+
+
+def test_the_finish_function_keeps_service_role_only(clean):
+    grants = sql(clean, """
+      select grantee from information_schema.routine_privileges
+       where routine_schema = 'public' and routine_name = 'agent_finish_turn' order by grantee;""")
+    assert "service_role" in grants.splitlines()
+    assert not {"anon", "authenticated", "PUBLIC"} & set(grants.splitlines())
+    # 이름 인자 호출(E31 취소)은 새 인자 없이도 된다.
+    a = new_user(clean)
+    _, turn_id, _, _ = claim(clean, a, new_conversation(clean, a))
+    assert last(sql(clean, f"set role service_role; select public.agent_finish_turn(p_user_id => '{a}', "
+                           f"p_turn_id => '{turn_id}', p_status => 'cancelled');")) == "t"

@@ -19,6 +19,7 @@ from test_agent import BODY, NOW, OP, PRIVATE, PUBLIC, SOURCE_NOTE, A
 from test_agent_turns import (
     PARAGRAPHS,
     QUESTION,
+    REVIEW_HEAD,
     AgentStore,
     TurnFake,
     answer_json,
@@ -127,6 +128,7 @@ class MixedBedrock:
         self.explain_steps: list = []
         self.agent_steps: list = []
         self.explain_delay = 0.0
+        self.review_calls = 0
 
     def kinds(self) -> list[str]:
         return [kind for kind, _ in self.log]
@@ -134,6 +136,10 @@ class MixedBedrock:
     def converse(self, **kwargs):
         prompt = kwargs["messages"][0]["content"][0]["text"]
         kind = {1500: "agent", 600: "explain"}[kwargs["inferenceConfig"]["maxTokens"]]
+        if prompt.startswith(REVIEW_HEAD):
+            # 2차 점검·보완(MEG-282 D2). 퀴즈 자료 시험에서는 늘 "변경 없음"이고 기록에 남기지 않는다.
+            self.review_calls += 1
+            return bedrock_reply('{"unchanged": true}')
         self.log.append((kind, prompt))
         if kind == "agent":
             step = self.agent_steps.pop(0) if self.agent_steps else bedrock_reply(answer_json())
@@ -228,9 +234,14 @@ def test_a_new_term_creates_one_shared_explanation_and_a_view_without_touching_t
     # 원장: agent 예약·정산이 끝난 뒤 explain을 예약한다(같은 턴의 agent 호출이 한도에 걸리지 않게).
     assert store.reserves == [
         {"kind": "agent", "key": f"{A}:agent:{key}:1", "daily_count_limit": 20},
+        # 2차 점검·보완(MEG-282 D2). 턴 결과를 저장하기 전, 퀴즈 자료보다 먼저 돈다.
+        {"kind": "agent_review", "key": f"{A}:agent-review:{key}:1", "daily_count_limit": None},
         {"kind": "explain", "key": f"{A}:agent-explain:{key}:1", "daily_count_limit": 20},
     ]
-    assert store.log == [("reserve", "agent"), ("settle", 101), ("reserve", "explain"), ("settle", 102)]
+    assert store.log == [
+        ("reserve", "agent"), ("settle", 101), ("reserve", "agent_review"), ("settle", 102),
+        ("reserve", "explain"), ("settle", 103),
+    ]
     assert bedrock.kinds() == ["agent", "explain"]
 
     # 저장: 공개 노트, 저장한 개정, 서버가 자른 용어. terms(source='ai')와 ai_explanations가 한 건씩 생긴다.
@@ -270,7 +281,7 @@ def test_a_known_term_records_only_a_view(client, fake, store, bedrock, glossary
     cid = fake.conversation(A)
     events(ask(client, cid))
     assert bedrock.kinds() == ["agent"]
-    assert [r["kind"] for r in store.reserves] == ["agent"]
+    assert [r["kind"] for r in store.reserves] == ["agent", "agent_review"]
     assert fake.store_calls == []
     assert fake.term_views == {(A, term["id"], _kst_today())}
 
@@ -280,7 +291,7 @@ def test_asking_the_same_term_again_reuses_the_shared_explanation(client, fake, 
     events(ask(client, cid))
     events(ask(client, cid, body={"question": {"kind": "preset", "preset": "simple"}}))
     assert bedrock.kinds() == ["agent", "explain", "agent"]
-    assert [r["kind"] for r in store.reserves] == ["agent", "explain", "agent"]
+    assert [r["kind"] for r in store.reserves] == ["agent", "agent_review", "explain", "agent", "agent_review"]
     assert len(fake.store_calls) == 1
     # 같은 날 열람 기록은 기본 키 때문에 한 건이다.
     assert fake.term_views == {(A, fake.terms[KEY]["id"], _kst_today())}
