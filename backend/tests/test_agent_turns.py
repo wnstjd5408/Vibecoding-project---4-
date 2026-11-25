@@ -1743,3 +1743,54 @@ def test_a_cancel_during_the_review_ends_cancelled_and_links_both_ledgers(client
     row = last_turn(fake)
     assert row["ledger_id"] == 101 and row["result"] is None
     assert fake.finishes[-1]["p_review_ledger_id"] == 102
+
+
+# --- MEG-282: CS Agent 전용 모델·단가 ---
+
+
+def test_the_agent_model_and_prices_apply_to_both_calls_and_the_record(fake, store, bedrock, retriever):
+    from dataclasses import replace
+
+    from app.agent_output import max_prompt_tokens, max_review_prompt_tokens
+
+    settings = replace(SETTINGS, agent_model_id="global.anthropic.claude-sonnet-5")
+    budget = replace(BUDGET, agent_input_usd_per_mtok=Decimal("2"), agent_output_usd_per_mtok=Decimal("10"))
+    seen = []
+    real = bedrock.converse
+
+    def converse(**kwargs):
+        seen.append((kwargs["modelId"], kwargs.get("additionalModelRequestFields")))
+        return real(**kwargs)
+
+    bedrock.converse = converse
+    app = build_app(fake, store, bedrock, retriever)
+    app.dependency_overrides[get_ai_runtime] = lambda: AiRuntime(
+        store=store, load_budget=lambda: budget, load_settings=lambda: settings,
+        client_factory=lambda s, token=None: bedrock, sleep=lambda seconds: None)
+    events(ask(TestClient(app), fake.conversation(A)))
+    # 1차·2차 모두 전용 모델이고, OpenAI 전용 추론 필드를 보내지 않는다.
+    assert seen == [("global.anthropic.claude-sonnet-5", None), ("global.anthropic.claude-sonnet-5", None)]
+    assert fake.finishes[-1]["p_model_id"] == "global.anthropic.claude-sonnet-5"
+    # 사전 확인액은 전용 단가로 두 호출 몫이다.
+    [check] = store.checks
+    assert check["reserved_usd"] == budget.for_kind("agent").cost(max_prompt_tokens(), 1500) + budget.for_kind(
+        "agent_review").cost(max_review_prompt_tokens(), 1500)
+
+
+def test_without_the_agent_settings_the_calls_and_record_are_unchanged(client, fake, store, bedrock):
+    # 새 환경변수가 없으면 지금 동작 그대로다(기본 모델, OpenAI 추론 필드, 기본 단가).
+    from app.agent_output import max_prompt_tokens, max_review_prompt_tokens
+
+    seen = []
+    real = bedrock.converse
+
+    def converse(**kwargs):
+        seen.append((kwargs["modelId"], kwargs.get("additionalModelRequestFields")))
+        return real(**kwargs)
+
+    bedrock.converse = converse
+    events(ask(client, fake.conversation(A)))
+    assert seen == [(SETTINGS.model_id, {"reasoning": {"effort": "none"}})] * 2
+    assert fake.finishes[-1]["p_model_id"] == SETTINGS.model_id
+    [check] = store.checks
+    assert check["reserved_usd"] == BUDGET.cost(max_prompt_tokens(), 1500) + BUDGET.cost(max_review_prompt_tokens(), 1500)

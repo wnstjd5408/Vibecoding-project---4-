@@ -28,6 +28,8 @@ AUTH_API_KEY = "api_key"
 AUTH_MODES = (AUTH_OIDC, AUTH_API_KEY)
 
 API_KEY_ENV = "AWS_BEARER_TOKEN_BEDROCK"
+# CS Agent(E29 1차·2차) 전용 모델 ID(MEG-282). 비어 있으면 BEDROCK_MODEL_ID를 쓴다(지금 동작).
+AGENT_MODEL_ENV = "BEDROCK_AGENT_MODEL_ID"
 
 # AI를 부를 수 있는 Preview 배포의 브랜치. 다른 브랜치의 Preview(PR 미리보기)는 막는다.
 STAGING_BRANCH = "staging"
@@ -139,6 +141,8 @@ class BedrockSettings:
     region: str = "ap-northeast-1"
     model_id: str = "global.openai.gpt-6-luna"
     role_arn: str | None = None
+    # CS Agent(E29 1차·2차) 전용 모델(MEG-282). 없으면 model_id를 쓴다. E09·퀴즈·후속 질문은 늘 model_id다.
+    agent_model_id: str | None = None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "BedrockSettings":
@@ -160,6 +164,7 @@ class BedrockSettings:
             region=env.get("BEDROCK_REGION") or defaults.region,
             model_id=env.get("BEDROCK_MODEL_ID") or defaults.model_id,
             role_arn=role_arn,
+            agent_model_id=(env.get(AGENT_MODEL_ENV) or "").strip() or None,
         )
 
 
@@ -293,6 +298,25 @@ def _usage(response: Mapping) -> tuple[int | None, int | None, int]:
     return None, None, 0
 
 
+def is_openai_model(model_id: str) -> bool:
+    """OpenAI 계열 모델 ID인가(추론 프로필 접두사 global./jp./apac. 등을 포함해도 된다)."""
+    return model_id.split(".", 1)[0] == "openai" or ".openai." in f".{model_id}"
+
+
+def model_request_fields(model_id: str, effort: str) -> dict | None:
+    """모델별 additionalModelRequestFields(MEG-282).
+
+    - OpenAI 계열: 지금처럼 추론 강도를 늘 명시한다({"reasoning": {"effort": ...}}).
+    - 그 밖(Claude·Nova 등): 이 필드는 OpenAI 전용이라 보내지 않는다. 추론을 켜는 방법이 모델마다 달라
+      effort가 none이 아니면 설정 오류로 막는다(조용히 추론 없이 부르지 않는다).
+    """
+    if is_openai_model(model_id):
+        return {"reasoning": {"effort": effort}}
+    if effort != "none":
+        raise AiConfigError("OpenAI가 아닌 모델에는 추론 강도(effort)를 설정할 수 없다")
+    return None
+
+
 def converse_text(
     client,
     settings: BedrockSettings,
@@ -300,15 +324,23 @@ def converse_text(
     *,
     max_tokens: int,
     effort: str = "none",
+    model_id: str | None = None,
 ) -> AiResult:
-    """텍스트 한 번 묻고 답을 받는다. 추론 강도와 maxTokens는 호출마다 명시한다."""
+    """텍스트 한 번 묻고 답을 받는다. 추론 강도와 maxTokens는 호출마다 명시한다.
+
+    model_id: 이 호출의 모델(MEG-282, kind별 모델). 없으면 settings.model_id다.
+    """
+    model = model_id or settings.model_id
+    request: dict = {
+        "modelId": model,
+        "messages": [{"role": "user", "content": [{"text": prompt}]}],
+        "inferenceConfig": {"maxTokens": max_tokens},
+    }
+    fields = model_request_fields(model, effort)
+    if fields is not None:
+        request["additionalModelRequestFields"] = fields
     try:
-        response = client.converse(
-            modelId=settings.model_id,
-            messages=[{"role": "user", "content": [{"text": prompt}]}],
-            inferenceConfig={"maxTokens": max_tokens},
-            additionalModelRequestFields={"reasoning": {"effort": effort}},
-        )
+        response = client.converse(**request)
     except (ClientError, BotoCoreError) as error:
         raise AiCallError("bedrock", _error_code(error)) from None
 

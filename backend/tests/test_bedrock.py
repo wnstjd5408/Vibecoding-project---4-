@@ -13,6 +13,7 @@ from app.bedrock import (
     AiConfigError,
     BedrockSettings,
     converse_text,
+    is_openai_model,
     make_client,
 )
 
@@ -322,12 +323,57 @@ def test_converse_passes_model_limits_and_reasoning_effort():
         seen.update(kwargs)
         return GOOD_RESPONSE
 
-    settings = BedrockSettings(auth_mode="api_key", model_id="other.model")
+    settings = BedrockSettings(auth_mode="api_key", model_id="global.openai.other-model")
     converse_text(SimpleNamespace(converse=converse), settings, "ping", max_tokens=40, effort="low")
 
-    assert seen["modelId"] == "other.model"
+    assert seen["modelId"] == "global.openai.other-model"
     assert seen["inferenceConfig"] == {"maxTokens": 40}
     assert seen["additionalModelRequestFields"] == {"reasoning": {"effort": "low"}}
+
+
+# --- MEG-282: 모델별 요청 필드와 CS Agent 전용 모델 ---
+
+
+@pytest.mark.parametrize(
+    ("model", "openai"),
+    [("global.openai.gpt-6-luna", True), ("openai.gpt-6-luna", True), ("jp.openai.x", True),
+     ("arn:aws:bedrock:ap-northeast-1:1:inference-profile/global.openai.gpt-6-luna", True),
+     ("global.anthropic.claude-sonnet-5", False), ("anthropic.claude-haiku-5-5", False),
+     ("amazon.nova-2-lite-v1:0", False), ("openaix.model", False)],
+)
+def test_openai_models_are_recognised_with_any_profile_prefix(model, openai):
+    assert is_openai_model(model) is openai
+
+
+def test_non_openai_models_get_no_reasoning_field_and_reject_an_effort():
+    seen = {}
+
+    def converse(**kwargs):
+        seen.clear()
+        seen.update(kwargs)
+        return GOOD_RESPONSE
+
+    settings = BedrockSettings(auth_mode="api_key")
+    converse_text(SimpleNamespace(converse=converse), settings, "ping", max_tokens=40, effort="none",
+                  model_id="global.anthropic.claude-sonnet-5")
+    assert seen["modelId"] == "global.anthropic.claude-sonnet-5"
+    assert "additionalModelRequestFields" not in seen
+    with pytest.raises(AiConfigError):
+        converse_text(SimpleNamespace(converse=converse), settings, "ping", max_tokens=40, effort="low",
+                      model_id="global.anthropic.claude-sonnet-5")
+    # model_id가 없으면 설정의 기본 모델(OpenAI)이고 추론 필드를 지금처럼 보낸다.
+    converse_text(SimpleNamespace(converse=converse), settings, "ping", max_tokens=40)
+    assert seen["modelId"] == "global.openai.gpt-6-luna"
+    assert seen["additionalModelRequestFields"] == {"reasoning": {"effort": "none"}}
+
+
+def test_agent_model_comes_from_its_own_env_and_defaults_to_none():
+    base = {"AI_AUTH_MODE": "api_key", "AWS_BEARER_TOKEN_BEDROCK": "test-only"}
+    assert BedrockSettings.from_env(base).agent_model_id is None
+    assert BedrockSettings.from_env({**base, "BEDROCK_AGENT_MODEL_ID": "  "}).agent_model_id is None
+    settings = BedrockSettings.from_env({**base, "BEDROCK_AGENT_MODEL_ID": "global.anthropic.claude-sonnet-5"})
+    assert settings.agent_model_id == "global.anthropic.claude-sonnet-5"
+    assert settings.model_id == "global.openai.gpt-6-luna"
 
 
 # --- 실패 경로 (만료·무효 키 포함) ---

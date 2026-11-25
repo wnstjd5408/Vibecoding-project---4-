@@ -5,7 +5,7 @@ SQL 함수 자체의 한도·동시성은 tests/integration/test_ai_ledger_sql.p
 
 import io
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 
 import pytest
@@ -21,6 +21,7 @@ from botocore.exceptions import (
 
 from app import ai_ledger
 from app.ai_ledger import (
+    CALL_SPECS,
     AiBudget,
     AiLimitReached,
     AiSettlementFailed,
@@ -830,3 +831,61 @@ def test_supabase_store_settle_and_quiz_claim():
 def test_api_error_for_rejects_other_exceptions():
     with pytest.raises(TypeError):
         api_error_for(ValueError("x"))
+
+
+# --- MEG-282: CS Agent 전용 모델·단가 ---
+
+
+def test_agent_prices_are_optional_and_must_come_in_pairs():
+    base = {"AI_DAILY_BUDGET_USD": "1", "AI_MONTHLY_BUDGET_USD": "5", "AI_INPUT_USD_PER_MTOK": "0.1",
+            "AI_OUTPUT_USD_PER_MTOK": "0.5"}
+    budget = AiBudget.from_env(base)
+    assert budget.agent_input_usd_per_mtok is None and budget.for_kind("agent") is budget
+    both = AiBudget.from_env({**base, "AI_AGENT_INPUT_USD_PER_MTOK": "2", "AI_AGENT_OUTPUT_USD_PER_MTOK": "10"})
+    agent = both.for_kind("agent")
+    assert (agent.input_usd_per_mtok, agent.output_usd_per_mtok) == (Decimal("2"), Decimal("10"))
+    assert both.for_kind("agent_review").input_usd_per_mtok == Decimal("2")
+    # E09·퀴즈·후속 질문은 기본 단가 그대로다. 하루·월 예산은 모든 kind가 함께 쓴다.
+    for kind in ("explain", "quiz", "followup"):
+        assert both.for_kind(kind).input_usd_per_mtok == Decimal("0.1")
+    assert agent.daily_usd == both.daily_usd and agent.monthly_usd == both.monthly_usd
+    for bad in ({"AI_AGENT_INPUT_USD_PER_MTOK": "2"}, {"AI_AGENT_OUTPUT_USD_PER_MTOK": "10"},
+                {"AI_AGENT_INPUT_USD_PER_MTOK": "0", "AI_AGENT_OUTPUT_USD_PER_MTOK": "10"},
+                {"AI_AGENT_INPUT_USD_PER_MTOK": "x", "AI_AGENT_OUTPUT_USD_PER_MTOK": "10"}):
+        with pytest.raises(AiConfigError):
+            AiBudget.from_env({**base, **bad})
+
+
+def test_agent_kinds_use_the_agent_model_and_prices_other_kinds_keep_the_default():
+    from app.ai_ledger import model_id_for
+
+    settings = BedrockSettings(auth_mode="api_key", agent_model_id="global.anthropic.claude-sonnet-5")
+    assert model_id_for(settings, "agent") == model_id_for(settings, "agent_review") == "global.anthropic.claude-sonnet-5"
+    for kind in ("explain", "quiz", "followup"):
+        assert model_id_for(settings, kind) == settings.model_id
+    assert model_id_for(BedrockSettings(auth_mode="api_key"), "agent") == "global.openai.gpt-6-luna"
+
+
+@pytest.mark.parametrize(("kind", "model", "fields"), [
+    ("agent", "global.anthropic.claude-sonnet-5", None),
+    ("agent_review", "global.anthropic.claude-sonnet-5", None),
+    ("explain", "global.openai.gpt-6-luna", {"reasoning": {"effort": "none"}}),
+])
+def test_run_ai_call_sends_the_kind_model_and_settles_at_the_kind_price(kind, model, fields):
+    seen = {}
+    store = FakeStore()
+
+    class Recording(FakeBedrock):
+        def converse(self, **kwargs):
+            seen.update(kwargs)
+            return super().converse(**kwargs)
+
+    budget = replace(BUDGET, agent_input_usd_per_mtok=Decimal("2"), agent_output_usd_per_mtok=Decimal("10"))
+    settings = replace(API_KEY, agent_model_id="global.anthropic.claude-sonnet-5")
+    run_ai_call(store, settings, budget, user_id=USER, kind=kind, request_key=f"{USER}:k", prompt="자료: 문장",
+                client_factory=lambda s, t: Recording(OK))
+    assert seen["modelId"] == model
+    assert seen.get("additionalModelRequestFields") == fields
+    # 예약액·정산액도 그 kind의 단가로 계산한다.
+    priced = budget.for_kind(kind)
+    assert store.reserved[0]["reserved_usd"] == priced.reserve_amount("자료: 문장", CALL_SPECS[kind].max_tokens)

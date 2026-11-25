@@ -99,6 +99,7 @@ from app.ai_ledger import (
     LedgerKeyExists,
     agent_request_key,
     agent_review_request_key,
+    model_id_for,
     api_error_for,
     ledger_id_of,
     run_ai_call,
@@ -706,7 +707,7 @@ def _execute(
             result=dict(NO_EVIDENCE_RESULT),
             ledger_id=outcome.ledger_id,
             paragraph_count=len(paragraphs),
-            model_id=job.settings.model_id,
+            model_id=model_id_for(job.settings, KIND_AGENT),
             prompt_version=PROMPT_VERSION,
             retrieval_version=retriever.version,
         ):
@@ -724,7 +725,7 @@ def _execute(
         sources=sources or None,
         ledger_id=outcome.ledger_id,
         paragraph_count=len(paragraphs),
-        model_id=job.settings.model_id,
+        model_id=model_id_for(job.settings, KIND_AGENT),
         prompt_version=PROMPT_VERSION,
         retrieval_version=retriever.version,
     ):
@@ -1169,9 +1170,10 @@ def prepare_turn(
         # 2차 점검·보완(MEG-282 D2)까지 두 호출 몫을 본다. 2차는 agent 몫(70%)과 금액 한도에는 들고 턴 수에는 들지 않는다.
         spec = CALL_SPECS[KIND_AGENT]
         review_spec = CALL_SPECS[KIND_AGENT_REVIEW]
-        reserved = budget.cost(max_prompt_tokens(), spec.max_tokens) + budget.cost(
-            max_review_prompt_tokens(), review_spec.max_tokens
-        )
+        # 단가는 kind별이다(CS Agent 전용 모델 단가, MEG-282). 설정하지 않으면 기본 단가와 같다.
+        reserved = budget.for_kind(KIND_AGENT).cost(max_prompt_tokens(), spec.max_tokens) + budget.for_kind(
+            KIND_AGENT_REVIEW
+        ).cost(max_review_prompt_tokens(), review_spec.max_tokens)
         if not runtime.store.check_limit(
             user_id=user.user_id,
             kind=KIND_AGENT,

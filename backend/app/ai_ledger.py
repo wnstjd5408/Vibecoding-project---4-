@@ -17,7 +17,7 @@ import math
 import os
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from typing import Protocol
 
@@ -43,6 +43,15 @@ KIND_FOLLOWUP = "followup"
 KIND_AGENT = "agent"
 # CS Agent 2차 점검·보완 호출(MEG-282 설계 v0.2 4절 D2). 하루 턴 수 한도에 세지 않고 금액 한도와 agent 몫(70%)에는 넣는다.
 KIND_AGENT_REVIEW = "agent_review"
+# CS Agent 전용 모델·단가를 쓰는 kind(MEG-282). E09(explain)·퀴즈·후속 질문은 늘 기본 모델·단가다.
+AGENT_KINDS = frozenset({KIND_AGENT, KIND_AGENT_REVIEW})
+
+
+def model_id_for(settings: BedrockSettings, kind: str) -> str:
+    """이 kind의 호출에 쓸 모델 ID. CS Agent kind는 BEDROCK_AGENT_MODEL_ID가 있으면 그 값, 아니면 기본 모델이다."""
+    if kind in AGENT_KINDS and settings.agent_model_id:
+        return settings.agent_model_id
+    return settings.model_id
 
 
 @dataclass(frozen=True)
@@ -92,6 +101,11 @@ BUDGET_ENV = {
     "input_usd_per_mtok": "AI_INPUT_USD_PER_MTOK",
     "output_usd_per_mtok": "AI_OUTPUT_USD_PER_MTOK",
 }
+# CS Agent(E29 1차·2차) 전용 모델의 단가(MEG-282). 둘 다 비어 있으면 위 단가를 쓴다(지금 동작). 하나만 있으면 설정 오류다.
+AGENT_PRICE_ENV = {
+    "agent_input_usd_per_mtok": "AI_AGENT_INPUT_USD_PER_MTOK",
+    "agent_output_usd_per_mtok": "AI_AGENT_OUTPUT_USD_PER_MTOK",
+}
 
 
 class AiLimitReached(Exception):
@@ -137,6 +151,9 @@ class AiBudget:
     monthly_usd: Decimal
     input_usd_per_mtok: Decimal
     output_usd_per_mtok: Decimal
+    # CS Agent 전용 모델의 단가(MEG-282). None이면 위 단가를 쓴다.
+    agent_input_usd_per_mtok: Decimal | None = None
+    agent_output_usd_per_mtok: Decimal | None = None
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "AiBudget":
@@ -152,7 +169,32 @@ class AiBudget:
             if not value.is_finite() or value <= 0:
                 raise AiConfigError(f"{name}가 필요하다(양의 숫자)")
             values[field] = value
-        return cls(**values)
+        agent = {}
+        for field, name in AGENT_PRICE_ENV.items():
+            raw = (env.get(name) or "").strip()
+            if not raw:
+                continue
+            try:
+                value = Decimal(raw)
+            except InvalidOperation:
+                raise AiConfigError(f"{name}는 양의 숫자여야 한다") from None
+            if not value.is_finite() or value <= 0:
+                raise AiConfigError(f"{name}는 양의 숫자여야 한다")
+            agent[field] = value
+        if len(agent) == 1:
+            # 한쪽만 바꾸면 입력·출력 단가가 서로 다른 모델 기준이 된다.
+            raise AiConfigError(f"{' · '.join(AGENT_PRICE_ENV.values())}는 함께 설정해야 한다")
+        return cls(**values, **agent)
+
+    def for_kind(self, kind: str) -> "AiBudget":
+        """이 kind의 호출에 쓸 예산(단가). CS Agent kind에 전용 단가가 있으면 그 단가, 아니면 그대로다(MEG-282).
+
+        하루·월 예산은 모든 kind가 함께 쓴다. 바뀌는 것은 토큰 단가뿐이다.
+        """
+        if kind in AGENT_KINDS and self.agent_input_usd_per_mtok is not None:
+            return replace(self, input_usd_per_mtok=self.agent_input_usd_per_mtok,
+                           output_usd_per_mtok=self.agent_output_usd_per_mtok)
+        return self
 
     def cost(self, input_tokens: int, output_tokens: int, cache_write_tokens: int = 0) -> Decimal:
         """input_tokens는 캐시 읽기·쓰기를 포함한 전체 입력이다. 그 가운데 cache_write_tokens에는 웃돈을 붙인다.
@@ -430,6 +472,9 @@ def run_ai_call(
     예약한 뒤에 낸 예외에는 마지막 예약의 원장 id를 붙인다(ledger_id_of로 읽는다).
     """
     spec = CALL_SPECS[kind]
+    # CS Agent kind는 전용 모델·단가를 쓸 수 있다(MEG-282). 그 밖의 kind는 그대로다.
+    budget = budget.for_kind(kind)
+    model_id = model_id_for(settings, kind)
     try:
         ensure_ready(settings, oidc_token)
     except (AiConfigError, AiCallError) as error:
@@ -457,6 +502,7 @@ def run_ai_call(
             sleep=sleep,
             spent=spent,
             max_attempts=max_attempts,
+            model_id=model_id,
         )
     except Exception as error:
         if spent:
@@ -480,6 +526,7 @@ def _call_attempts(
     sleep: Callable[[float], None],
     spent: list[int],
     max_attempts: int = MAX_ATTEMPTS,
+    model_id: str | None = None,
 ) -> AiOutcome:
     """run_ai_call의 예약 → 호출 → 정산 반복. 예약할 때마다 원장 id를 spent에 더한다."""
     reserved_usd = budget.reserve_amount(prompt, spec.max_tokens)
@@ -517,7 +564,9 @@ def _call_attempts(
             if client is None:
                 client = client_factory(settings, oidc_token)
             calling = True
-            result = converse_text(client, settings, prompt, max_tokens=spec.max_tokens, effort=spec.effort)
+            result = converse_text(
+                client, settings, prompt, max_tokens=spec.max_tokens, effort=spec.effort, model_id=model_id
+            )
         except AiConfigError:
             # 예약 전 검사를 지나 호출 직전에 드러난 설정 오류. Bedrock에 닿지 않았다.
             _settle(store, reservation, SETTLE_RELEASED)
