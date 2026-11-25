@@ -1,24 +1,25 @@
 // 단계별 지도 가이드 한 편을 보여 주는 화면 본문 (MEG-287, PRD v0.5 AC-1~AC-6).
 // 경로 등록·닫기·노트 연결·플래그는 MEG-288에서 붙인다. 이 컴포넌트는 가이드 파일 하나를 받아 그린다.
-import { Component, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+// 다른 가이드로 바꿀 때는 key={slug}로 새로 그린다(단계 위치가 이어지지 않게).
+import { Component, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useWideLayout } from '../components/useWideLayout.ts'
-import { useReducedMotion } from './useReducedMotion.ts'
 import { cx } from '../components/cx.ts'
 import { CompareFigure } from './CompareFigure.tsx'
 import { SequenceDiagram } from './SequenceDiagram.tsx'
 import { StepMap } from './StepMap.tsx'
-import { followCallout, guideViews, sequenceLines, showsSequence, type GuideView } from './model.ts'
+import { useReducedMotion } from './useReducedMotion.ts'
+import { followCallout, guideViews, orderNote, sequenceLines, showsSequence, type GuideView } from './model.ts'
 import type { GuideFile } from './types.ts'
 import styles from './Guide.module.css'
 
-// 지도·그림을 그리다 실패하면 그 자리를 비우지 않고 통째로 숨긴다(PRD AC-5). 글은 그대로 남는다.
-class DrawingBoundary extends Component<{ onFail: () => void; children: ReactNode }, { failed: boolean }> {
+// 그림을 그리다 실패하면 그 자리를 비우지 않고 숨긴다(PRD AC-5). 글은 그대로 남는다.
+class DrawingBoundary extends Component<{ onFail?: () => void; children: ReactNode }, { failed: boolean }> {
   state = { failed: false }
   static getDerivedStateFromError() {
     return { failed: true }
   }
   componentDidCatch() {
-    this.props.onFail()
+    this.props.onFail?.()
   }
   render() {
     return this.state.failed ? null : this.props.children
@@ -30,8 +31,9 @@ function FailingDrawing(): ReactNode {
   throw new Error('지도 그리기 실패(시험용)')
 }
 
-const MAP_NOTE = '아이콘의 자리는 모든 단계에서 그대로예요. 진한 실선과 번호 상자는 지금 단계, 회색 얇은 실선과 번호는 전체 경로예요. 무엇이 오가는지는 아래 상자에 적었어요.'
-const SEQ_NOTE = '위에서 아래로 시간 순서예요. 선 모양은 오가는 것의 종류이고, 왼쪽 번호는 그 내용을 설명한 단계예요.'
+const MAP_NOTE = '아이콘의 자리는 모든 단계에서 그대로예요. 진한 실선과 번호 상자는 지금 단계, 회색 얇은 실선과 번호는 다른 단계의 경로예요. 무엇이 오가는지는 상자에 적었어요.'
+const MAP_NOTE_IDLE = '아이콘의 자리는 모든 단계에서 그대로예요. 회색 얇은 실선과 번호는 각 단계의 경로예요. 다음 단계부터 지금 단계를 진한 실선과 번호 상자로 표시해요.'
+const SEQ_NOTE = '위에서 아래로 시간 순서예요. 선 굵기가 뜻하는 것은 그림 아래에 적었고, 왼쪽 번호는 그 내용을 설명한 단계예요.'
 
 export type GuidePageProps = {
   guide: GuideFile
@@ -43,17 +45,21 @@ export type GuidePageProps = {
 
 export function GuidePage({ guide, header, forceMapFailure = false }: GuidePageProps) {
   const views = guideViews(guide)
-  const [index, setIndex] = useState(0)
+  const [rawIndex, setIndex] = useState(0)
   const [replay, setReplay] = useState(0)
-  const [mapFailed, setMapFailed] = useState(false)
+  // 지도 그리기에 실패한 칸(단계·배치별). 한 칸이 실패해도 다른 칸의 지도는 그린다.
+  const [failed, setFailed] = useState<ReadonlySet<string>>(new Set())
   const wide = useWideLayout()
   const reducedMotion = useReducedMotion()
   const titleRef = useRef<HTMLHeadingElement>(null)
-  const moved = useRef(false)
   const prevRef = useRef<HTMLButtonElement>(null)
   const nextRef = useRef<HTMLButtonElement>(null)
+  const moved = useRef(false)
+  const focusAfterMove = useRef<'prev' | 'next' | null>(null)
+  const titleId = useId()
 
-  const view: GuideView = views[Math.min(index, views.length - 1)]
+  const index = Math.min(rawIndex, views.length - 1)
+  const view: GuideView = views[index]
   const stepCount = guide.steps.length
   const last = index === views.length - 1
   const sequenceHere = showsSequence(guide, view)
@@ -61,11 +67,25 @@ export function GuidePage({ guide, header, forceMapFailure = false }: GuidePageP
   const step = view.kind === 'step' ? view.step : null
   const appendix = view.kind === 'appendix' ? seq?.appendix : undefined
   const callout = step ? followCallout(guide, step) : { route: appendix?.callout.route ?? '', message: appendix?.callout.msg ?? '', ordered: false }
+  const order = step ? orderNote(step) : null
   const nextIsAppendix = views[index + 1]?.kind === 'appendix'
   const figure = step?.figure ? guide.figures[step.figure] : undefined
+  const failKey = `${index}-${wide ? 'wide' : 'narrow'}`
+  const showMap = !failed.has(failKey)
+  const noMobileLayout = !guide.map.nodes_mobile
+  const stageScrolls = !wide && (sequenceHere || noMobileLayout)
+  const idle = step !== null && step.arrows.every((a) => a.local || a.from === a.to)
+  const position = step ? `${step.kind} · ${view.index + 1} / ${stepCount}단계` : '부록'
+  const heading = step ? step.title : (appendix?.title ?? '')
 
-  // 단계를 넘겼을 때 새 단계 제목이 화면 밖이면 제목으로 올린다(본문이 한 화면보다 길 수 있어서).
+  // 단계를 넘긴 뒤: 막힌 버튼에 있던 포커스를 반대쪽 버튼으로 옮기고(PRD AC-4),
+  // 새 단계 제목이 화면 밖이면 제목으로 올린다(본문이 한 화면보다 길 수 있어서).
   useLayoutEffect(() => {
+    if (focusAfterMove.current) {
+      const target = focusAfterMove.current === 'prev' ? prevRef.current : nextRef.current
+      focusAfterMove.current = null
+      target?.focus({ preventScroll: true })
+    }
     if (!moved.current) return
     moved.current = false
     const t = titleRef.current
@@ -77,35 +97,49 @@ export function GuidePage({ guide, header, forceMapFailure = false }: GuidePageP
   const go = (n: number) => {
     if (n < 0 || n >= views.length || n === index) return
     moved.current = true
-    // 누른 버튼이 막히게 되면(첫·마지막 칸) 포커스를 반대쪽 버튼으로 옮겨 키보드 사용자가 길을 잃지 않게 한다(PRD AC-4).
     const active = document.activeElement
-    if (n === views.length - 1 && active === nextRef.current) prevRef.current?.focus({ preventScroll: true })
-    if (n === 0 && active === prevRef.current) nextRef.current?.focus({ preventScroll: true })
+    if (n === views.length - 1 && active === nextRef.current) focusAfterMove.current = 'prev'
+    if (n === 0 && active === prevRef.current) focusAfterMove.current = 'next'
     setIndex(n)
     setReplay(0)
   }
 
   const chipLabel = (v: GuideView) => (v.kind === 'appendix' ? `부록 ${seq?.appendix?.short ?? ''}` : `${v.index + 1} ${v.step.short}`)
-  const showMap = !mapFailed
+  const mapLabel = step ? `${view.index + 1}단계 지도: ${callout.route}. ${callout.message}` : `${guide.title} 전체 흐름`
 
   const mapColumn = showMap && (
-    <div className={styles.mapColumn}>
-      <DrawingBoundary key={`${index}-${replay}`} onFail={() => setMapFailed(true)}>
+    <div
+      className={styles.mapColumn}
+      {...(wide ? { tabIndex: 0, role: 'region', 'aria-label': '지도 칸' } : {})}
+    >
+      <DrawingBoundary key={failKey} onFail={() => setFailed((s) => new Set(s).add(failKey))}>
         {forceMapFailure && <FailingDrawing />}
-        <div className={cx(styles.stage, !wide && (sequenceHere || !guide.map.nodes_mobile) && styles.stageScroll)}>
+        <div
+          className={cx(styles.stage, stageScrolls && styles.stageScroll)}
+          {...(stageScrolls ? { tabIndex: 0, role: 'region', 'aria-label': '지도(가로로 밀어 볼 수 있어요)' } : {})}
+        >
           {sequenceHere && seq ? (
             <SequenceDiagram sequence={seq} title={guide.title} />
           ) : step ? (
-            <StepMap guide={guide} step={step} stepNumber={view.index + 1} narrow={!wide} reducedMotion={reducedMotion} />
+            <StepMap
+              key={replay}
+              guide={guide}
+              step={step}
+              stepIndex={view.index}
+              narrow={!wide}
+              reducedMotion={reducedMotion}
+              label={mapLabel}
+            />
           ) : null}
         </div>
-        <p className={styles.stageNote}>{sequenceHere ? (seq?.note ?? SEQ_NOTE) : MAP_NOTE}</p>
-        {!sequenceHere && !reducedMotion && step && step.arrows.some((a) => !a.local) && (
-          <button type="button" className={styles.replay} onClick={() => setReplay((r) => r + 1)}>
-            움직임 다시 보기
-          </button>
-        )}
+        <p className={styles.stageNote}>{sequenceHere ? (seq?.note ?? SEQ_NOTE) : idle ? MAP_NOTE_IDLE : MAP_NOTE}</p>
       </DrawingBoundary>
+      {/* 다시 보기 버튼은 그림과 따로 둔다. 그림을 새로 그려도 버튼의 포커스가 남는다. */}
+      {!sequenceHere && !reducedMotion && !idle && (
+        <button type="button" className={styles.replay} onClick={() => setReplay((r) => r + 1)}>
+          움직임 다시 보기
+        </button>
+      )}
     </div>
   )
 
@@ -126,35 +160,31 @@ export function GuidePage({ guide, header, forceMapFailure = false }: GuidePageP
               </span>
               <strong className={styles.calloutRoute}>{callout.route}</strong>
               <span className={styles.calloutMessage}>{callout.message}</span>
+              {order && <span className={styles.calloutOrder}>{order}</span>}
             </div>
-            {callout.ordered && <p className={styles.orderNote}>①②③은 이 단계 안에서 일어나는 순서예요.</p>}
             <div className={styles.chips} role="group" aria-label="단계 고르기">
               {views.map((v, n) => (
-                <button
-                  key={n}
-                  type="button"
-                  className={styles.chip}
-                  aria-current={n === index ? 'step' : undefined}
-                  onClick={() => go(n)}
-                >
+                <button key={n} type="button" className={styles.chip} aria-current={n === index ? 'step' : undefined} onClick={() => go(n)}>
                   {chipLabel(v)}
                 </button>
               ))}
             </div>
-            <section className={styles.step} aria-labelledby="guide-step-title" aria-live="polite">
-              <div className={styles.meta}>
-                {step ? `${step.kind} · ${view.index + 1} / ${stepCount}단계` : '부록'}
-              </div>
-              <h2 id="guide-step-title" ref={titleRef} className={styles.stepTitle}>
-                {step ? step.title : appendix?.title}
+            {/* 단계를 넘길 때 위치와 제목만 알린다. 본문 전체를 다시 읽지 않게 한다. */}
+            <p className={styles.visuallyHidden} aria-live="polite">
+              {`${position}: ${heading}`}
+            </p>
+            <section className={styles.step} aria-labelledby={titleId}>
+              <div className={styles.meta}>{position}</div>
+              <h2 id={titleId} ref={titleRef} className={styles.stepTitle}>
+                {heading}
               </h2>
               {(step ? step.body : (appendix?.body ?? [])).map((t, i) => (
                 <p key={i} className={styles.body}>
                   {t}
                 </p>
               ))}
-              {figure && showMap && (
-                <DrawingBoundary key={`fig-${index}`} onFail={() => undefined}>
+              {figure && (
+                <DrawingBoundary key={`fig-${index}`}>
                   <CompareFigure panels={figure} />
                 </DrawingBoundary>
               )}
@@ -166,9 +196,10 @@ export function GuidePage({ guide, header, forceMapFailure = false }: GuidePageP
                 </aside>
               )}
               {sequenceHere && (
-                <div className={cx(styles.flow, view.kind === 'appendix' && styles.flowPlain)}>
+                <div className={styles.flow}>
                   <h3 className={styles.subheading}>전체 흐름 한눈에 보기</h3>
-                  <ol>
+                  {/* 줄마다 「n단계」가 붙어 있어 목록 번호를 겹쳐 달지 않는다. */}
+                  <ol className={styles.flowList}>
                     {sequenceLines(guide).map((line, i) => (
                       <li key={i}>{line}</li>
                     ))}

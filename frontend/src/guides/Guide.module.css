@@ -40,8 +40,9 @@
   min-width: 0;
 }
 
-/* 넓은 화면(1024px 이상)에서는 지도 7 : 글 5로 나란히 둔다. 지도 칸은 최소 600px이고(MEG-270 결정 7),
-   600 + 344 + 칸 사이 32 + 좌우 여백 48 = 1024px이라 경계에서도 최소 폭을 지킨다. */
+/* 넓은 화면(1024px 이상)에서는 지도 7 : 글 5로 나란히 둔다. 지도 칸은 최소 600px이다(MEG-270 결정 7).
+   600 + 320 + 칸 사이 32 + 좌우 여백 48 = 1000px. 미디어 쿼리는 스크롤 막대를 포함한 폭으로 재므로
+   Windows의 스크롤 막대(약 17px)가 있어도 1024px에서 넘치지 않게 24px 여유를 둔다. */
 @media (min-width: 1024px) {
   .wrapWide {
     max-width: 1320px;
@@ -49,7 +50,7 @@
   }
   .splitWithMap {
     display: grid;
-    grid-template-columns: minmax(600px, 7fr) minmax(344px, 5fr);
+    grid-template-columns: minmax(600px, 7fr) minmax(320px, 5fr);
     gap: var(--space-8);
     align-items: start;
   }
@@ -142,11 +143,23 @@
   color: var(--ink-muted);
 }
 
-.orderNote {
-  margin: calc(-1 * var(--space-2)) var(--space-1) 0 19px;
+.calloutOrder {
+  margin-top: var(--space-1);
   font-size: 13px;
   line-height: 18px;
   color: var(--ink-muted);
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* 단계 칩. 지금 단계는 먹색 채움과 aria-current로 함께 알린다. */
@@ -228,8 +241,8 @@
   margin-bottom: var(--space-1);
 }
 
-/* 부록 목록은 줄마다 'n단계'가 붙어 있어 목록 번호를 겹쳐 달지 않는다. */
-.flowPlain ol {
+/* 전체 흐름 목록은 줄마다 'n단계'가 붙어 있어 목록 번호를 겹쳐 달지 않는다. */
+.flow .flowList {
   list-style: none;
   padding-left: 0;
 }
@@ -337,6 +350,8 @@
 
 .platform {
   fill: var(--diff-low);
+  stroke: var(--surface-300);
+  stroke-width: 1;
 }
 
 .icon {
@@ -353,18 +368,18 @@
 
 .nodeLabel {
   fill: var(--ink);
-  font-size: 14px;
+  font-size: calc(15px * var(--k, 1));
   font-weight: 700;
 }
 
 .nodeSub {
   fill: var(--ink-muted);
-  font-size: 12px;
+  font-size: calc(13px * var(--k, 1));
 }
 
 .nodeNote {
   fill: var(--ink);
-  font-size: 12px;
+  font-size: calc(13px * var(--k, 1));
   font-weight: 700;
 }
 
@@ -374,7 +389,7 @@
 
 .roleText {
   fill: var(--surface-100);
-  font-size: 12px;
+  font-size: calc(13px * var(--k, 1));
   font-weight: 700;
 }
 
@@ -392,7 +407,7 @@
 
 .routeTag {
   fill: var(--ink-muted);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -403,9 +418,21 @@
   stroke-linecap: round;
 }
 
-.currentHead,
+.currentHead {
+  fill: var(--ink);
+}
+
 .currentBadge {
   fill: var(--ink);
+  stroke: var(--surface-200);
+  stroke-width: 2;
+}
+
+/* 네트워크를 건너지 않는 확인(local). 공을 움직이지 않는다. */
+.localLine {
+  stroke: var(--ink);
+  stroke-width: 2;
+  fill: none;
 }
 
 .currentNum {
@@ -545,6 +572,6 @@
 
 .seqStepText {
   fill: var(--surface-100);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
 }

@@ -59,7 +59,7 @@ export default function GuidePreviewPage() {
           ))}
         </ul>
       )}
-      {loaded.state === 'ok' && <GuidePage key={slug} guide={loaded.guide} forceMapFailure={query.get('failMap') === '1'} />}
+      {loaded.state === 'ok' && <GuidePage key={`${slug}-${query.get('failMap')}`} guide={loaded.guide} forceMapFailure={query.get('failMap') === '1'} />}
     </div>
   )
 }

@@ -20,14 +20,16 @@ export function SequenceDiagram({ sequence, title }: { sequence: GuideSequence; 
   const boxW = actors.length === 2 ? 140 : Math.min(140, (W - 190) / (actors.length - 1) - 16)
   const XL = X[actors[0].id]
   const XR = X[actors[actors.length - 1].id]
-  const H = TOP + rows.length * GAP + 64
-  const ly = H - 26
+  // 범례는 한 줄에 셋까지 두고 넘치면 다음 줄로 내린다.
+  const legendRows = Math.ceil(sequence.legend.length / 3)
+  const H = TOP + rows.length * GAP + 40 + legendRows * 24
+  const ly0 = H - 26 - (legendRows - 1) * 24
 
   return (
     <svg className={styles.seqSvg} viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${title} 전체 흐름 시퀀스 다이어그램. 같은 내용을 아래 글 목록으로도 읽을 수 있어요.`}>
       {actors.map((a) => (
         <g key={a.id} aria-hidden="true">
-          <line className={styles.seqLife} x1={X[a.id]} y1={54} x2={X[a.id]} y2={H - 54} />
+          <line className={styles.seqLife} x1={X[a.id]} y1={54} x2={X[a.id]} y2={ly0 - 24} />
           <rect className={styles.seqActor} x={X[a.id] - boxW / 2} y={16} width={boxW} height={38} rx={6} />
           <text className={styles.seqActorText} x={X[a.id]} y={40} textAnchor="middle">
             {a.name}
@@ -38,8 +40,8 @@ export function SequenceDiagram({ sequence, title }: { sequence: GuideSequence; 
         const y = TOP + n * GAP
         const stepBox = (
           <>
-            <rect className={styles.seqStep} x={14} y={y - 11} width={22} height={22} rx={4} />
-            <text className={styles.seqStepText} x={25} y={y + 4.5} textAnchor="middle">
+            <rect className={styles.seqStep} x={12} y={y - 12} width={24} height={24} rx={4} />
+            <text className={styles.seqStepText} x={24} y={y + 4.5} textAnchor="middle">
               {r.step}
             </text>
           </>
@@ -80,7 +82,8 @@ export function SequenceDiagram({ sequence, title }: { sequence: GuideSequence; 
         )
       })}
       {sequence.legend.map(([p, txt], n) => {
-        const x = 60 + n * (sequence.legend.length === 2 ? 345 : 230)
+        const x = 60 + (n % 3) * (sequence.legend.length === 2 ? 345 : 230)
+        const ly = ly0 + Math.floor(n / 3) * 24
         return (
           <g key={p} aria-hidden="true">
             <line className={LINE_CLASS[p] ?? styles.seqPlain} x1={x} y1={ly} x2={x + 46} y2={ly} />
