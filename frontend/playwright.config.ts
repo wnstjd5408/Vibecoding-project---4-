@@ -5,7 +5,7 @@ import { defineConfig } from '@playwright/test'
 //  - agent-enabled(4185): 플래그를 끈 빌드(운영 기본값과 같다). 노트 선택 버튼이 'AI에게 질문'이다. 위키 플래그는 꺼져 있다.
 //  - agent-wiki(4187): agent-enabled에 위키 플래그(VITE_CS_AGENT_WIKI_ENABLED, MEG-254)를 켠 빌드. 위키 시험(WIKI_SPECS)만 돈다.
 //    agentWiki.spec.ts는 agent-enabled에서도 돌아 플래그를 끈 동작을 함께 본다.
-const AGENT_ENABLED_SPECS = ['agentPanel.spec.ts', 'agentEntry.spec.ts', 'agentViewModes.spec.ts', 'agentExceptions.spec.ts', 'agentMobileBoards.spec.ts', 'agentWiki.spec.ts']
+const AGENT_ENABLED_SPECS = ['agentPanel.spec.ts', 'agentEntry.spec.ts', 'agentViewModes.spec.ts', 'agentExceptions.spec.ts', 'agentMobileBoards.spec.ts', 'agentWiki.spec.ts', 'agentPanelResize.spec.ts']
 // agentWikiFlagOn.spec.ts는 플래그를 켠 빌드에서만 뜻이 있어 agent-wiki에서만 돈다(CI는 건너뛴 시험을 실패로 본다).
 const WIKI_SPECS = ['agentWiki.spec.ts', 'agentWikiFlagOn.spec.ts']
 const SHARED = { browserName: 'chromium', viewport: { width: 390, height: 844 }, trace: 'retain-on-failure', screenshot: 'only-on-failure' } as const
