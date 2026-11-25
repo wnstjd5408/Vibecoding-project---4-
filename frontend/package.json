@@ -3,9 +3,13 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "check:guides": "node scripts/check-guides.ts && node scripts/check-guides.ts --self-test",
+    "build": "npm run check:guides && tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
     "test:e2e": "playwright test",
