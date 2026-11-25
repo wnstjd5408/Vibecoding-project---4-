@@ -13,7 +13,7 @@
   .main { padding: var(--space-6) var(--gutter) var(--space-8); }
   .article { max-width: 720px; margin-inline: auto; }
   /* 패널이 열려 있으면 오른쪽 480px를 비운다. 본문 열은 남은 영역의 가운데에 놓이고, 공간이 모자라면 줄어든다 */
-  .panelOpen .main { margin-right: 480px; }
+  .panelOpen .main { margin-right: var(--agent-panel-width, 480px); }
   /* 떠 있는 창(F6-3f, 폭 420px + 오른쪽 24px)이 열려 있으면 그만큼 비워 본문이 창에 가리지 않게 한다 */
   .floatingOpen .main { margin-right: calc(420px + var(--space-6)); }
 }
