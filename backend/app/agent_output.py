@@ -32,7 +32,9 @@ from app.ai_ledger import PROMPT_OVERHEAD_TOKENS
 # agent-v5(MEG-275 5-B): v4에서 부작용을 낸 두 규칙을 빼고 나머지만 남겼다. 근거에 있는 핵심 문장을 빠뜨리지 않기,
 # "왜" 질문에서 근거의 변경·특징 전하기(인과 단정 금지), 근거에 있는 것을 "근거에 없다"고 하지 않기, 충분히 답하면
 # answered로 두기, 노트 문장 확인 질문에서 근거가 어떻게 설명하는지 쓰기.
-PROMPT_VERSION = "agent-v5"
+# agent-v5-low3k(MEG-282, 2026-11-25): 프롬프트 문구는 agent-v5와 바이트까지 같다. 호출 설정만 추론 low·출력 상한 3,000으로
+# 바꿨다(ai_ledger.CALL_SPECS). ai_turns에는 추론 강도·출력 상한 열이 없어 기록 값으로 설정을 가른다(거버넌스 6.2, 10.3).
+PROMPT_VERSION = "agent-v5-low3k"
 
 # Q4 임시 상한(코드포인트)
 MAX_QUESTION_CHARS = 1000
@@ -49,7 +51,7 @@ MAX_SOURCE_SECTION_CHARS = 200
 # 출처 발췌(excerpt) 길이. 문단 앞부분을 쓴다.
 EXCERPT_CHARS = 200
 
-# 출력 상한. 본문 출력 1,500토큰 안에서 넉넉히 잡았다(maxTokens는 추론 토큰을 더해 3,000, ai_ledger.CALL_SPECS). 넘으면 형식 실패다.
+# 본문 필드 상한. 넘으면 형식 실패다. 토큰 상한은 따로 강제하지 않는다(maxTokens 3,000은 추론 토큰을 포함, ai_ledger.CALL_SPECS).
 MAX_SECTIONS = 8
 MAX_HEADING_CHARS = 100
 MAX_BODY_CHARS = 4000

@@ -450,7 +450,8 @@ def test_agent_v5_rules_cover_the_remaining_l1_failure_modes():
     base = _worst_case_input("가")
     prompt = build_prompt(base)
     note_only = build_prompt(PromptInput(**{**base.__dict__, "allow_correction": False}))
-    assert PROMPT_VERSION == "agent-v5"
+    # MEG-282: 프롬프트 문구는 v5와 같고 호출 설정(추론 low·출력 상한 3,000)만 달라 기록 값으로 가른다.
+    assert PROMPT_VERSION == "agent-v5-low3k"
     assert "그 내용을 빠뜨리지 말고 답의 중심으로 씁니다" in prompt
     assert "근거 문단에 나온 변경과 특징 가운데 질문과 관계있는 것을 사실대로 전합니다" in prompt
     assert "다른 대상을 다룬 문단의 내용은 답으로 쓰지 않습니다" in prompt

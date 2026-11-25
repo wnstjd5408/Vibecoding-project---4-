@@ -371,7 +371,7 @@ def test_the_stream_sends_steps_in_order_and_saves_the_result_with_agent_finish_
          "excerpt": PARAGRAPHS[0].text, "paragraph_snapshot": PARAGRAPHS[0].text, "section": "정의"}
     ]
     assert (finish["p_model_id"], finish["p_prompt_version"], finish["p_retrieval_version"]) == (
-        SETTINGS.model_id, "agent-v5", "fixed-test")
+        SETTINGS.model_id, "agent-v5-low3k", "fixed-test")
     assert row["status"] == "completed" and row["paragraph_count"] == 2
     # 원장: 사전 확인 1회, 예약 1회(agent 키 형식), 정산 1회. 모델 호출 1회.
     assert store.reserves == [{"kind": "agent", "key": f"{A}:agent:{key}:1", "daily_count_limit": 20}]
@@ -928,7 +928,7 @@ def test_an_answer_without_citations_ends_as_no_evidence_instead_of_failing(clie
     # 호출은 정산됐고 원장·실행 기록은 남는다. 출처는 저장하지 않는다.
     assert finish["p_ledger_id"] == 101 and finish["p_sources"] is None
     assert (finish["p_model_id"], finish["p_prompt_version"], finish["p_retrieval_version"]) == (
-        SETTINGS.model_id, "agent-v5", "fixed-test")
+        SETTINGS.model_id, "agent-v5-low3k", "fixed-test")
     # 검색한 문단 수는 그대로 남긴다(모델에 문단을 보냈다). 저장한 뒤에만 compose 완료를 알린다(spec E29 10단계).
     assert finish["p_paragraph_count"] == 2
     steps = [data for name, data in parsed if name == "step"]
@@ -1472,3 +1472,18 @@ def test_a_hidden_suggested_turn_whose_source_turn_is_hidden_cannot_be_retried(c
     assert turns[2]["hidden"] == {"reason": "source_revoked", "retry_allowed": False}
     assert_error(ask(client, cid, body={"retry_of_turn_id": hidden}), 409, "conflict", "turn_not_retryable")
     assert "claim_agent_turn" not in fake.calls and bedrock.calls == 0
+
+
+# --- MEG-282: 추론 low, 출력 상한 3,000 ---
+
+
+def test_the_pre_check_reserves_the_worst_prompt_plus_the_3000_token_output_cap(client, fake, store, bedrock):
+    # 사전 확인액 = (Q4 최대 입력 토큰 + 출력 상한 3,000) × 단가. 추론 토큰도 출력 상한 안에서 센다.
+    from app.agent_output import max_prompt_tokens
+
+    events(ask(client, fake.conversation(A)))
+    [check] = store.checks
+    expected = (Decimal(max_prompt_tokens()) * 2 + Decimal(3000) * 8) / Decimal(10**6)
+    assert check["reserved_usd"] == expected.quantize(check["reserved_usd"])
+    # 출력 상한 1,500일 때보다 출력 1,500토큰 몫만 늘었다(예약 상한은 그대로 위쪽 경계다).
+    assert check["reserved_usd"] - BUDGET.cost(max_prompt_tokens(), 1500) == BUDGET.cost(0, 1500)

@@ -120,7 +120,7 @@ class QuizFake(TurnFake):
 
 
 class MixedBedrock:
-    """agent 호출(출력 1,500토큰)과 explain 호출(600토큰)을 구분해 기록하고 각각 정해 둔 답을 준다."""
+    """agent 호출과 explain 호출을 출력 상한(CALL_SPECS)으로 구분해 기록하고 각각 정해 둔 답을 준다."""
 
     def __init__(self):
         self.log: list[tuple[str, str]] = []
