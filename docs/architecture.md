@@ -225,7 +225,7 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 | 의존성 | 용도 | 연결 방식 | 환경변수 |
 |---|---|---|---|
 | Supabase | DB(Postgres)와 이미지 버킷 | FastAPI가 secret key로 REST와 SQL 함수를 부른다(2절 2번) | `SUPABASE_URL`, `SUPABASE_SECRET_KEY` |
-| Amazon Bedrock | AI 설명·퀴즈·꼬리 질문(Converse API) | `oidc`(기본)는 요청의 Vercel OIDC 토큰을 STS 임시 자격증명으로 바꿔 서명한다. `api_key`(대체)는 장기 API 키를 Bearer로 보낸다. 절차는 [ai-credentials.md](ai-credentials.md) | `AI_AUTH_MODE`, `AWS_ROLE_ARN`, `AWS_BEARER_TOKEN_BEDROCK`, `BEDROCK_REGION`, `BEDROCK_MODEL_ID` |
+| Amazon Bedrock | AI 설명·퀴즈·꼬리 질문(Converse API) | `oidc`(기본)는 요청의 Vercel OIDC 토큰을 STS 임시 자격증명으로 바꿔 서명한다. `api_key`(대체)는 장기 API 키를 Bearer로 보낸다. 절차는 [ai-credentials.md](ai-credentials.md) | `AI_AUTH_MODE`, `AWS_ROLE_ARN`, `AWS_BEARER_TOKEN_BEDROCK`, `BEDROCK_REGION`, `BEDROCK_MODEL_ID`, `BEDROCK_AGENT_MODEL_ID` |
 | Notion | 노트 처음 한 번 가져오기. 앱이 도는 동안은 부르지 않는다(2절 5번) | 운영자 로컬의 가져오기 스크립트가 읽기 전용 통합 토큰으로 허용한 데이터베이스만 읽는다. 스크립트는 아직 없다(MEG-85) | `NOTION_TOKEN`, `NOTION_DATABASE_ID` |
 | Vercel | React 화면과 FastAPI 함수 호스팅, OIDC 토큰 발급, 환경변수 보관 | 배포 대상(7절). OIDC 토큰은 요청에 실려 오며 환경변수가 아니다 | 없음 |
 
@@ -243,11 +243,11 @@ Vercel, the Vercel design, Next.js and related marks, designs and logos are trad
 | `AWS_ROLE_ARN` | `oidc` 모드가 맡을 IAM 역할 | `oidc`에서 필수 | 백엔드(Vercel) |
 | `AWS_BEARER_TOKEN_BEDROCK` | `api_key` 모드의 장기 API 키. 만료 30일 | `api_key`에서 필수. 평소에는 비워 둔다 | 백엔드(Vercel, 대체 경로를 쓰는 동안만) |
 | `BEDROCK_REGION` | Bedrock 호출 리전 | 비우면 `ap-northeast-1` | 백엔드(선택) |
-| `BEDROCK_MODEL_ID` | 호출할 모델 ID. 응답에 내보내지 않는다(5절) | 비우면 `global.openai.gpt-6-luna` | 백엔드(선택) |
-| `BEDROCK_AGENT_MODEL_ID` | CS Agent(E29 1차·2차, 원장 kind `agent`·`agent_review`)만 부를 모델 ID(MEG-282). E09 설명·퀴즈·꼬리 질문은 늘 `BEDROCK_MODEL_ID`다. OpenAI가 아닌 모델(예: Claude)에는 OpenAI 전용 추론 필드(`reasoning.effort`)를 보내지 않는다 | 비우면 `BEDROCK_MODEL_ID`(지금 동작). 운영에서 바꾸려면 Vercel OIDC 역할이 그 추론 프로필을 부를 수 있어야 한다(infra) | 백엔드(선택) |
+| `BEDROCK_MODEL_ID` | 호출할 모델 ID. 응답에 내보내지 않는다(5절). OpenAI 계열이 아니면 추론 필드를 보내지 않고, 추론 강도가 `none`이 아닌 호출(퀴즈 `low`)은 예약·선점 전에 설정 오류(500)다(MEG-282) | 비우면 `global.openai.gpt-6-luna` | 백엔드(선택) |
+| `BEDROCK_AGENT_MODEL_ID` | CS Agent(E29 1차·2차, 원장 kind `agent`·`agent_review`)만 부를 모델 ID(MEG-282). E09 설명·퀴즈·꼬리 질문은 늘 `BEDROCK_MODEL_ID`다. OpenAI가 아닌 모델(예: Claude)에는 OpenAI 전용 추론 필드(`reasoning.effort`)를 보내지 않는다 | 비우면 `BEDROCK_MODEL_ID`(지금 동작). 바꾸면 아래 CS Agent 단가 두 값도 함께 넣어야 한다. 하나만 바꾸면 CS Agent 요청만 선점 전에 설정 오류(500)다(비싼 모델이 기본 단가로 기록되는 일을 막는다). E29 안의 퀴즈 자료 설명(explain)은 기본 모델 그대로다. 운영에서 바꾸려면 Vercel OIDC 역할 정책(`infra/vercel-oidc`)에 그 추론 프로필·기반 모델 3문장을 더해야 한다 | 백엔드(선택) |
 | `AI_DAILY_BUDGET_USD`·`AI_MONTHLY_BUDGET_USD` | AI 하루 전체·월 예산(USD). 한 사용자의 하루 몫은 하루 예산의 50%다 | AI를 부르는 요청에서 필수. 양의 숫자가 아니면 예약 전에 500이고 AI를 부르지 않는다. 금액은 공개 저장소에 쓰지 않는다(2026-11-02 결정, MEG-86) | 백엔드(Vercel·AI를 시험하는 로컬) |
 | `AI_INPUT_USD_PER_MTOK`·`AI_OUTPUT_USD_PER_MTOK` | 모델의 입력·출력 100만 토큰당 단가(USD). 예약액과 정산액 계산에 쓴다. 정산할 때 프롬프트 캐시 토큰도 입력에 넣어 센다. 캐시 읽기는 입력 단가, 캐시 쓰기는 입력 단가의 1.25배다. 예약액은 그대로 입력 추정 × 입력 단가다(MEG-275 4-A) | 위와 같다. 모델을 바꾸면 같이 바꾼다 | 백엔드(Vercel·AI를 시험하는 로컬) |
-| `AI_AGENT_INPUT_USD_PER_MTOK`·`AI_AGENT_OUTPUT_USD_PER_MTOK` | `BEDROCK_AGENT_MODEL_ID` 모델의 입력·출력 100만 토큰당 단가(USD, MEG-282). CS Agent kind의 예약액·정산액·사전 확인액에 쓴다. 하루·월 예산과 agent 몫(70%)은 그대로 함께 쓴다 | 둘 다 비우면 위 단가(지금 동작). 하나만 넣거나 양의 숫자가 아니면 설정 오류(500)다. `BEDROCK_AGENT_MODEL_ID`를 바꾸면 같이 바꾼다 | 백엔드(선택) |
+| `AI_AGENT_INPUT_USD_PER_MTOK`·`AI_AGENT_OUTPUT_USD_PER_MTOK` | `BEDROCK_AGENT_MODEL_ID` 모델의 입력·출력 100만 토큰당 단가(USD, MEG-282). CS Agent kind의 예약액·정산액·사전 확인액에 쓴다. 하루·월 예산과 agent 몫(70%)은 그대로 함께 쓴다 | 둘 다 비우면 위 단가(지금 동작). 하나만 넣거나 양의 숫자가 아니면 CS Agent 요청만 설정 오류(500)이고, E09·퀴즈·꼬리 질문은 그대로 돈다. `BEDROCK_AGENT_MODEL_ID`와 함께 바꾼다 | 백엔드(선택) |
 | `ALLOWED_ORIGINS` | 상태를 바꾸는 요청(POST·PUT·PATCH·DELETE)의 `Origin`으로 받을 출처 목록(쉼표로 구분, `scheme://host[:port]`만). CORS 허용 출처도 같은 값이다 | 비우면 `http://localhost:5173`. `*`·경로가 든 값은 시작할 때 거부한다. 운영(`VERCEL_ENV=production`)에서 비우면 앱이 시작하지 않는다 | 백엔드(로컬·Vercel) |
 | `CS_AGENT_DISABLED` | CS Agent "AI에게 질문"의 노출 중단 플래그(spec Q11, MEG-236). 켜면 E27(새 대화)과 E29(질문)가 503 `service_unavailable`이다. E28·E30·E32 읽기와 E31 중단은 그대로 동작한다 | 비우거나 `0`·`false`·`no`·`off`(대소문자·앞뒤 공백 무시)면 꺼짐. 그 밖의 값은 모두 켜짐(잘못 쓴 값도 막는 쪽). 바꾼 뒤 새 배포가 필요하다. 절차는 [배포 가이드](deployment-guide.md#cs-agent-노출-중단-meg-236) | 백엔드(Vercel, 끌 때만) |
 | `CS_AGENT_WIKI_ENABLED` | CS Agent 위키 플래그(MEG-252). 켜면 E27 `origin: wiki`를 받고, 위키에서 연 대화를 열고, E29 근거 검색을 노트 임시 검색에서 위키(사전 항목) 검색으로 바꾼다. 꺼져 있으면 지금 동작(E27 `origin: wiki` 422, 노트 검색)이다. 켜는 것은 MEG-253에서 사람이 정한다 | `1`·`true`·`yes`·`on`(대소문자·앞뒤 공백 무시)일 때만 켜짐. 비우거나 그 밖의 값은 꺼짐(잘못 쓴 값이 위키 경로를 열지 않는 쪽). 켜기 전에 T4a 마이그레이션(MEG-249)이 그 환경 DB에 있어야 한다. 바꾼 뒤 새 배포가 필요하다. 절차는 [배포 가이드](deployment-guide.md#cs-agent-위키-플래그-meg-252) | 백엔드(Vercel, 켤 때만) |

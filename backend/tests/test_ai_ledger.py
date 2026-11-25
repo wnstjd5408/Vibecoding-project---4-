@@ -852,8 +852,56 @@ def test_agent_prices_are_optional_and_must_come_in_pairs():
     for bad in ({"AI_AGENT_INPUT_USD_PER_MTOK": "2"}, {"AI_AGENT_OUTPUT_USD_PER_MTOK": "10"},
                 {"AI_AGENT_INPUT_USD_PER_MTOK": "0", "AI_AGENT_OUTPUT_USD_PER_MTOK": "10"},
                 {"AI_AGENT_INPUT_USD_PER_MTOK": "x", "AI_AGENT_OUTPUT_USD_PER_MTOK": "10"}):
-        with pytest.raises(AiConfigError):
-            AiBudget.from_env({**base, **bad})
+        # 잘못된 CS Agent 단가는 CS Agent kind만 막는다. E09·퀴즈·꼬리 질문은 기본 단가로 그대로 돈다(리뷰 M1).
+        broken = AiBudget.from_env({**base, **bad})
+        for kind in ("agent", "agent_review"):
+            with pytest.raises(AiConfigError):
+                broken.for_kind(kind)
+        assert broken.for_kind("explain").input_usd_per_mtok == Decimal("0.1")
+    # 직접 만들 때도 단가 두 값은 함께다.
+    with pytest.raises(ValueError):
+        replace(BUDGET, agent_input_usd_per_mtok=Decimal("2"))
+
+
+def test_the_agent_model_and_prices_must_be_set_together():
+    from app.ai_ledger import validate_kind
+
+    priced = replace(BUDGET, agent_input_usd_per_mtok=Decimal("2"), agent_output_usd_per_mtok=Decimal("10"))
+    sonnet = replace(API_KEY, agent_model_id="global.anthropic.claude-sonnet-5")
+    # 모델만, 단가만 바꾸면 CS Agent kind는 설정 오류다(리뷰 H1). 다른 kind는 영향이 없다.
+    for settings, budget in ((sonnet, BUDGET), (API_KEY, priced)):
+        for kind in ("agent", "agent_review"):
+            with pytest.raises(AiConfigError):
+                validate_kind(settings, budget, kind)
+        for kind in ("explain", "quiz", "followup"):
+            validate_kind(settings, budget, kind)
+    # 둘 다 바꾸거나 둘 다 비우면 된다. 기본 모델과 같은 값을 넣으면 모델을 바꾼 것으로 보지 않는다.
+    validate_kind(sonnet, priced, "agent")
+    validate_kind(API_KEY, BUDGET, "agent")
+    validate_kind(replace(API_KEY, agent_model_id=API_KEY.model_id), BUDGET, "agent")
+
+
+def test_a_mismatched_agent_config_fails_before_any_reservation():
+    store = FakeStore()
+    sonnet = replace(API_KEY, agent_model_id="global.anthropic.claude-sonnet-5")
+    with pytest.raises(AiConfigError):
+        run_ai_call(store, sonnet, BUDGET, user_id=USER, kind="agent", request_key=f"{USER}:k", prompt="p",
+                    client_factory=lambda s, t: FakeBedrock(OK))
+    assert store.reserved == [] and store.settled == []
+
+
+def test_a_non_openai_default_model_with_an_effort_fails_before_the_quiz_claim_or_reservation():
+    from app.ai_ledger import validate_kind
+
+    claude = replace(API_KEY, model_id="global.anthropic.claude-sonnet-5")
+    with pytest.raises(AiConfigError):
+        validate_kind(claude, BUDGET, "quiz")  # 퀴즈는 effort low
+    validate_kind(claude, BUDGET, "explain")  # effort none은 추론 필드 없이 부른다
+    store = FakeStore()
+    with pytest.raises(AiConfigError):
+        run_ai_call(store, claude, BUDGET, user_id=USER, kind="quiz", request_key=f"{USER}:q", prompt="p",
+                    client_factory=lambda s, t: FakeBedrock(OK))
+    assert store.reserved == []
 
 
 def test_agent_kinds_use_the_agent_model_and_prices_other_kinds_keep_the_default():
@@ -889,3 +937,25 @@ def test_run_ai_call_sends_the_kind_model_and_settles_at_the_kind_price(kind, mo
     # 예약액·정산액도 그 kind의 단가로 계산한다.
     priced = budget.for_kind(kind)
     assert store.reserved[0]["reserved_usd"] == priced.reserve_amount("자료: 문장", CALL_SPECS[kind].max_tokens)
+    usage = OK["usage"]
+    [(_, basis, values)] = store.settled
+    assert basis == "usage" and values["actual_usd"] == priced.cost(usage["inputTokens"], usage["outputTokens"])
+
+
+@pytest.mark.parametrize("kind", ["quiz", "followup", "explain"])
+def test_other_kinds_keep_the_default_model_and_fields_when_the_agent_model_is_set(kind):
+    seen = {}
+
+    class Recording(FakeBedrock):
+        def converse(self, **kwargs):
+            seen.update(kwargs)
+            return super().converse(**kwargs)
+
+    budget = replace(BUDGET, agent_input_usd_per_mtok=Decimal("2"), agent_output_usd_per_mtok=Decimal("10"))
+    settings = replace(API_KEY, agent_model_id="global.anthropic.claude-sonnet-5")
+    store = FakeStore()
+    run_ai_call(store, settings, budget, user_id=USER, kind=kind, request_key=f"{USER}:{kind}", prompt="p",
+                client_factory=lambda s, t: Recording(OK))
+    assert seen["modelId"] == API_KEY.model_id
+    assert seen["additionalModelRequestFields"] == {"reasoning": {"effort": CALL_SPECS[kind].effort}}
+    assert store.reserved[0]["reserved_usd"] == BUDGET.reserve_amount("p", CALL_SPECS[kind].max_tokens)

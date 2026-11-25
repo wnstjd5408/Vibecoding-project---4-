@@ -15,6 +15,7 @@ PR 코드가 STS를 직접 부르는 경우는 막지 못한다(infra/README.md 
 """
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -298,9 +299,15 @@ def _usage(response: Mapping) -> tuple[int | None, int | None, int]:
     return None, None, 0
 
 
+_OPENAI_MODEL = re.compile(r"(?:^|[./])openai\.")
+
+
 def is_openai_model(model_id: str) -> bool:
-    """OpenAI 계열 모델 ID인가(추론 프로필 접두사 global./jp./apac. 등을 포함해도 된다)."""
-    return model_id.split(".", 1)[0] == "openai" or ".openai." in f".{model_id}"
+    """OpenAI 계열 모델 ID인가. 추론 프로필 접두사(global./jp./apac.)와 ARN(…/openai.…)을 포함해도 된다.
+
+    application inference profile·provisioned model ARN처럼 모델 이름이 드러나지 않는 ID는 가리지 못한다(지원하지 않음).
+    """
+    return bool(_OPENAI_MODEL.search(model_id))
 
 
 def model_request_fields(model_id: str, effort: str) -> dict | None:

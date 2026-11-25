@@ -30,6 +30,7 @@ Vercel 프로젝트의 **Settings → Environment Variables**에서 환경을 �
 | `AWS_ROLE_ARN` | 운영 역할(`<owner>-vercel-bedrock-prd`) ARN | Preview 역할(`<owner>-vercel-bedrock-preview`) ARN | 등록하지 않는다 |
 | `BEDROCK_REGION`·`BEDROCK_MODEL_ID` | 미설정(기본값 `ap-northeast-1`, `global.openai.gpt-6-luna`) | 미설정 | 미설정 |
 | `AWS_BEARER_TOKEN_BEDROCK` | 미설정 | 미설정 | 사용 금지 |
+| `BEDROCK_AGENT_MODEL_ID`·`AI_AGENT_INPUT_USD_PER_MTOK`·`AI_AGENT_OUTPUT_USD_PER_MTOK` | 미설정(CS Agent도 기본 모델·단가) | 미설정 | 미설정 |
 
 1. Production의 `ALLOWED_ORIGINS`를 설정한다.
 2. Preview를 선택하고 Git Branch를 `staging`으로 지정해 같은 이름의 변수를 등록한다. 같은 이름의 Preview 공통값보다 브랜치별 값이 우선한다.

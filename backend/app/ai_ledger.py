@@ -28,9 +28,11 @@ from app.bedrock import (
     AiCallError,
     AiConfigError,
     BedrockSettings,
+    AGENT_MODEL_ENV,
     converse_text,
     ensure_ready,
     make_client,
+    model_request_fields,
 )
 from app.errors import ApiError
 from app.supabase import SupabaseClient
@@ -52,6 +54,32 @@ def model_id_for(settings: BedrockSettings, kind: str) -> str:
     if kind in AGENT_KINDS and settings.agent_model_id:
         return settings.agent_model_id
     return settings.model_id
+
+
+def validate_kind(settings: BedrockSettings, budget: "AiBudget", kind: str) -> None:
+    """이 kind의 호출 설정이 맞는지 예약·선점 전에 본다(MEG-282 리뷰). 틀리면 AiConfigError(500)다.
+
+    - CS Agent kind: 전용 모델·단가 짝(check_agent_config), 전용 단가 값(for_kind)
+    - 모든 kind: 모델과 추론 강도의 짝(OpenAI가 아닌 모델에 effort를 주면 막음)
+    """
+    if kind in AGENT_KINDS:
+        check_agent_config(settings, budget)
+    budget.for_kind(kind)
+    model_request_fields(model_id_for(settings, kind), CALL_SPECS[kind].effort)
+
+
+def check_agent_config(settings: BedrockSettings, budget: "AiBudget") -> None:
+    """CS Agent 전용 모델과 전용 단가는 함께 설정해야 한다(MEG-282 리뷰 H1).
+
+    모델만 바꾸면 비싼 모델의 원가가 기본 단가로 기록되어 한도가 실제 금액보다 크게 느슨해진다. 단가만 바꾸면 반대로
+    지나치게 일찍 막힌다. 어긋나면 AiConfigError(500)다. CS Agent 호출(예약 전)과 E29 사전 확인에서만 본다.
+    """
+    model_set = bool(settings.agent_model_id) and settings.agent_model_id != settings.model_id
+    price_set = budget.agent_input_usd_per_mtok is not None
+    if model_set != price_set:
+        raise AiConfigError(
+            f"{AGENT_MODEL_ENV}와 {' · '.join(AGENT_PRICE_ENV.values())}는 함께 설정해야 한다"
+        )
 
 
 @dataclass(frozen=True)
@@ -154,6 +182,12 @@ class AiBudget:
     # CS Agent 전용 모델의 단가(MEG-282). None이면 위 단가를 쓴다.
     agent_input_usd_per_mtok: Decimal | None = None
     agent_output_usd_per_mtok: Decimal | None = None
+    # CS Agent 단가 설정 오류(MEG-282 리뷰). 다른 kind(E09·퀴즈·꼬리 질문)는 막지 않고, CS Agent kind만 for_kind에서 막는다.
+    agent_price_error: str | None = None
+
+    def __post_init__(self):
+        if (self.agent_input_usd_per_mtok is None) != (self.agent_output_usd_per_mtok is None):
+            raise ValueError("agent prices must be set together")
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "AiBudget":
@@ -169,7 +203,8 @@ class AiBudget:
             if not value.is_finite() or value <= 0:
                 raise AiConfigError(f"{name}가 필요하다(양의 숫자)")
             values[field] = value
-        agent = {}
+        agent: dict = {}
+        error = None
         for field, name in AGENT_PRICE_ENV.items():
             raw = (env.get(name) or "").strip()
             if not raw:
@@ -177,13 +212,17 @@ class AiBudget:
             try:
                 value = Decimal(raw)
             except InvalidOperation:
-                raise AiConfigError(f"{name}는 양의 숫자여야 한다") from None
-            if not value.is_finite() or value <= 0:
-                raise AiConfigError(f"{name}는 양의 숫자여야 한다")
+                value = None
+            if value is None or not value.is_finite() or value <= 0:
+                error = f"{name}는 양의 숫자여야 한다"
+                continue
             agent[field] = value
-        if len(agent) == 1:
+        if error is None and len(agent) == 1:
             # 한쪽만 바꾸면 입력·출력 단가가 서로 다른 모델 기준이 된다.
-            raise AiConfigError(f"{' · '.join(AGENT_PRICE_ENV.values())}는 함께 설정해야 한다")
+            error = f"{' · '.join(AGENT_PRICE_ENV.values())}는 함께 설정해야 한다"
+        if error is not None:
+            # CS Agent 전용 설정 하나가 E09·퀴즈까지 멈추지 않게, 오류는 CS Agent kind를 부를 때만 낸다.
+            return cls(**values, agent_price_error=error)
         return cls(**values, **agent)
 
     def for_kind(self, kind: str) -> "AiBudget":
@@ -191,6 +230,8 @@ class AiBudget:
 
         하루·월 예산은 모든 kind가 함께 쓴다. 바뀌는 것은 토큰 단가뿐이다.
         """
+        if kind in AGENT_KINDS and self.agent_price_error is not None:
+            raise AiConfigError(self.agent_price_error)
         if kind in AGENT_KINDS and self.agent_input_usd_per_mtok is not None:
             return replace(self, input_usd_per_mtok=self.agent_input_usd_per_mtok,
                            output_usd_per_mtok=self.agent_output_usd_per_mtok)
@@ -473,8 +514,14 @@ def run_ai_call(
     """
     spec = CALL_SPECS[kind]
     # CS Agent kind는 전용 모델·단가를 쓸 수 있다(MEG-282). 그 밖의 kind는 그대로다.
-    budget = budget.for_kind(kind)
-    model_id = model_id_for(settings, kind)
+    try:
+        validate_kind(settings, budget, kind)
+        budget = budget.for_kind(kind)
+        model_id = model_id_for(settings, kind)
+    except AiConfigError:
+        if first_reservation is not None:
+            _settle(store, first_reservation, SETTLE_RELEASED)
+        raise
     try:
         ensure_ready(settings, oidc_token)
     except (AiConfigError, AiCallError) as error:

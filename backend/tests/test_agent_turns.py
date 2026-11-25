@@ -1794,3 +1794,19 @@ def test_without_the_agent_settings_the_calls_and_record_are_unchanged(client, f
     assert fake.finishes[-1]["p_model_id"] == SETTINGS.model_id
     [check] = store.checks
     assert check["reserved_usd"] == BUDGET.cost(max_prompt_tokens(), 1500) + BUDGET.cost(max_review_prompt_tokens(), 1500)
+
+
+def test_a_mismatched_agent_config_is_rejected_before_claiming_the_turn(fake, store, bedrock, retriever):
+    # 모델만 바꾸고 단가를 빠뜨린 설정은 선점 전에 500이다. 턴·원장·모델 호출이 없다(MEG-282 리뷰 H1).
+    from dataclasses import replace
+
+    settings = replace(SETTINGS, agent_model_id="global.anthropic.claude-sonnet-5")
+    app = build_app(fake, store, bedrock, retriever)
+    app.dependency_overrides[get_ai_runtime] = lambda: AiRuntime(
+        store=store, load_budget=lambda: BUDGET, load_settings=lambda: settings,
+        client_factory=lambda s, token=None: bedrock, sleep=lambda seconds: None)
+    cid = fake.conversation(A)
+    response = ask(TestClient(app), cid)
+    assert response.status_code == 500
+    assert not [t for t in fake.turns.values() if t["conversation_id"] == cid]
+    assert store.reserves == [] and store.checks == [] and bedrock.calls == 0

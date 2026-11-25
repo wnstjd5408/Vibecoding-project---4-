@@ -100,6 +100,7 @@ from app.ai_ledger import (
     agent_request_key,
     agent_review_request_key,
     model_id_for,
+    validate_kind,
     api_error_for,
     ledger_id_of,
     run_ai_call,
@@ -1118,6 +1119,9 @@ def prepare_turn(
         budget = runtime.load_budget()
         settings = runtime.load_settings()
         ensure_ready(settings, oidc_token)
+        # CS Agent 전용 모델·단가 설정(MEG-282)이 맞는지도 선점 전에 본다. 1차·2차 모두.
+        validate_kind(settings, budget, KIND_AGENT)
+        validate_kind(settings, budget, KIND_AGENT_REVIEW)
     except (AiConfigError, AiCallError) as error:
         raise api_error_for(error) from None
 

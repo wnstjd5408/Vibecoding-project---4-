@@ -339,7 +339,8 @@ def test_converse_passes_model_limits_and_reasoning_effort():
     [("global.openai.gpt-6-luna", True), ("openai.gpt-6-luna", True), ("jp.openai.x", True),
      ("arn:aws:bedrock:ap-northeast-1:1:inference-profile/global.openai.gpt-6-luna", True),
      ("global.anthropic.claude-sonnet-5", False), ("anthropic.claude-haiku-5-5", False),
-     ("amazon.nova-2-lite-v1:0", False), ("openaix.model", False)],
+     ("amazon.nova-2-lite-v1:0", False), ("openaix.model", False),
+     ("arn:aws:bedrock:ap-northeast-1::foundation-model/openai.gpt-oss-120b-1:0", True), ("nopenai.model", False)],
 )
 def test_openai_models_are_recognised_with_any_profile_prefix(model, openai):
     assert is_openai_model(model) is openai

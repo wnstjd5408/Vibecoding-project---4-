@@ -28,6 +28,7 @@ from app.ai_ledger import (
     api_error_for,
     quiz_request_key,
     run_ai_call,
+    validate_kind,
 )
 from app.ai_quiz import parse_quiz_items
 from app.auth import SessionUser, require_login
@@ -263,6 +264,8 @@ def quiz_today(
         budget = runtime.load_budget()
         settings = runtime.load_settings()
         ensure_ready(settings, oidc_token)
+        # 모델과 추론 강도의 짝(MEG-282)도 선점 전에 본다. 틀린 설정이 선점 시도를 쓰지 않게 한다.
+        validate_kind(settings, budget, KIND_QUIZ)
     except (AiConfigError, AiCallError) as error:
         raise api_error_for(error) from None
 
