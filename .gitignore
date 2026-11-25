@@ -45,3 +45,6 @@ Thumbs.db
 tfplan
 backend.hcl
 crash.log
+
+# 단계별 지도 가이드: 검수 전 초안은 로컬 미리보기에서만 쓴다(MEG-287)
+frontend/src/guides/fixtures/local/

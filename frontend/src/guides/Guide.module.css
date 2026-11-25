@@ -1,0 +1,550 @@
+/* 단계별 지도 가이드 (MEG-287). 색은 tokens.css만 쓰고, 강조색은 없다(MEG-270 결정 1). */
+
+.page {
+  min-height: 100vh;
+  background: var(--surface-100);
+  color: var(--ink);
+}
+
+.wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--space-6) max(var(--space-4), env(safe-area-inset-right, 0px)) 48px max(var(--space-4), env(safe-area-inset-left, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.title {
+  margin: 0;
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 700;
+  text-wrap: balance;
+}
+
+.scene {
+  margin: calc(-1 * var(--space-2)) 0 var(--space-2);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+
+.split,
+.mapColumn,
+.textColumn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* 넓은 화면(1024px 이상)에서는 지도 7 : 글 5로 나란히 둔다. 지도 칸은 최소 600px이고(MEG-270 결정 7),
+   600 + 344 + 칸 사이 32 + 좌우 여백 48 = 1024px이라 경계에서도 최소 폭을 지킨다. */
+@media (min-width: 1024px) {
+  .wrapWide {
+    max-width: 1320px;
+    padding-inline: var(--space-6);
+  }
+  .splitWithMap {
+    display: grid;
+    grid-template-columns: minmax(600px, 7fr) minmax(344px, 5fr);
+    gap: var(--space-8);
+    align-items: start;
+  }
+}
+
+/* 넓은 화면에서 지도 칸을 고정한다. 창보다 키가 크면 지도 칸 안에서 따로 스크롤한다. */
+@media (min-width: 1024px) and (min-height: 600px) {
+  .mapColumn {
+    position: sticky;
+    top: var(--space-4);
+    max-height: calc(100vh - 2 * var(--space-4));
+    overflow-y: auto;
+  }
+}
+
+.stage {
+  background: var(--surface-200);
+  border: 1px solid var(--surface-300);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+}
+
+.mapSvg,
+.seqSvg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* 모바일 배치(nodes_mobile)가 없는 가이드를 좁은 화면에서 볼 때: 지도를 줄이면 글자가 읽히지 않으므로
+   600px로 그리고 지도 상자 안에서 가로로 밀어 본다. 페이지 전체는 넘치지 않는다. 시퀀스도 같다. */
+.stageScroll {
+  overflow-x: auto;
+}
+
+.stageScroll .mapSvg,
+.stageScroll .seqSvg {
+  min-width: 600px;
+}
+
+.stageNote {
+  margin: calc(-1 * var(--space-2)) var(--space-1) 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ink-muted);
+}
+
+.replay {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+/* 따라가기 상자 */
+.callout {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--diff-low);
+  border-left: 3px solid var(--ink);
+  padding: 10px var(--space-4);
+}
+
+.calloutEyebrow {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+
+.calloutRoute {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 700;
+}
+
+.calloutMessage {
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--ink-muted);
+}
+
+.orderNote {
+  margin: calc(-1 * var(--space-2)) var(--space-1) 0 19px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ink-muted);
+}
+
+/* 단계 칩. 지금 단계는 먹색 채움과 aria-current로 함께 알린다. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.chip {
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.chip[aria-current='step'] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--surface-100);
+  font-weight: 600;
+}
+
+.step {
+  border-top: 1px solid var(--surface-300);
+  padding-top: var(--space-4);
+  min-width: 0;
+}
+
+.meta {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+
+.stepTitle {
+  margin: var(--space-2) 0;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 700;
+  text-wrap: balance;
+  scroll-margin-top: var(--space-4);
+}
+
+.body {
+  margin: 0 0 var(--space-4);
+}
+
+.subheading {
+  margin: var(--space-2) 0 var(--space-1);
+  font-size: 17px;
+  line-height: 26px;
+  font-weight: 600;
+}
+
+.changed {
+  margin: 0;
+  padding-left: 24px;
+}
+
+.flow {
+  margin-bottom: var(--space-2);
+}
+
+.flow ol {
+  margin: 0;
+  padding-left: 28px;
+}
+
+.flow li {
+  margin-bottom: var(--space-1);
+}
+
+/* 부록 목록은 줄마다 'n단계'가 붙어 있어 목록 번호를 겹쳐 달지 않는다. */
+.flowPlain ol {
+  list-style: none;
+  padding-left: 0;
+}
+
+/* 용어 설명 상자: 흰 바탕 + 테두리 + 머리말(MEG-270 결정 8). 따라가기 상자와 모양을 다르게 한다. */
+.termAside {
+  margin: 0 0 var(--space-4);
+  background: var(--surface-200);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+}
+
+.termEyebrow {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+
+.termTitle {
+  display: block;
+  margin-top: 2px;
+  font-size: 15px;
+  line-height: 22px;
+}
+
+.termBody {
+  margin: var(--space-1) 0 0;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.figure {
+  margin: 0 0 var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.figureSvg {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--surface-200);
+  border: 1px solid var(--surface-300);
+  border-radius: var(--radius-sm);
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.navButton {
+  height: 44px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.navNext {
+  background: var(--ink);
+  color: var(--surface-100);
+}
+
+.navButton:disabled {
+  border-color: var(--line-strong);
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: not-allowed;
+}
+
+.end {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  text-align: center;
+}
+
+/* ── SVG ── */
+.mapSvg text,
+.figureSvg text,
+.seqSvg text {
+  font-family: var(--font-sans);
+}
+
+.grid line {
+  stroke: var(--surface-300);
+  stroke-width: 1;
+}
+
+.platform {
+  fill: var(--diff-low);
+}
+
+.icon {
+  fill: var(--ink);
+}
+
+.nodeOff {
+  opacity: 0.5;
+}
+
+.nodeOff .platform {
+  fill: var(--surface-300);
+}
+
+.nodeLabel {
+  fill: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.nodeSub {
+  fill: var(--ink-muted);
+  font-size: 12px;
+}
+
+.nodeNote {
+  fill: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.rolePill {
+  fill: var(--ink);
+}
+
+.roleText {
+  fill: var(--surface-100);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* 전체 경로: 회색 얇은 실선(MEG-270 결정 2). 점선은 AI 생성 표시와 헷갈려 쓰지 않는다. */
+.routeLine {
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
+  fill: none;
+}
+
+.routeTagBg {
+  fill: var(--surface-200);
+  stroke: var(--surface-300);
+}
+
+.routeTag {
+  fill: var(--ink-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.currentLine {
+  stroke: var(--ink);
+  stroke-width: 3.5;
+  fill: none;
+  stroke-linecap: round;
+}
+
+.currentHead,
+.currentBadge {
+  fill: var(--ink);
+}
+
+.currentNum {
+  fill: var(--surface-100);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.lostMark {
+  stroke: var(--ink);
+  stroke-width: 3;
+  stroke-linecap: round;
+  fill: none;
+}
+
+.ball {
+  fill: var(--ink);
+  stroke: var(--surface-200);
+  stroke-width: 2.5;
+}
+
+.ring {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 2.5;
+}
+
+.figureTitle {
+  fill: var(--ink);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.figureNodeLabel {
+  fill: var(--ink);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.figureNodeSub,
+.figureNote {
+  fill: var(--ink-muted);
+  font-size: 14.5px;
+}
+
+.figureLine {
+  stroke: var(--ink);
+  stroke-width: 2.5;
+  fill: none;
+}
+
+.figureFaint {
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
+  opacity: 0.45;
+  fill: none;
+}
+
+.figureEdgeLabel {
+  fill: var(--ink);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.figureOff {
+  opacity: 0.45;
+}
+
+/* 시퀀스: 생명선은 얇은 실선(PRD v0.5 5.6절 5번) */
+.seqActor {
+  fill: var(--surface-100);
+  stroke: var(--ink);
+  stroke-width: 1.5;
+}
+
+.seqActorText {
+  fill: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.seqLife {
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
+}
+
+.seqPlain {
+  stroke: var(--ink-muted);
+  stroke-width: 1;
+  fill: none;
+}
+
+.seqHandshake {
+  stroke: var(--ink);
+  stroke-width: 2;
+  fill: none;
+}
+
+.seqApp {
+  stroke: var(--ink);
+  stroke-width: 4.5;
+  fill: none;
+}
+
+.seqHead {
+  fill: var(--ink);
+}
+
+.seqLabel {
+  fill: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.seqLabelBg {
+  fill: var(--surface-200);
+}
+
+.seqTag {
+  fill: var(--ink-muted);
+  font-size: 12px;
+}
+
+.seqNote {
+  fill: var(--diff-low);
+  stroke: var(--line-strong);
+}
+
+.seqNoteText {
+  fill: var(--ink);
+  font-size: 12px;
+}
+
+.seqStep {
+  fill: var(--ink);
+}
+
+.seqStepText {
+  fill: var(--surface-100);
+  font-size: 12px;
+  font-weight: 700;
+}
