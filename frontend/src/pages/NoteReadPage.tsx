@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { Link, useParams } from 'react-router'
 import { apiFetch, isApiError } from '../api/client.ts'
 import type { NoteReadResponse } from '../api/types.ts'
@@ -22,6 +23,7 @@ import type { AgentUi } from '../agent/agentUi.ts'
 import { AgentAccessLostDocument, AgentSourceDocument } from '../agent/AgentSourceDocument.tsx'
 import { shownAgentView, useAgentView } from '../agent/agentView.ts'
 import { AGENT_MESSAGES } from '../agent/messages.ts'
+import { PANEL_WIDTH_DEFAULT, clampPanelWidth, viewportWidth } from '../agent/panelWidth.ts'
 import { AGENT_DISABLED_BY_BUILD, closeAgentEntry, closeWikiEntry, useAgentEntryClosed, useWikiEntryOpen, wikiRef } from '../agent/availability.ts'
 import type { TermSheetAsk } from '../glossary/TermSheet.tsx'
 import { useAgentConversation } from '../agent/useAgentConversation.ts'
@@ -91,6 +93,13 @@ function NoteRead({ noteId }: { noteId: string }) {
     if (agentFailureKind === 'service_unavailable') closeAgentEntry()
   }, [agentFailureKind])
   const [agentOpen, setAgentOpen] = useState(false)
+  // PC 패널 보기의 폭(MEG-285). 기억하지 않고 패널을 닫으면 기본 폭으로 되돌린다(사람 결정). 화면을 줄여 최대를 넘으면 최대로 맞춘다.
+  const [agentWidth, setAgentWidth] = useState(PANEL_WIDTH_DEFAULT)
+  useEffect(() => {
+    const onResize = () => setAgentWidth((current) => clampPanelWidth(current, viewportWidth()))
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
   const [agentUi, setAgentUi] = useState<AgentUi>(INITIAL_AGENT_UI)
   const onAgentUi = useCallback((patch: Partial<AgentUi> | ((ui: AgentUi) => Partial<AgentUi>)) => setAgentUi((previous) => ({ ...previous, ...(typeof patch === 'function' ? patch(previous) : patch) })), [])
   const [agentSource, setAgentSource] = useState<OpenSource | null>(null)
@@ -251,6 +260,7 @@ function NoteRead({ noteId }: { noteId: string }) {
   const closeAgent = useCallback(() => {
     setAgentSource(null)
     setAgentOpen(false)
+    setAgentWidth(PANEL_WIDTH_DEFAULT)
   }, [])
   const openAgentSource = (turnId: string, ref: number, opener: HTMLElement) => {
     if (agentSource === null) noteScroll.current = window.scrollY
@@ -363,8 +373,10 @@ function NoteRead({ noteId }: { noteId: string }) {
     }
   }, [agentFullscreen])
   const pageClass = cx(styles.page, panelReserved && styles.panelOpen, agentShown === 'floating' && styles.floatingOpen)
+  // 패널 보기면 비울 폭을 패널 폭에 맞춘다(F6-21b). 용어·로그인 패널과 다른 보기는 CSS의 기본 480px를 쓴다.
+  const pageStyle = agentShown === 'panel' ? { '--agent-panel-width': `${agentWidth}px` } as CSSProperties : undefined
 
-  return <div className={pageClass}>
+  return <div className={pageClass} style={pageStyle}>
     <AppHeader title="CS 학습 노트" backTo={userPaths.noteList} backLabel="목록" wide stickyOnWide actions={
       auth.status === 'loading' ? null
         : auth.role === 'visitor' ? <LinkButton to={userPaths.login}>로그인</LinkButton> : <AccountMenu />
@@ -400,7 +412,8 @@ function NoteRead({ noteId }: { noteId: string }) {
     {/* 노출 중단 플래그를 켠 빌드에서는 패널을 그리지 않는다(닫힌 dialog의 제목 'AI에게 질문'도 문서에 남기지 않는다). */}
     {AGENT_DISABLED_BY_BUILD ? null : <AgentPanel open={agentOpen} wide={wide} view={agentView} onView={setAgentView} state={agentState} controller={agent} ui={agentUi} onUi={onAgentUi}
       source={agentSource} sourceState={agentSourceState} onOpenSource={openAgentSource} onCloseSource={closeAgentSource}
-      onClose={closeAgent} onLoginRequired={onAgentLoginRequired} returnFocus={() => articleRef.current} closed={agentClosed} onOpenTerm={openWikiTerm} />}
+      onClose={closeAgent} onLoginRequired={onAgentLoginRequired} returnFocus={() => articleRef.current} closed={agentClosed} onOpenTerm={openWikiTerm}
+      width={agentWidth} onWidth={setAgentWidth} />}
     <AiExplainSheet open={openAi !== null} onClose={() => setOpenAi(null)} openId={openAi?.openId ?? 0} target={openAi?.target ?? null} text={openAi?.text ?? ''} onLoginRequired={onAiLoginRequired} onReloadNote={onReloadNote} returnFocus={() => articleRef.current} />
     {/* 용어를 누르면 열리는 시트(F1-3). 시트 안 즐겨찾기 버튼(MEG-90)과 로그인 안내 연결(MEG-77)이 이 안에 있다. */}
     <TermSheet open={termOpen} onClose={() => setOpenTerm(null)} openId={openTerm?.openId ?? 0} termId={openTerm?.termId ?? null} label={termLabel} onLoginRequired={onFavoriteLoginRequired}
