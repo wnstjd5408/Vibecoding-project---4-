@@ -750,7 +750,7 @@ def _review_pass(
     unchanged(변경 없음), revised(보완), fallback(2차가 실패해 1차 결과를 씀).
     정산 실패(AiSettlementFailed)만 턴을 failed로 끝낸다. 1차 결과도 주지 않는다(9절 결정 4, 지금 규칙).
     """
-    if not review_target(first, no_citation=no_citation):
+    if not review_target(first, no_citation=no_citation, raw_text=first_text):
         job.review_status = REVIEW_NOT_APPLICABLE
         return first
     answer = first_answer_text(first, first_text)
@@ -762,6 +762,11 @@ def _review_pass(
         # 턴은 지금처럼 중단 처리되고, 1차 원장 연결은 agent_finish_turn이 남긴다.
         _touch(job, supabase, "compose")
     except _Stopped:
+        job.review_status = REVIEW_SKIPPED
+        return first
+    except Exception as error:
+        # 갱신 중 DB 오류는 1차 답을 버릴 이유가 아니다. 2차만 건너뛰고 저장을 시도한다(저장도 실패하면 그때 failed다).
+        logger.warning("stage=review turn_id=%s outcome=skipped reason=touch_failed type=%s", job.turn_id, type(error).__name__)
         job.review_status = REVIEW_SKIPPED
         return first
     try:
@@ -796,8 +801,15 @@ def _review_pass(
         job.review_status = REVIEW_FALLBACK
         return first
     except Exception as error:
-        # 예상하지 못한 예외는 1차와 같이 턴을 failed로 끝낸다. 2차 원장 연결은 남긴다.
-        job.review_ledger_id = ledger_id_of(error)
+        spent = ledger_id_of(error)
+        if spent is None:
+            # 예약 전(원장 행 없음, 모델 호출 없음)의 DB 오류다. 이미 정산한 1차 답을 버리지 않고 2차만 건너뛴다.
+            logger.warning("stage=review turn_id=%s outcome=skipped reason=before_reserve type=%s", job.turn_id,
+                           type(error).__name__)
+            job.review_status = REVIEW_SKIPPED
+            return first
+        # 예약한 뒤의 예상하지 못한 예외는 1차와 같이 턴을 failed로 끝낸다. 2차 원장 연결은 남긴다.
+        job.review_ledger_id = spent
         _mark_review_called(job)
         raise
     job.review_ledger_id = outcome.ledger_id

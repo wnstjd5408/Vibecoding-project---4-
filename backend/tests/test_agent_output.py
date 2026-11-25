@@ -548,9 +548,24 @@ def test_review_targets_follow_the_design_table():
     assert downgraded.result["state"] == "answered" and downgraded.model_state == "correction"
     assert review_target(downgraded) is False
     assert review_target(_first(correction)) is False
-    # 인용 없는 답(Q19)은 대상, 그 밖에 1차 결과가 없으면 대상이 아니다.
-    assert review_target(None, no_citation=True) is True
+    # 모델이 고정 문구를 바꿔 써도 노트 불일치 안내면 대상이 아니다.
+    assert review_target(_first({**PARTIAL, "limitation": "선택하신 노트 문장은 근거 문단의 설명과 어긋납니다."})) is False
+    # 인용 없는 답(Q19)은 대상이지만, 모델이 낸 원래 state로 같은 제외를 적용한다.
+    uncited = lambda payload: json.dumps(payload, ensure_ascii=False)
+    assert review_target(None, no_citation=True, raw_text=uncited({"state": "answered", "sections": [{"body": "x"}]})) is True
+    assert review_target(None, no_citation=True, raw_text=uncited({**PARTIAL, "sections": [{"body": "x"}]})) is True
+    assert review_target(None, no_citation=True, raw_text=uncited(
+        {**PARTIAL, "sections": [{"body": "x"}], "limitation": f"{NOTE_MISMATCH_NOTICE}."})) is False
+    assert review_target(None, no_citation=True, raw_text=uncited({**correction, "sections": [{"body": "x"}]})) is False
+    assert review_target(None, no_citation=True, raw_text="JSON 아님") is False
     assert review_target(None) is False
+
+
+def test_a_review_may_not_drop_the_note_mismatch_notice():
+    first = _first({**PARTIAL, "limitation": "선택하신 노트 문장은 근거 문단의 설명과 어긋납니다."})
+    with pytest.raises(ReviewRejected) as raised:
+        _review({**PARTIAL, "sections": [{"body": "일부 [1] 보완 [2]"}], "limitation": "나머지"}, first)
+    assert raised.value.reason == "notice_dropped"
 
 
 def _review(payload, first):

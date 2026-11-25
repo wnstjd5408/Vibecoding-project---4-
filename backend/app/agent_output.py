@@ -542,6 +542,7 @@ _REVIEW_RULES = """당신은 학습 도우미가 쓴 답(1차 답)을 점검하�
 - 근거 문단에 없는 내용, 일반 지식, 근거 문단이 말하지 않는 방법·절차·권고·원인은 더하지 않습니다. 질문이 묻는 대상과 다른 대상을 다룬 문단의 내용은 쓰지 않습니다.
 - "선택 문맥"은 검증된 사실이 아니므로 그 내용에 인용 번호를 붙이지 않습니다.
 - state는 1차 답과 같게 둡니다. 1차 답이 partial이고 보완으로 질문에 모두 답하게 되면 answered로 바꾸고 limitation을 뺍니다. partial로 두면 보완한 내용은 limitation에서 뺍니다. 그 밖의 state로 바꾸지 않습니다.
+- 1차 답의 limitation이 선택한 노트 문장과 근거 문단이 다르다는 안내이면 그 안내를 지우지 않고 state도 바꾸지 않습니다.
 - 1차 답에 인용 번호가 하나도 없으면, 근거 문단에 질문의 답이 되는 문장이 있을 때만 그 문장으로 answered나 partial 답을 새로 씁니다. 없으면 {"unchanged": true}만 씁니다.
 - 1차 답에 figures와 suggestions가 있으면 그대로 옮깁니다.
 - 본문(body)은 한국어로 씁니다. 단락, 제목, 목록, 표, 굵게, 기울임, 인라인 코드, 코드 블록만 쓰고 링크, 이미지, HTML은 쓰지 않습니다.
@@ -561,20 +562,40 @@ class ReviewRejected(Exception):
         self.reason = reason
 
 
-def review_target(first: ParsedOutput | None, *, no_citation: bool = False) -> bool:
+def mentions_note_mismatch(limitation: Any) -> bool:
+    """한계 문장이 노트 근거 불일치 안내인가. 고정 문구 그대로가 아니어도(모델이 바꿔 쓴 경우) 노트 문장과 근거가 다르다는
+    뜻이면 안내로 본다. 놓치면 2차가 안내를 지울 수 있으므로 넓게 잡는다."""
+    if not isinstance(limitation, str):
+        return False
+    if NOTE_MISMATCH_NOTICE in limitation:
+        return True
+    return "노트" in limitation and any(word in limitation for word in ("다릅", "다른", "어긋", "일치하지", "맞지 않"))
+
+
+def review_target(first: ParsedOutput | None, *, no_citation: bool = False, raw_text: str = "") -> bool:
     """2차 점검·보완 대상인가(설계 4절 "2차 대상" 표).
 
     - answered, 모델 판단 partial: 대상
-    - 노트 근거 불일치 안내(NOTE_MISMATCH_NOTICE)가 든 partial: 대상 아님(안내가 사라지면 안 된다)
-    - 모델이 인용 없이 낸 답(서버가 no_evidence로 바꿈, Q19): 대상(9절 결정 3). first는 None이다.
+    - 노트 근거 불일치 안내가 든 partial: 대상 아님(안내가 사라지면 안 된다)
+    - 모델이 인용 없이 낸 답(서버가 no_evidence로 바꿈, Q19): 대상(9절 결정 3). first는 None이고, 모델이 낸 원래 state로
+      위 제외를 똑같이 적용한다(교정, 불일치 안내 partial, 확인 질문은 대상 아님).
     - 노트 근거 턴에서 correction을 answered로 받은 경우, clarify, topic_check, 검색 결과 없음: 대상 아님
     """
     if first is None:
-        return no_citation
+        if not no_citation:
+            return False
+        try:
+            raw = _load_json(raw_text)
+        except OutputInvalid:
+            return False
+        state = raw.get("state")
+        if state == "partial":
+            return not mentions_note_mismatch(raw.get("limitation"))
+        return state == "answered"
     if first.model_state == "answered":
         return first.result.get("state") == "answered"
     if first.model_state == "partial":
-        return NOTE_MISMATCH_NOTICE not in first.result.get("limitation", "")
+        return not mentions_note_mismatch(first.result.get("limitation"))
     return False
 
 
@@ -626,6 +647,9 @@ def parse_review(text: str, first: ParsedOutput | None, paragraph_count: int, *,
         return revised
     if (first.result["state"], revised.result["state"]) not in _REVIEW_STATE_CHANGES:
         raise ReviewRejected("state_change")
+    if mentions_note_mismatch(first.result.get("limitation")) and not mentions_note_mismatch(revised.result.get("limitation")):
+        # 노트 근거 불일치 안내는 지우지 못한다(대상 판정을 지나친 경우의 이중 방어).
+        raise ReviewRejected("notice_dropped")
     if not set(first.refs) <= set(revised.refs):
         raise ReviewRejected("citation_dropped")
     if revised.result == first.result:

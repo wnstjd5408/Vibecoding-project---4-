@@ -739,7 +739,7 @@ def test_a_rejected_transition_still_links_the_review_ledger(clean):
     second = _ledger(clean, a, "agent_review", "a:agent-review:c:1")
     assert _finish_review(clean, a, turn_id, "completed", result="'{\"state\": \"answered\"}'",
                           review_status="'unchanged'", review_ledger=second) == "f"
-    assert turn(clean, turn_id, "status, review_ledger_id, coalesce(review_status, '-')") == f"cancelled|{second}|-"
+    assert turn(clean, turn_id, "status, review_ledger_id, coalesce(review_status, '-')") == f"cancelled|{second}|unchanged"
 
 
 def test_the_finish_function_keeps_service_role_only(clean):

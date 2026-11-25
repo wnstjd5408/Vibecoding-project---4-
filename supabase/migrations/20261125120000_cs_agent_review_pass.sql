@@ -168,7 +168,8 @@ $$;
 -- 4. 턴의 2차 기록 칸
 -- ---------------------------------------------------------------------------
 -- review_status: not_applicable(대상 아님), skipped(대상이지만 부르지 않음), unchanged(변경 없음), revised(보완),
--- fallback(2차가 실패해 1차 결과를 씀). 이 마이그레이션 전의 턴과 끝나지 않은 턴은 null이다.
+-- fallback(2차가 실패해 1차 결과를 씀). null은 이 마이그레이션 전의 턴, 끝나지 않은 턴, 2차 정산 실패·예상 밖 오류로
+-- failed가 된 턴이다(그때도 2차를 불렀으면 review_ledger_id와 버전·해시는 남는다).
 alter table public.ai_turns
   add column review_status text
     check (review_status in ('not_applicable', 'skipped', 'unchanged', 'revised', 'fallback')),
@@ -275,9 +276,13 @@ begin
          set ledger_id = p_ledger_id
        where t.id = p_turn_id and t.user_id = p_user_id and t.ledger_id is null;
     end if;
+    -- 2차 기록도 함께 남긴다(취소·만료 뒤에도 2차를 불렀는지와 그 버전을 볼 수 있게). 이미 있는 값은 덮어쓰지 않는다.
     if p_review_ledger_id is not null then
       update public.ai_turns t
-         set review_ledger_id = p_review_ledger_id
+         set review_ledger_id = p_review_ledger_id,
+             review_status = coalesce(t.review_status, p_review_status),
+             review_prompt_version = coalesce(t.review_prompt_version, p_review_prompt_version),
+             review_prompt_sha256 = coalesce(t.review_prompt_sha256, p_review_prompt_sha256)
        where t.id = p_turn_id and t.user_id = p_user_id and t.review_ledger_id is null;
     end if;
     return false;

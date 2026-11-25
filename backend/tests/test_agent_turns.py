@@ -87,6 +87,8 @@ class AgentBedrock:
         self.review_replies: list = []
         self.review_prompts: list[str] = []
         self.during_call = None
+        # 2차 호출 중에 할 일(취소 시험 등).
+        self.during_review = None
         self.delay = 0.0
 
     @property
@@ -104,6 +106,8 @@ class AgentBedrock:
         assert "toolConfig" not in kwargs
         if prompt.startswith(REVIEW_HEAD):
             self.review_prompts.append(prompt)
+            if self.during_review is not None:
+                self.during_review()
             step = self.review_replies.pop(0) if self.review_replies else bedrock_reply('{"unchanged": true}')
             if isinstance(step, Exception):
                 raise step
@@ -1664,3 +1668,78 @@ def test_the_review_head_used_by_fakes_matches_the_review_prompt():
     assert _REVIEW_RULES.startswith(REVIEW_HEAD)
     script = (Path(__file__).resolve().parents[1] / "scripts" / "local_agent_e2e.py").read_text(encoding="utf-8")
     assert f'REVIEW_HEAD = "{REVIEW_HEAD}"' in script
+
+
+def test_a_db_error_on_the_lease_refresh_before_the_review_only_skips_the_review(client, fake, bedrock, monkeypatch):
+    real = fake.touch_agent_turn
+    seen = []
+
+    def touch(user_id, turn_id, step, lease, paragraph_count=None):
+        seen.append(step)
+        if seen.count("compose") == 2:
+            raise SupabaseConfigError("down")
+        return real(user_id, turn_id, step, lease, paragraph_count)
+
+    monkeypatch.setattr(fake, "touch_agent_turn", touch)
+    parsed = events(ask(client, fake.conversation(A)))
+    assert parsed[-1][1]["status"] == "completed" and parsed[-1][1]["result"]["state"] == "answered"
+    assert bedrock.review_calls == 0 and fake.finishes[-1]["p_review_status"] == "skipped"
+
+
+def test_a_db_error_before_the_review_reservation_only_skips_the_review(client, fake, store, bedrock, monkeypatch):
+    # 예약 전 DB 오류(원장 행 없음, 모델 호출 없음)는 정산한 1차 답을 버릴 이유가 아니다(리뷰 지적 2).
+    real = store.reserve
+
+    def reserve(**kwargs):
+        if kwargs["kind"] == "agent_review":
+            raise SupabaseConfigError("down")
+        return real(**kwargs)
+
+    monkeypatch.setattr(store, "reserve", reserve)
+    parsed = events(ask(client, fake.conversation(A)))
+    assert parsed[-1][1]["status"] == "completed" and parsed[-1][1]["result"]["state"] == "answered"
+    finish = fake.finishes[-1]
+    assert finish["p_review_status"] == "skipped" and finish["p_review_ledger_id"] is None
+    assert finish["p_review_prompt_version"] is None and bedrock.review_calls == 0
+
+
+def test_an_uncited_note_only_correction_stays_no_evidence_without_a_review(client, fake, bedrock):
+    # Q19라도 모델이 낸 state가 교정이면 2차 대상이 아니다(리뷰 지적 4). 그대로 근거 없음이다.
+    uncited = {"state": "correction", "sections": [{"body": "인용 없는 설명"}],
+               "corrections": [{"note_excerpt": "노트", "corrected": "고침 [1]", "source_refs": [1]}]}
+    bedrock.replies = [bedrock_reply(json.dumps(uncited, ensure_ascii=False))]
+    parsed = events(ask(client, fake.conversation(A)))
+    assert parsed[-1][1]["result"]["state"] == "no_evidence"
+    assert bedrock.review_calls == 0 and fake.finishes[-1]["p_review_status"] == "not_applicable"
+
+
+def test_an_uncited_answer_whose_review_fails_stays_no_evidence_with_fallback(client, fake, bedrock):
+    bedrock.replies = [bedrock_reply(answer_json(sections=[{"body": "인용 없는 설명"}]))]
+    bedrock.review_replies = [bedrock_reply("JSON 아님")]
+    parsed = events(ask(client, fake.conversation(A)))
+    assert parsed[-1][1]["result"]["state"] == "no_evidence"
+    assert fake.finishes[-1]["p_review_status"] == "fallback" and fake.finishes[-1]["p_review_ledger_id"] == 102
+
+
+def test_a_ledger_key_collision_on_the_review_keeps_the_first_answer(client, fake, store, bedrock, monkeypatch):
+    real = store.reserve
+
+    def reserve(**kwargs):
+        if kwargs["kind"] == "agent_review":
+            raise agent_turns.LedgerKeyExists("settled")
+        return real(**kwargs)
+
+    monkeypatch.setattr(store, "reserve", reserve)
+    parsed = events(ask(client, fake.conversation(A)))
+    assert parsed[-1][1]["status"] == "completed" and fake.finishes[-1]["p_review_status"] == "fallback"
+    assert bedrock.review_calls == 0
+
+
+def test_a_cancel_during_the_review_ends_cancelled_and_links_both_ledgers(client, fake, store, bedrock):
+    bedrock.during_review = lambda: fake.cancel_agent_turn(A, last_turn(fake)["id"])
+    bedrock.review_replies = [bedrock_reply(answer_json(sections=[{"body": "설명 [1] 보완 [2]"}]))]
+    parsed = events(ask(client, fake.conversation(A)))
+    assert parsed[-1][1]["status"] == "cancelled"
+    row = last_turn(fake)
+    assert row["ledger_id"] == 101 and row["result"] is None
+    assert fake.finishes[-1]["p_review_ledger_id"] == 102
