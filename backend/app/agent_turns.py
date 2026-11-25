@@ -14,8 +14,8 @@ POST /api/ai/conversations/{conversation_id}/turns — 질문을 받아 근거�
    409를 속도 제한보다 먼저 보는 것은 검사 순서의 예외다(spec E29 3단계): 같은 키 재전송이 한도를 쓰지 않게 한다.
 4. 응답 수명 안의 스레드에서 run_turn을 돌린다(Q2 확정: 응답 뒤의 작업은 멈추므로 202 후 백그라운드 실행은 쓰지 않는다).
    질문 이해 → 검색 → (근거 없으면 no_evidence로 끝, 모델 호출 없음) → 취소 확인 → run_ai_call(예약·Bedrock·정산) →
-   출력 검증 → 출처 확인 → agent_finish_turn(조건부 저장). 단계마다 턴 행의 step·lease_expires_at을 status = running 조건으로
-   갱신하고, 0행이면(중단·만료) 실행을 멈춘다.
+   출력 검증(인용 없는 설명은 정산 뒤 no_evidence로 바꿈, Q19) → 출처 확인 → agent_finish_turn(조건부 저장).
+   단계마다 턴 행의 step·lease_expires_at을 status = running 조건으로 갱신하고, 0행이면(중단·만료) 실행을 멈춘다.
 5. 응답은 SSE(text/event-stream)다. Accept가 application/json이면 끝날 때까지 기다려 E30과 같은 JSON을 준다.
    송신이 실패해도(연결 끊김) 남은 이벤트를 버리고 스레드가 끝날 때까지 요청을 끝내지 않는다. 결과는 E30으로 읽는다.
 
@@ -63,6 +63,7 @@ from app.agent_output import (
     MAX_QUESTION_CHARS,
     MAX_REPLY_TEXT_CHARS,
     MAX_SELECTION_TOTAL_CHARS,
+    NO_CITATION,
     NO_EVIDENCE_RESULT,
     PRESET_TEXTS,
     PROMPT_VERSION,
@@ -229,10 +230,18 @@ def _bad_text(text: str) -> bool:
     return False
 
 
+NO_EVIDENCE_CONTEXT = "(근거 문단에서 답을 찾지 못해 답하지 않았습니다.)"
+
+
 def _answer_text(result: dict[str, Any]) -> str | None:
-    """이전 대화 문맥에 넣을 답 요약. 설명 본문이 있는 결과와 의미 확인만 쓴다."""
+    """이전 대화 문맥에 넣을 답 요약. 설명 본문이 있는 결과와 의미 확인, 근거 없음 안내를 쓴다.
+
+    근거 없음 턴도 질문은 대화의 흐름이다. 빼면 "그 방식"이 그보다 앞의 답을 가리키게 된다(MEG-275 4-C 리뷰).
+    """
     if result.get("state") == "clarify":
         return result["clarify"]["prompt"]
+    if result.get("state") == "no_evidence":
+        return NO_EVIDENCE_CONTEXT
     sections = result.get("sections")
     if isinstance(sections, list) and sections:
         return "\n".join(section.get("body", "") for section in sections if isinstance(section, dict))
@@ -647,9 +656,26 @@ def _execute(
             allow_correction=allow_correction,
         )
     except OutputInvalid as invalid:
-        # 형식 실패는 재시도 없이 failed다(Q19 임시). 호출은 이미 정산됐다. 원문은 남기지 않는다.
         logger.warning("stage=validate turn_id=%s output_invalid=%s", job.turn_id, invalid.reason)
-        raise _Failed("error", "ai_unavailable", outcome.ledger_id) from None
+        if invalid.reason != NO_CITATION:
+            # 형식 실패는 재시도 없이 failed다. 호출은 이미 정산됐다. 원문은 남기지 않는다.
+            raise _Failed("error", "ai_unavailable", outcome.ledger_id) from None
+        # 인용 없는 답(Q19, 사용자 결정 2026-11-24, MEG-275): 근거로 뒷받침되지 않은 설명은 보이지 않는다. 모델 출력을 버리고
+        # 근거 없음 안내(no_evidence)로 끝낸다. 호출은 이미 정산됐으므로 원장과 실행 기록은 남긴다. 출처는 없다.
+        if not _finish(
+            job,
+            supabase,
+            "completed",
+            result=dict(NO_EVIDENCE_RESULT),
+            ledger_id=outcome.ledger_id,
+            paragraph_count=len(paragraphs),
+            model_id=job.settings.model_id,
+            prompt_version=PROMPT_VERSION,
+            retrieval_version=retriever.version,
+        ):
+            raise _Stopped()
+        emit(sse("step", {"step": "compose", "state": "done"}))
+        return
 
     sources = source_rows(paragraphs, parsed.refs)
     _check_sources(job, supabase, sources, outcome.ledger_id)

@@ -88,12 +88,15 @@ def code_mask(text: str) -> bytearray:
     return _code_mask(text)
 
 
-def visible_text(text: str, low: int, high: int, mask: bytearray, hidden: list[tuple[int, int]]) -> str:
+def visible_text(
+    text: str, low: int, high: int, mask: bytearray, hidden: list[tuple[int, int]], markup: bytearray | None = None
+) -> str:
     """text[low:high]에서 AI에 보낼 글을 만든다: 숨김 구간(note-image: 토큰·URL)을 지우고, 코드 밖의 마크다운
     백슬래시 이스케이프만 푼다. 코드 안의 백슬래시는 실제 글자라 그대로 둔다(`a\\+b`와 a\\+b는 다른 글이다).
 
     low·high는 text 안의 위치이고 mask는 code_mask(text), hidden은 hidden_ranges(text)다. 이스케이프는 왼쪽부터
-    짝을 지어 풀므로 `\\\\`도 백슬래시 하나로 풀린다.
+    짝을 지어 풀므로 `\\\\`도 백슬래시 하나로 풀린다. markup(markup_mask(text))을 주면 화면에 글자로 보이지 않는
+    마크다운 표시(인라인 코드의 구분 백틱, 짝이 맞은 `*`)도 지운다(MEG-272).
     """
     out: list[str] = []
     ranges = iter(hidden)
@@ -105,6 +108,9 @@ def visible_text(text: str, low: int, high: int, mask: bytearray, hidden: list[t
         if current is not None and current[0] <= index:
             index = min(current[1], high)
             continue
+        if markup is not None and markup[index]:
+            index += 1
+            continue
         char = text[index]
         if char == "\\" and not mask[index] and index + 1 < high and _ESCAPABLE.fullmatch(text[index + 1]):
             out.append(text[index + 1])
@@ -113,6 +119,44 @@ def visible_text(text: str, low: int, high: int, mask: bytearray, hidden: list[t
         out.append(char)
         index += 1
     return "".join(out)
+
+
+def markup_mask(text: str) -> bytearray:
+    """화면에 글자로 보이지 않는 마크다운 표시의 위치(1). E09가 노트에서 고른 용어를 화면 글자로 맞출 때 쓴다(MEG-272).
+
+    - 인라인 코드의 여는·닫는 백틱 묶음. 코드 안의 앞뒤가 모두 공백(줄바꿈 포함)이고 공백만으로 되어 있지 않으면
+      CommonMark처럼 앞뒤 공백 한 칸씩도 지운다. 그래서 `` ` 하이퍼바이저 `는 ``의 화면 글자는 "하이퍼바이저는"이다.
+    - 짝이 맞은 `*` 강조 구분 문자. find_spans가 강조를 숨기는 규칙(MEG-143)과 같다. 코드·숨김 구간(note-image: 토큰,
+      URL, 링크 주소) 안이거나 이스케이프된 `*`는 글자다. `_` 강조는 다루지 않는다.
+    - 코드 블록의 펜스 줄은 다루지 않는다. 용어 선택은 80자 이하라 펜스 줄에 걸치는 일이 드물다.
+    """
+    markup = bytearray(len(text))
+    code = bytearray(len(text))
+    if "```" in text or "~~~" in text:
+        _mask_fenced_blocks(text, code)
+    if "`" in text:
+        spans: list[tuple[int, int, int, int]] = []
+        _mask_code_spans(text, code, spans)
+        for opener_start, opener_end, closer_start, closer_end in spans:
+            markup[opener_start:opener_end] = b"\x01" * (opener_end - opener_start)
+            markup[closer_start:closer_end] = b"\x01" * (closer_end - closer_start)
+            content = text[opener_end:closer_start]
+            # CommonMark은 줄 끝(\r\n 포함)을 공백 하나로 바꾼 뒤 앞뒤 공백 한 칸을 지운다.
+            if content[:1] in (" ", "\n", "\r") and content[-1:] in (" ", "\n", "\r") and content.strip(" \r\n"):
+                lead = 2 if content.startswith("\r\n") else 1
+                trail = 2 if content.endswith("\r\n") else 1
+                markup[opener_end : opener_end + lead] = b"\x01" * lead
+                markup[closer_start - trail : closer_start] = b"\x01" * trail
+    if "*" in text:
+        hidden = bytearray(len(text))
+        lowered = _ascii_lower(text)
+        for match in _HIDDEN.finditer(lowered):
+            hidden[match.start() : match.end()] = b"\x01" * (match.end() - match.start())
+        for match in _LINK_DESTINATION.finditer(lowered):
+            hidden[match.start(1) : match.end(1)] = b"\x01" * (match.end(1) - match.start(1))
+        for index in _emphasis_delimiters(text, lambda i: bool(hidden[i]) or bool(code[i]) or _is_escaped(text, i)):
+            markup[index] = 1
+    return markup
 
 
 def hidden_ranges(text: str) -> list[tuple[int, int]]:
@@ -256,7 +300,8 @@ def _mask_fenced_blocks(text: str, mask: bytearray, info_ranges: list[tuple[int,
         mask[line_start:block_end] = b"\x01" * (block_end - line_start)
 
 
-def _mask_code_spans(text: str, mask: bytearray) -> None:
+def _mask_code_spans(text: str, mask: bytearray, spans: list[tuple[int, int, int, int]] | None = None) -> None:
+    """인라인 코드를 mask에 표시한다. spans를 주면 (여는 묶음 시작, 끝, 닫는 묶음 시작, 끝)을 더한다(markup_mask)."""
     breaks = [match.start() for match in _BLANK_LINE.finditer(text)]
     runs = [(run.start(), run.end()) for run in _BACKTICKS.finditer(text) if not mask[run.start()]]
     # 길이별 묶음 번호 목록. 여는 묶음마다 같은 길이의 다음 묶음을 이분 탐색으로 찾는다(짝이 없는 묶음이 많아도
@@ -281,6 +326,8 @@ def _mask_code_spans(text: str, mask: bytearray) -> None:
         if next_break < len(breaks) and closer_start >= breaks[next_break]:
             continue
         mask[opener_start:closer_end] = b"\x01" * (closer_end - opener_start)
+        if spans is not None:
+            spans.append((opener_start, opener_end, closer_start, closer_end))
         index = candidates[later] + 1
 
 

@@ -99,17 +99,24 @@ class AiConfigError(ValueError):
 class AiCallError(Exception):
     """AI 호출 실패. step은 environment·sts·bedrock·response, code는 AWS 오류 코드나 중단 사유.
 
-    불완전 응답에 usage가 있었으면 토큰 수를 담아 정산에 쓴다(5.4).
+    불완전 응답에 usage가 있었으면 토큰 수를 담아 정산에 쓴다(5.4). 토큰 수의 뜻은 AiResult와 같다.
     """
 
     def __init__(
-        self, step: str, code: str, *, input_tokens: int | None = None, output_tokens: int | None = None
+        self,
+        step: str,
+        code: str,
+        *,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cache_write_tokens: int = 0,
     ) -> None:
         super().__init__(f"{step}: {code}")
         self.step = step
         self.code = code
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
+        self.cache_write_tokens = cache_write_tokens
 
     @property
     def settlement(self) -> str:
@@ -158,10 +165,16 @@ class BedrockSettings:
 
 @dataclass(frozen=True)
 class AiResult:
+    """input_tokens는 프롬프트 캐시에서 읽거나 캐시에 쓴 토큰까지 더한 전체 입력이다(_usage).
+
+    cache_write_tokens는 그 가운데 캐시에 쓴 토큰이다. 원장 비용에서 웃돈을 붙이는 데만 쓴다.
+    """
+
     text: str
     stop_reason: str
     input_tokens: int | None
     output_tokens: int | None
+    cache_write_tokens: int = 0
 
 
 def _error_code(error: ClientError | BotoCoreError) -> str:
@@ -256,15 +269,28 @@ def make_client(settings: BedrockSettings, oidc_token: str | None = None):
     )
 
 
-def _usage(response: Mapping) -> tuple[int | None, int | None]:
-    """응답의 토큰 수. 없거나 음수·정수 아님이면 None이다(원장 check가 0 이상 정수만 받는다)."""
+def _is_token_count(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _usage(response: Mapping) -> tuple[int | None, int | None, int]:
+    """응답의 (전체 입력, 출력, 캐시 쓰기) 토큰 수.
+
+    Converse의 inputTokens는 캐시를 거치지 않은 입력만 센다. 캐시에서 읽은 토큰(cacheReadInputTokens)과
+    캐시에 쓴 토큰(cacheWriteInputTokens)은 따로 온다(MEG-164 실측, MEG-275 4-A). 그래서 전체 입력은 셋의 합이다.
+    캐시 필드는 선택 항목이라 없으면 0으로 본다. 어느 값이든 음수·정수 아님이면 usage 전체를 모르는 것으로 보고
+    (None, None, 0)을 낸다. 원장은 그때 예약액으로 정산한다(원장 check가 0 이상 정수만 받는다).
+    """
     usage = response.get("usage")
     if not isinstance(usage, Mapping):
-        return None, None
-    tokens = [usage.get("inputTokens"), usage.get("outputTokens")]
-    if all(isinstance(t, int) and not isinstance(t, bool) and t >= 0 for t in tokens):
-        return tokens[0], tokens[1]
-    return None, None
+        return None, None, 0
+    input_tokens = usage.get("inputTokens")
+    output_tokens = usage.get("outputTokens")
+    cache_read = usage.get("cacheReadInputTokens", 0)
+    cache_write = usage.get("cacheWriteInputTokens", 0)
+    if all(_is_token_count(t) for t in (input_tokens, output_tokens, cache_read, cache_write)):
+        return input_tokens + cache_read + cache_write, output_tokens, cache_write
+    return None, None, 0
 
 
 def converse_text(
@@ -287,26 +313,20 @@ def converse_text(
         raise AiCallError("bedrock", _error_code(error)) from None
 
     stop_reason = response.get("stopReason") or ""
-    input_tokens, output_tokens = _usage(response)
+    input_tokens, output_tokens, cache_write_tokens = _usage(response)
+    usage = {"input_tokens": input_tokens, "output_tokens": output_tokens, "cache_write_tokens": cache_write_tokens}
     message = (response.get("output") or {}).get("message") or {}
     blocks = message.get("content")
     # content 자체가 없는 응답도 불완전 응답과 같게 502로 끝낸다(1.4.4). usage가 있으면 정산에 쓴다.
     if not isinstance(blocks, list):
-        raise AiCallError("response", "NoContent", input_tokens=input_tokens, output_tokens=output_tokens)
+        raise AiCallError("response", "NoContent", **usage)
     # text가 문자열이 아닌 블록(null 등)은 버린다. 이런 응답을 예외(500)가 아니라 불완전 응답(502)으로 다룬다.
     text = "".join(
         block["text"] for block in blocks if isinstance(block, Mapping) and isinstance(block.get("text"), str)
     )
     # 응답은 end_turn이고 text가 있을 때만 쓴다. 추론이 예산을 다 쓰면 text 없이 끝난다. 공백뿐인 text도 없는 것이다.
     if stop_reason != "end_turn" or not text.strip():
-        raise AiCallError(
-            "response", stop_reason or "NoText", input_tokens=input_tokens, output_tokens=output_tokens
-        )
+        raise AiCallError("response", stop_reason or "NoText", **usage)
 
     # usage가 없으면 토큰 수가 None이다. 원장은 reserved_fallback으로 정산한다(1.4.4).
-    return AiResult(
-        text=text,
-        stop_reason=stop_reason,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-    )
+    return AiResult(text=text, stop_reason=stop_reason, **usage)
