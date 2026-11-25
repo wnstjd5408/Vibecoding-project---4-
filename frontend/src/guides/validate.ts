@@ -284,6 +284,8 @@ export function validateGuide(data: unknown, options: ValidateGuideOptions = {})
     const hasView = g.map.view_mobile !== undefined
     const hasNodes = g.map.nodes_mobile !== undefined
     if (hasView !== hasNodes) c.add('map', 'view_mobile과 nodes_mobile은 함께 있거나 함께 없어야 해요.')
+    // 공개하는 판은 좁은 화면용 배치가 있어야 한다(MEG-270 결정 5, 2026-11-25 김준성: 배치 필수).
+    else if (!hasView && options.draft !== true) c.add('map.nodes_mobile', '좁은 화면용 배치(view_mobile, nodes_mobile)가 없어요. 390px 폭에서 노드가 모두 보이게 배치해 주세요.')
     if (hasView) c.view(g.map.view_mobile, 'map.view_mobile')
     if (hasNodes) {
       const mobile = checkNodes(c, g.map.nodes_mobile, 'map.nodes_mobile', false)

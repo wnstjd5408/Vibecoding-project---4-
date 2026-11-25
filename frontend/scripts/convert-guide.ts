@@ -67,7 +67,9 @@ function convertSteps(steps: Loose[]): GuideStep[] {
       changed: s.changed,
       active: s.active ?? [],
       arrows: ((s.arrows as Loose[] | undefined) ?? []).map((a) =>
-        compact({ from: a.from, to: a.to, label: a.label, local: a.local, style: a.style, shift: a.shift }),
+        // 생성기의 bad는 형식에서 risk(도착하지만 위험)와 lost(사라짐)로 나뉜다. 기본은 risk로 옮기고,
+        // 사라지는 메시지는 사람이 lost로 고친다(2026-11-25 김준성 결정).
+        compact({ from: a.from, to: a.to, label: a.label, local: a.local, style: a.style === 'bad' ? 'risk' : a.style, shift: a.shift }),
       ),
       notes: s.notes ?? {},
       roles: s.roles,

@@ -14,7 +14,8 @@ export type GuideIcon = (typeof GUIDE_ICONS)[number]
 export const GUIDE_STEP_KINDS = ['문제', '과정', '해결', '정리', '확인'] as const
 export type GuideStepKind = (typeof GUIDE_STEP_KINDS)[number]
 
-export const GUIDE_ARROW_STYLES = ['ok', 'bad'] as const
+// ok: 성공·안전하게 도착 / risk: 도착하지만 위험(예: 평문) / lost: 중간에 사라짐(끊긴 선 + X, MEG-270 결정 6)
+export const GUIDE_ARROW_STYLES = ['ok', 'risk', 'lost'] as const
 export type GuideArrowStyle = (typeof GUIDE_ARROW_STYLES)[number]
 
 export const GUIDE_SEQUENCE_PLACEMENTS = ['last_step', 'appendix'] as const
@@ -32,8 +33,8 @@ export type GuideNode = {
 export type GuideMap = {
   view: [number, number]
   nodes: GuideNode[]
-  // 좁은 화면용 배치(MEG-270 결정 5). 둘 다 있거나 둘 다 없어야 한다.
-  // 없으면 화면이 PC 배치를 줄여 쓴다. 노드 id 집합은 nodes와 같아야 한다.
+  // 좁은 화면용 배치(MEG-270 결정 5). 둘 다 있거나 둘 다 없어야 하고, 공개하는 판에는 반드시 있어야 한다.
+  // 노드 id 집합은 nodes와 같아야 한다. 초안 미리보기에서 없으면 화면이 PC 배치를 가로로 밀어 보게 한다.
   view_mobile?: [number, number]
   nodes_mobile?: GuideNode[]
 }
@@ -45,7 +46,7 @@ export type GuideArrow = {
   // 네트워크를 건너지 않는 확인(예: 브라우저가 자기 신뢰 저장소로 인증서를 확인). 공을 움직이지 않는다.
   // from과 to가 달라도 된다(브라우저 → 신뢰 저장소).
   local?: boolean
-  // 결과 표시: 성공(ok)과 실패(bad).
+  // 결과 표시. GUIDE_ARROW_STYLES 참고.
   style?: GuideArrowStyle
   // 같은 두 노드 사이의 화살표를 겹치지 않게 띄우는 거리(px).
   shift?: number
