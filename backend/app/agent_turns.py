@@ -63,16 +63,26 @@ from app.agent_output import (
     MAX_QUESTION_CHARS,
     MAX_REPLY_TEXT_CHARS,
     MAX_SELECTION_TOTAL_CHARS,
+    MAX_FIRST_ANSWER_CHARS,
     NO_CITATION,
     NO_EVIDENCE_RESULT,
     PRESET_TEXTS,
     PROMPT_VERSION,
+    REVIEW_PROMPT_SHA256,
+    REVIEW_PROMPT_VERSION,
     OutputInvalid,
+    ParsedOutput,
     PromptInput,
+    ReviewRejected,
     build_prompt,
+    build_review_prompt,
     correction_allowed,
+    first_answer_text,
     max_prompt_tokens,
+    max_review_prompt_tokens,
     parse_output,
+    parse_review,
+    review_target,
     source_rows,
     usable_paragraphs,
 )
@@ -82,11 +92,13 @@ from app.ai_explain import OIDC_HEADER, AiRuntime, _field_error, get_ai_runtime,
 from app.ai_ledger import (
     CALL_SPECS,
     KIND_AGENT,
+    KIND_AGENT_REVIEW,
     AiBudget,
     AiLimitReached,
     AiSettlementFailed,
     LedgerKeyExists,
     agent_request_key,
+    agent_review_request_key,
     api_error_for,
     ledger_id_of,
     run_ai_call,
@@ -99,6 +111,13 @@ from app.supabase import SupabaseClient, SupabaseConfigError, SupabaseUnavailabl
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger("app.agent")
+
+# 2차 점검·보완 결과 표시(MEG-282 D2, ai_turns.review_status 허용 값과 같다).
+REVIEW_NOT_APPLICABLE = "not_applicable"
+REVIEW_SKIPPED = "skipped"
+REVIEW_UNCHANGED = "unchanged"
+REVIEW_REVISED = "revised"
+REVIEW_FALLBACK = "fallback"
 
 # 실행 만료(Q15 임시 120초). 단계마다 갱신한다. 한 단계의 최악(약 86초)보다 길고 함수 최대 실행 시간(300초)보다 짧다.
 LEASE_SECONDS = 120
@@ -200,6 +219,11 @@ class TurnJob:
     started_at: float = field(default_factory=time.monotonic)
     # agent 호출이 공급자 오류(AiCallError)로 실패했는가. 그러면 퀴즈 자료가 같은 공급자를 바로 다시 부르지 않는다(MEG-243).
     provider_failed: bool = False
+    # 2차 점검·보완 기록(MEG-282 D2). ai_turns.review_*에 저장한다. 응답에는 넣지 않는다.
+    review_status: str | None = None
+    review_ledger_id: int | None = None
+    review_prompt_version: str | None = None
+    review_prompt_sha256: str | None = None
 
 
 @dataclass
@@ -547,6 +571,11 @@ def _finish(job: TurnJob, supabase: SupabaseClient, status: str, **values: Any) 
         "p_model_id": values.get("model_id"),
         "p_prompt_version": values.get("prompt_version"),
         "p_retrieval_version": values.get("retrieval_version"),
+        # 2차 기록은 턴 실행 상태(job)에서 읽는다. failed로 끝나도 2차 원장 연결은 남긴다.
+        "p_review_status": job.review_status,
+        "p_review_ledger_id": job.review_ledger_id,
+        "p_review_prompt_version": job.review_prompt_version,
+        "p_review_prompt_sha256": job.review_prompt_sha256,
     }
     changed = supabase.finish_agent_turn(payload)
     logger.info("stage=finish turn_id=%s status=%s saved=%s", job.turn_id, status, changed)
@@ -609,18 +638,17 @@ def _execute(
     _touch(job, supabase, "compose")
     emit(sse("step", {"step": "compose", "state": "current"}))
     topic = job.topic_label
-    prompt = build_prompt(
-        PromptInput(
-            question=checked.text,
-            topic_label=topic,
-            selections=[text for _, text in checked.selections],
-            recent=checked.recent,
-            paragraphs=paragraphs,
-            clarification=checked.clarification,
-            allow_topic_check=checked.allow_topic_check,
-            allow_correction=allow_correction,
-        )
+    prompt_input = PromptInput(
+        question=checked.text,
+        topic_label=topic,
+        selections=[text for _, text in checked.selections],
+        recent=checked.recent,
+        paragraphs=paragraphs,
+        clarification=checked.clarification,
+        allow_topic_check=checked.allow_topic_check,
+        allow_correction=allow_correction,
     )
+    prompt = build_prompt(prompt_input)
     try:
         outcome = run_ai_call(
             runtime.store,
@@ -647,8 +675,10 @@ def _execute(
         raise _Failed("error", api_error_for(error).code, ledger_id_of(error)) from None
     job.ledger_id = outcome.ledger_id
 
+    first: ParsedOutput | None = None
+    no_citation = False
     try:
-        parsed = parse_output(
+        first = parse_output(
             outcome.text,
             len(paragraphs),
             current_topic=topic,
@@ -660,6 +690,13 @@ def _execute(
         if invalid.reason != NO_CITATION:
             # 형식 실패는 재시도 없이 failed다. 호출은 이미 정산됐다. 원문은 남기지 않는다.
             raise _Failed("error", "ai_unavailable", outcome.ledger_id) from None
+        # 인용 없는 답(Q19). 2차 점검이 근거 문장으로 답을 새로 쓰지 못하면 아래에서 no_evidence로 끝낸다.
+        no_citation = True
+
+    # 2차 점검·보완(MEG-282 D2). 대상이 아니면 not_applicable이다. 2차가 실패하면 1차 결과를 쓴다.
+    parsed = _review_pass(job, supabase, runtime, prompt_input, first, outcome.text, no_citation, len(paragraphs))
+
+    if parsed is None:
         # 인용 없는 답(Q19, 사용자 결정 2026-11-24, MEG-275): 근거로 뒷받침되지 않은 설명은 보이지 않는다. 모델 출력을 버리고
         # 근거 없음 안내(no_evidence)로 끝낸다. 호출은 이미 정산됐으므로 원장과 실행 기록은 남긴다. 출처는 없다.
         if not _finish(
@@ -695,6 +732,106 @@ def _execute(
         raise _Stopped()
     # 저장한 뒤에만 compose 완료를 알린다(spec E29 10단계).
     emit(sse("step", {"step": "compose", "state": "done"}))
+
+
+def _review_pass(
+    job: TurnJob,
+    supabase: SupabaseClient,
+    runtime: AiRuntime,
+    prompt_input: PromptInput,
+    first: ParsedOutput | None,
+    first_text: str,
+    no_citation: bool,
+    paragraph_count: int,
+) -> ParsedOutput | None:
+    """2차 점검·보완(MEG-282 설계 v0.2 4절 D2). 최종 결과를 돌려준다. None이면 근거 없음(no_evidence)으로 끝낸다.
+
+    결과 표시(job.review_status): not_applicable(대상 아님), skipped(대상이지만 부르지 않음: 한도·취소·1차 답이 너무 김),
+    unchanged(변경 없음), revised(보완), fallback(2차가 실패해 1차 결과를 씀).
+    정산 실패(AiSettlementFailed)만 턴을 failed로 끝낸다. 1차 결과도 주지 않는다(9절 결정 4, 지금 규칙).
+    """
+    if not review_target(first, no_citation=no_citation, raw_text=first_text):
+        job.review_status = REVIEW_NOT_APPLICABLE
+        return first
+    answer = first_answer_text(first, first_text)
+    if len(answer) > MAX_FIRST_ANSWER_CHARS:
+        job.review_status = REVIEW_SKIPPED
+        return first
+    try:
+        # 2차 직전에 실행 만료를 다시 늘리고 취소를 본다. 취소됐으면 2차를 하지 않는다. 뒤의 저장(_finish)이 False라
+        # 턴은 지금처럼 중단 처리되고, 1차 원장 연결은 agent_finish_turn이 남긴다.
+        _touch(job, supabase, "compose")
+    except _Stopped:
+        job.review_status = REVIEW_SKIPPED
+        return first
+    except Exception as error:
+        # 갱신 중 DB 오류는 1차 답을 버릴 이유가 아니다. 2차만 건너뛰고 저장을 시도한다(저장도 실패하면 그때 failed다).
+        logger.warning("stage=review turn_id=%s outcome=skipped reason=touch_failed type=%s", job.turn_id, type(error).__name__)
+        job.review_status = REVIEW_SKIPPED
+        return first
+    try:
+        outcome = run_ai_call(
+            runtime.store,
+            job.settings,
+            job.budget,
+            user_id=job.user.user_id,
+            kind=KIND_AGENT_REVIEW,
+            request_key=agent_review_request_key(job.user.user_id, job.idempotency_key),
+            prompt=build_review_prompt(prompt_input, answer),
+            oidc_token=job.oidc_token,
+            client_factory=runtime.client_factory,
+            sleep=runtime.sleep,
+            # 2차는 앱 안 재시도를 하지 않는다(최악 약 30초). 실패하면 1차 결과를 쓴다.
+            max_attempts=1,
+        )
+    except AiLimitReached:
+        logger.info("stage=review turn_id=%s outcome=skipped reason=limit", job.turn_id)
+        job.review_status = REVIEW_SKIPPED
+        return first
+    except AiSettlementFailed as error:
+        job.review_ledger_id = ledger_id_of(error)
+        _mark_review_called(job)
+        raise _Failed("error", api_error_for(error).code, job.ledger_id) from None
+    except (AiCallError, AiConfigError, LedgerKeyExists) as error:
+        logger.warning("stage=review turn_id=%s outcome=fallback type=%s", job.turn_id, type(error).__name__)
+        # 공급자 오류면 퀴즈 자료 explain도 이번 턴에는 부르지 않는다(1차 실패와 같은 규칙, MEG-243).
+        job.provider_failed = job.provider_failed or isinstance(error, AiCallError)
+        job.review_ledger_id = ledger_id_of(error)
+        _mark_review_called(job)
+        job.review_status = REVIEW_FALLBACK
+        return first
+    except Exception as error:
+        spent = ledger_id_of(error)
+        if spent is None:
+            # 예약 전(원장 행 없음, 모델 호출 없음)의 DB 오류다. 이미 정산한 1차 답을 버리지 않고 2차만 건너뛴다.
+            logger.warning("stage=review turn_id=%s outcome=skipped reason=before_reserve type=%s", job.turn_id,
+                           type(error).__name__)
+            job.review_status = REVIEW_SKIPPED
+            return first
+        # 예약한 뒤의 예상하지 못한 예외는 1차와 같이 턴을 failed로 끝낸다. 2차 원장 연결은 남긴다.
+        job.review_ledger_id = spent
+        _mark_review_called(job)
+        raise
+    job.review_ledger_id = outcome.ledger_id
+    _mark_review_called(job)
+    try:
+        revised = parse_review(outcome.text, first, paragraph_count, current_topic=job.topic_label)
+    except (OutputInvalid, ReviewRejected) as rejected:
+        logger.warning("stage=review turn_id=%s outcome=fallback reason=%s", job.turn_id, rejected.reason)
+        job.review_status = REVIEW_FALLBACK
+        return first
+    if revised is None:
+        job.review_status = REVIEW_UNCHANGED
+        return first
+    logger.info("stage=review turn_id=%s outcome=revised state=%s", job.turn_id, revised.result["state"])
+    job.review_status = REVIEW_REVISED
+    return revised
+
+
+def _mark_review_called(job: TurnJob) -> None:
+    """2차를 부른 턴에 2차 프롬프트 버전·규칙 해시를 남긴다(1차 prompt_version과 따로, 설계 4절 identity)."""
+    job.review_prompt_version = REVIEW_PROMPT_VERSION
+    job.review_prompt_sha256 = REVIEW_PROMPT_SHA256
 
 
 def _check_sources(job: TurnJob, supabase: SupabaseClient, sources: list[dict[str, Any]], ledger_id: int) -> None:
@@ -1029,8 +1166,12 @@ def prepare_turn(
     try:
         limiter.check(AI_AGENT, f"user:{user.user_id}")
         # Q4 상한을 모두 채운 최대 예약액으로 남은 한도를 본다. 예약은 하지 않는다(spec E29 3단계).
+        # 2차 점검·보완(MEG-282 D2)까지 두 호출 몫을 본다. 2차는 agent 몫(70%)과 금액 한도에는 들고 턴 수에는 들지 않는다.
         spec = CALL_SPECS[KIND_AGENT]
-        reserved = budget.cost(max_prompt_tokens(), spec.max_tokens)
+        review_spec = CALL_SPECS[KIND_AGENT_REVIEW]
+        reserved = budget.cost(max_prompt_tokens(), spec.max_tokens) + budget.cost(
+            max_review_prompt_tokens(), review_spec.max_tokens
+        )
         if not runtime.store.check_limit(
             user_id=user.user_id,
             kind=KIND_AGENT,
