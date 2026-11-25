@@ -445,25 +445,32 @@ def test_agent_v3_rules_cover_the_l1_failure_modes():
     assert "topic_check" not in build_prompt(PromptInput(**{**base.__dict__, "allow_topic_check": False}))
 
 
-def test_agent_v4_rules_cover_the_remaining_l1_failure_modes():
-    # MEG-275 5-B: CSA-DEV v2 L1의 남은 X(핵심 누락, "근거에 없다" 오판, 노트 문장 확인, 한 뜻만 다룬 다의어)마다 규칙이 있다.
+def test_agent_v5_rules_cover_the_remaining_l1_failure_modes():
+    # MEG-275 5-B: CSA-DEV v2 L1의 남은 X(핵심 누락, "근거에 없다" 오판, 노트 문장 확인)마다 규칙이 있다.
     base = _worst_case_input("가")
     prompt = build_prompt(base)
     note_only = build_prompt(PromptInput(**{**base.__dict__, "allow_correction": False}))
-    assert PROMPT_VERSION == "agent-v4"
+    assert PROMPT_VERSION == "agent-v5"
     assert "그 내용을 빠뜨리지 말고 답의 중심으로 씁니다" in prompt
     assert "근거 문단에 나온 변경과 특징 가운데 질문과 관계있는 것을 사실대로 전합니다" in prompt
     assert "다른 대상을 다룬 문단의 내용은 답으로 쓰지 않습니다" in prompt
     # 근거가 인과를 쓰지 않으면 원인을 단정하지 않는다(서버가 잡을 수 없는 인과 주장을 막는다).
-    assert "\"때문에\", \"덕분에\"처럼 원인을 단정하지 말고" in prompt
-    # 위키 대화처럼 현재 주제가 대상을 정해 주면 다의어 확인을 하지 않는다.
-    assert "현재 주제도 대상을 정해 주지 않고" in prompt
+    assert "\"때문에\", \"덕분에\"처럼 원인을 단정하지 않습니다" in prompt
     assert "\"근거에 없다\"거나 \"설명하지 않는다\"고 쓰지 않습니다" in prompt
+    # v4 측정에서 partial이 늘었다. 충분히 답하면 answered로 둔다.
+    assert "근거 문단이 질문에 답하기에 충분하면 state를 answered로 합니다" in prompt
+    # v4 측정에서 확인 질문이 늘어 뺀 규칙(근거가 한 뜻만 다뤄도 흔한 다의어면 확인)과 partial을 강제하던 문구는 없다.
+    assert "그중 하나만 다루더라도" not in prompt
+    assert "이유를 직접 밝히지 않는다는 점을 씁니다" not in prompt
+    assert "빠진 부분만 한계로" not in prompt
+    # 규칙은 한 줄에 하나다(규칙을 빼다 줄이 붙은 일이 있었다). 다의어 확인 규칙과 그 밖의 확인 규칙이 각각 줄 머리에 있다.
+    lines = prompt.splitlines()
+    assert any(line.startswith("- 선택 문맥과 이전 대화가 없고, 질문의 핵심 용어가 근거 문단들에서") for line in lines)
+    assert any(line.startswith("- 그 밖에는 질문의 뜻이 둘 이상으로 갈려") for line in lines)
     # 답하는 문단이 없을 때의 고정 문장(서버가 no_evidence로 바꿈)은 그대로 쓰게 한다. 새 규칙이 이 경로를 막지 않는다.
     assert "질문에 답하는 문단이 하나도 없을 때는 아래 규칙의 고정 문장을 그대로 씁니다" in prompt
     assert prompt.index("고정 문장을 그대로 씁니다") < prompt.index("근거 문단에서 이 질문의 답을 찾지 못했습니다.")
     assert "sections와 limitation이 서로 어긋나지 않게 합니다" in prompt
-    assert "근거 문단이 그중 하나만 다루더라도 그 하나로 답을 정하지 말고 state를 clarify로" in prompt
     assert "그 문장과 맞닿은 설명(정의, 차이, 동작)을 찾아" in note_only
     # 노트로 노트를 고치지 않는다(2026-11-18 결정): "무엇이 맞는지" 대신 근거가 어떻게 설명하는지를 쓰게 한다.
     assert "근거 문단이 그 점을 어떻게 설명하는지 인용과 함께 씁니다" in note_only
