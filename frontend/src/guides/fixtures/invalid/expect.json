@@ -1,0 +1,32 @@
+{
+  "missing-title.json": {
+    "paths": [
+      "title"
+    ]
+  },
+  "unknown-arrow-node.json": {
+    "paths": [
+      "steps[1].arrows[0].to"
+    ]
+  },
+  "empty-review.json": {
+    "paths": [
+      "review"
+    ]
+  },
+  "unknown-field.json": {
+    "paths": [
+      "steps[1].arrows[0].stlye"
+    ]
+  },
+  "prototype-prot.json": {
+    "paths": [
+      "sequence.rows[1].prot"
+    ]
+  },
+  "impossible-date.json": {
+    "paths": [
+      "review.reviewed_on"
+    ]
+  }
+}
