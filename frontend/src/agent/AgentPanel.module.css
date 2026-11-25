@@ -1,6 +1,7 @@
 /* CS Agent 'AI에게 질문' 패널(MEG-258). 크기·간격·글자는 캔버스 F6 보드(Version 96)를 따른다. */
 
-/* PC: 헤더 바로 아래부터 화면 아래까지, 폭 480px. 막이 없고 노트는 그대로 보인다(SidePanel과 같은 자리) */
+/* PC: 헤더 바로 아래부터 화면 아래까지, 폭 480px. 막이 없고 노트는 그대로 보인다(SidePanel과 같은 자리).
+   폭은 손잡이로 바꿀 수 있다(MEG-285). 바꾼 폭은 노트 화면이 dialog의 style로 준다. */
 .panel {
   position: fixed;
   top: var(--app-header-height);
@@ -92,6 +93,13 @@
 .panel[open], .floating[open], .fullscreen[open], .full[open] { display: flex; flex-direction: column; }
 /* 보기를 바꿔도 남는 틀. 머리·문맥·대화·입력 칸을 세로로 쌓는다 */
 .frame { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+/* 폭 조절 손잡이(F6-21a~e, MEG-285). 패널 보기에서만 그린다. 경계에서 패널 안쪽 24px가 잡는 영역이라 노트 스크롤 막대와 겹치지 않는다.
+   평소에는 패널의 1px 경계선만 보이고, 마우스를 올리거나 끄는 동안 경계에 2px 먹 선을 그린다. 초점 링은 잘리지 않게 안쪽에 둔다. */
+.resizer { position: absolute; top: 0; bottom: 0; left: -1px; z-index: 1; width: 24px; cursor: col-resize; touch-action: none; }
+.resizer::before { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: transparent; }
+.resizer:hover::before, .resizer[data-dragging]::before { background: var(--ink); }
+.resizer:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
 .fullscreen .frame { width: 100%; max-width: 720px; margin-inline: auto; }
 /* 대화 영역 끝에서 더 굴려도 뒤의 노트가 움직이지 않게 한다(노트 읽던 위치를 지킨다) */
 .floating .body, .fullscreen .body, .floating .sourceBody { overscroll-behavior: contain; }

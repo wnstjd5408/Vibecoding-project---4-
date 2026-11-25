@@ -15,6 +15,9 @@ export const AGENT_MESSAGES = {
   viewPanel: '패널로 보기',
   viewFloating: '창으로 보기',
   viewFullscreen: '전체 화면',
+  // 패널 폭 조절 손잡이(F6-21a~e, MEG-285)
+  resizePanel: 'AI에게 질문 패널 폭',
+  resizeValue: (width: number) => `${width}픽셀`,
   backToNote: '노트로 돌아가기',
   topic: (label: string) => `현재 주제: ${label}`,
   contextWithSelection: '참고 문맥: 현재 노트 · 선택 영역',
