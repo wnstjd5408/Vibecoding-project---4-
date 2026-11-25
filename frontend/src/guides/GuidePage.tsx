@@ -32,7 +32,7 @@ function FailingDrawing(): ReactNode {
 }
 
 const MAP_NOTE = '아이콘의 자리는 모든 단계에서 그대로예요. 진한 실선과 번호 상자는 지금 단계, 회색 얇은 실선과 번호는 다른 단계의 경로예요. 무엇이 오가는지는 상자에 적었어요.'
-const MAP_NOTE_IDLE = '아이콘의 자리는 모든 단계에서 그대로예요. 회색 얇은 실선과 번호는 각 단계의 경로예요. 다음 단계부터 지금 단계를 진한 실선과 번호 상자로 표시해요.'
+const MAP_NOTE_IDLE = '아이콘의 자리는 모든 단계에서 그대로예요. 이 단계에는 오가는 메시지가 없어요. 회색 얇은 실선과 번호는 다른 단계의 경로예요.'
 const SEQ_NOTE = '위에서 아래로 시간 순서예요. 선 굵기가 뜻하는 것은 그림 아래에 적었고, 왼쪽 번호는 그 내용을 설명한 단계예요.'
 
 export type GuidePageProps = {
@@ -74,7 +74,9 @@ export function GuidePage({ guide, header, forceMapFailure = false }: GuidePageP
   const showMap = !failed.has(failKey)
   const noMobileLayout = !guide.map.nodes_mobile
   const stageScrolls = !wide && (sequenceHere || noMobileLayout)
-  const idle = step !== null && step.arrows.every((a) => a.local || a.from === a.to)
+  // idle: 지금 단계에 그릴 화살표가 없다. moves: 공이 움직이는 메시지가 있다(local 확인은 공을 움직이지 않는다).
+  const idle = step !== null && step.arrows.every((a) => a.from === a.to)
+  const moves = step !== null && step.arrows.some((a) => !a.local && a.from !== a.to)
   const position = step ? `${step.kind} · ${view.index + 1} / ${stepCount}단계` : '부록'
   const heading = step ? step.title : (appendix?.title ?? '')
 
@@ -122,7 +124,8 @@ export function GuidePage({ guide, header, forceMapFailure = false }: GuidePageP
             <SequenceDiagram sequence={seq} title={guide.title} />
           ) : step ? (
             <StepMap
-              key={replay}
+              // 단계가 바뀌거나 다시 보기를 누르면 지도를 새로 그려 SMIL 움직임을 처음부터 재생한다.
+              key={`${view.index}-${replay}`}
               guide={guide}
               step={step}
               stepIndex={view.index}
@@ -135,7 +138,7 @@ export function GuidePage({ guide, header, forceMapFailure = false }: GuidePageP
         <p className={styles.stageNote}>{sequenceHere ? (seq?.note ?? SEQ_NOTE) : idle ? MAP_NOTE_IDLE : MAP_NOTE}</p>
       </DrawingBoundary>
       {/* 다시 보기 버튼은 그림과 따로 둔다. 그림을 새로 그려도 버튼의 포커스가 남는다. */}
-      {!sequenceHere && !reducedMotion && !idle && (
+      {!sequenceHere && !reducedMotion && moves && (
         <button type="button" className={styles.replay} onClick={() => setReplay((r) => r + 1)}>
           움직임 다시 보기
         </button>

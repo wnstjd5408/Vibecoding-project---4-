@@ -10,8 +10,18 @@ import type { GuideFile } from '../guides/types.ts'
 import { validateGuide, type GuideIssue } from '../guides/validate.ts'
 
 // 검수 전 초안을 로컬에서만 보려면 fixtures/local/<slug>.json에 둔다(.gitignore로 커밋하지 않는다).
-const SOURCES = import.meta.glob<unknown>(['../guides/fixtures/valid/*.json', '../guides/fixtures/local/*.json'], { import: 'default' })
+// 로컬 초안은 개발 서버에서만 읽는다. 내 컴퓨터에서 빌드해 배포해도 운영 빌드에 초안이 묶이지 않게 한다.
+const SOURCES: Record<string, () => Promise<unknown>> = {
+  ...import.meta.glob<unknown>('../guides/fixtures/valid/*.json', { import: 'default' }),
+  ...(import.meta.env.DEV ? import.meta.glob<unknown>('../guides/fixtures/local/*.json', { import: 'default' }) : {}),
+}
 const slugOf = (path: string) => path.split('/').pop()!.replace(/\.json$/, '')
+// 예시를 바꿔도 theme·failMap 같은 다른 옵션은 유지한다.
+const linkQuery = (query: URLSearchParams, slug: string) => {
+  const next = new URLSearchParams(query)
+  next.set('slug', slug)
+  return next.toString()
+}
 
 type Loaded = { state: 'loading' } | { state: 'ok'; guide: GuideFile } | { state: 'bad'; issues: GuideIssue[] } | { state: 'missing' }
 
@@ -43,7 +53,7 @@ export default function GuidePreviewPage() {
       <nav aria-label="미리보기 예시" style={{ padding: '8px 16px', fontSize: 13, display: 'flex', gap: 12, flexWrap: 'wrap', background: 'var(--surface-100)', color: 'var(--ink)' }}>
         <strong>가이드 미리보기(개발 전용)</strong>
         {slugs.map((s) => (
-          <a key={s} href={`?slug=${s}`} style={{ color: 'var(--ink)' }}>
+          <a key={s} href={`?${linkQuery(query, s)}`} style={{ color: 'var(--ink)' }}>
             {s}
           </a>
         ))}

@@ -170,16 +170,6 @@ export function segment(from: GuideNode, to: GuideNode): Segment {
   return { x1, y1, x2, y2, ux: (x2 - x1) / len, uy: (y2 - y1) / len }
 }
 
-// 같은 두 노드 사이의 화살표를 겹치지 않게 shift만큼 옆으로 민다.
-export function shiftSegment(s: Segment, shift: number | undefined): Segment {
-  if (!shift) return s
-  const nx = -s.uy
-  const ny = s.ux
-  return { ...s, x1: s.x1 + nx * shift, y1: s.y1 + ny * shift, x2: s.x2 + nx * shift, y2: s.y2 + ny * shift }
-}
-
-export const isMoving = (a: GuideArrow) => !a.local
-
 // 글자 폭 어림값(한글은 글자 크기만큼, 영문은 0.56배). 이름표 바탕 상자 너비에 쓴다.
 export function textWidth(s: string, px: number): number {
   let w = 0

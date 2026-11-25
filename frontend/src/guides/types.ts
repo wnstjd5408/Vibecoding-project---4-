@@ -49,6 +49,7 @@ export type GuideArrow = {
   // 결과 표시. GUIDE_ARROW_STYLES 참고.
   style?: GuideArrowStyle
   // 같은 두 노드 사이의 화살표를 겹치지 않게 띄우는 거리(px).
+  // 화면(MEG-287)은 쓰지 않는다. 같은 노드 쌍의 화살표는 차선을 자동으로 나눈다. 예전 초안과 맞추려고 형식에만 남겼다.
   shift?: number
 }
 
