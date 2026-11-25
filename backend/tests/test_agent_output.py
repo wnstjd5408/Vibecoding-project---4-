@@ -450,7 +450,6 @@ def test_agent_v5_rules_cover_the_remaining_l1_failure_modes():
     base = _worst_case_input("가")
     prompt = build_prompt(base)
     note_only = build_prompt(PromptInput(**{**base.__dict__, "allow_correction": False}))
-    assert PROMPT_VERSION == "agent-v5"
     assert "그 내용을 빠뜨리지 말고 답의 중심으로 씁니다" in prompt
     assert "근거 문단에 나온 변경과 특징 가운데 질문과 관계있는 것을 사실대로 전합니다" in prompt
     assert "다른 대상을 다룬 문단의 내용은 답으로 쓰지 않습니다" in prompt
@@ -477,6 +476,104 @@ def test_agent_v5_rules_cover_the_remaining_l1_failure_modes():
     assert "무엇이 맞는지" not in note_only
     # 교정이 허용된 턴(위키 근거)에는 노트 문장 확인 규칙 대신 교정 규칙이 들어간다.
     assert "그 문장과 맞닿은 설명" not in prompt
+
+
+def test_agent_v6_rules_extract_answer_sentences_before_writing():
+    # MEG-282: v5의 남은 X(04·05·23-1)는 답하는 문장이 근거 문단 끝·목록·바른 표현에 있는데 빠뜨린 생성 실패였다.
+    base = _worst_case_input("가")
+    prompt = build_prompt(base)
+    note_only = build_prompt(PromptInput(**{**base.__dict__, "allow_correction": False}))
+    no_topic = build_prompt(PromptInput(**{**base.__dict__, "allow_topic_check": False}))
+    assert PROMPT_VERSION == "agent-v6"
+    for text in (prompt, note_only, no_topic):
+        # 답을 쓰기 전에 답하는 문장을 옮기고, 문단 끝·인용 블록·바른 표현까지 본다.
+        assert "답을 쓰기 전에 evidence_points에 근거 문단에서 질문에 직접 답하는 문장을" in text
+        assert "끝부분, 목록 항목, 표, 인용 블록(>)" in text
+        # 출력 상한(maxTokens 1,500)을 넘으면 턴이 실패하므로 작업 칸의 크기를 묶는다.
+        assert "항목은 많아야 5개이고, 각 항목은 문장을 줄인 짧은 구절(80자 안)로 씁니다" in text
+        assert "evidence_points의 내용을 하나도 빠뜨리지 않고 씁니다" in text
+        assert "evidence_points에 있는 내용은 limitation에 \"근거에 없다\"고 쓰지 않습니다" in text
+        assert "첫 문장에서 그 결론(예 또는 아니요)을 밝히고" in text
+        assert "인과 문장이 없다는 이유만으로 partial로 낮추거나 limitation을 덧붙이지 않습니다" in text
+        # 출력 예와 필드 설명 모두 evidence_points를 맨 앞에 둔다. 출력 예는 JSON으로 읽힌다.
+        example = next(line for line in text.splitlines() if line.startswith("출력 예: "))
+        assert list(json.loads(example.removeprefix("출력 예: ")))[0] == "evidence_points"
+        assert "모든 state에서 evidence_points를 맨 앞에 씁니다" in text
+        # 확인 질문·주제 확인과 답이 없을 때의 경로는 빈 목록으로 그대로 둔다. 주제 확인이 꺼진 턴에는 topic_check를 말하지 않는다.
+        empty = "clarify이면" if text is no_topic else "clarify·topic_check이면"
+        assert f"state가 {empty} 빈 목록 []로 둡니다" in text
+        if text is not no_topic:
+            # 주제 확인 규칙·필드 설명도 "맨 앞에 evidence_points"와 어긋나지 않게 빈 목록을 말한다.
+            assert "topic_check로 하고 evidence_points는 빈 목록으로 두며 다른 필드는 쓰지 않습니다" in text
+            assert "- topic_check: evidence_points(빈 목록) 외 다른 필드 없음" in text
+        assert "근거 문단에서 이 질문의 답을 찾지 못했습니다." in text
+        # v5 규칙(인과 단정 금지, 다른 대상 문단 금지)은 남긴다.
+        assert "\"때문에\", \"덕분에\"처럼 원인을 단정하지 않습니다" in text
+        assert "다른 대상을 다룬 문단의 내용은 답으로 쓰지 않습니다" in text
+        # 규칙은 한 줄에 하나다.
+        lines = text.splitlines()
+        assert any(line.startswith("- 답을 쓰기 전에 evidence_points에") for line in lines)
+        assert any(line.startswith("- answered와 partial의 sections에는 evidence_points") for line in lines)
+        assert any(line.startswith("- 예/아니요로 답할 질문") for line in lines)
+        assert len(text) <= max_prompt_chars()
+
+
+@pytest.mark.parametrize(
+    "points",
+    [
+        ["[1] 근거 문장", "[9] 범위 밖 번호도 인용으로 세지 않는다"],
+        [],
+        "문자열",
+        {"not": "list"},
+        [1, None],
+        None,
+    ],
+    ids=["list", "empty", "string", "object", "mixed", "null"],
+)
+def test_parse_drops_evidence_points_whatever_its_shape(points):
+    # evidence_points는 작업 칸이다. 검사하지 않고, 결과·출처·인용 번호에 넣지 않는다(화면·저장소에 나가지 않는다).
+    for payload, expected in (
+        (
+            {"evidence_points": points, "state": "answered", "sections": [{"body": "설명 [1]"}]},
+            {"state": "answered", "sections": [{"body": "설명 [1]"}], "suggestions": []},
+        ),
+        (
+            {"evidence_points": points, "state": "partial", "sections": [{"body": "일부 [2]"}], "limitation": "나머지"},
+            {"state": "partial", "sections": [{"body": "일부 [2]"}], "limitation": "나머지"},
+        ),
+    ):
+        parsed = _parse(payload)
+        assert parsed.result == expected
+        assert "evidence_points" not in json.dumps(parsed.result, ensure_ascii=False)
+    assert _parse({"evidence_points": points, "state": "answered", "sections": [{"body": "설명 [1]"}]}).refs == (1,)
+    clarify = _parse({"evidence_points": points, "state": "clarify", "clarify": {"prompt": "어느 뜻?", "options": ["가", "나"]}})
+    assert "evidence_points" not in clarify.result
+    topic = _parse({"evidence_points": points, "state": "topic_check"})
+    assert topic.result == {"state": "topic_check", "topic_check": {"current_topic": "운영체제"}}
+
+
+@pytest.mark.parametrize("state", ["answered", "partial"])
+def test_evidence_points_do_not_count_as_citations(state):
+    # 근거 문장을 옮겨 적기만 하고 본문에 인용이 없으면 여전히 인용 없는 답(no_citation)이다(Q19 → no_evidence).
+    payload = {"evidence_points": ["[1] 근거 문장"], "state": state, "sections": [{"body": "인용 없음"}]}
+    if state == "partial":
+        payload["limitation"] = "나머지"
+    with pytest.raises(OutputInvalid) as error:
+        _parse(payload)
+    assert error.value.reason == "no_citation"
+
+
+def test_evidence_points_are_dropped_when_a_note_only_correction_becomes_answered():
+    payload = {
+        "evidence_points": ["[2] 근거 문장"],
+        "state": "correction",
+        "sections": [{"body": "설명 [1]"}],
+        "corrections": [{"note_excerpt": "노트 문장", "corrected": "고친 내용 [2]", "source_refs": [2]}],
+    }
+    parsed = parse_output(json.dumps(payload, ensure_ascii=False), 2, current_topic="t", allow_topic_check=True,
+                          allow_correction=False)
+    assert parsed.result == {"state": "answered", "sections": [{"body": "설명 [1]"}], "suggestions": []}
+    assert parsed.refs == (1,)
 
 
 def test_parse_correction_becomes_answered_when_not_allowed():

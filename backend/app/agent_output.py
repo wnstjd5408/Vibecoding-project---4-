@@ -32,7 +32,11 @@ from app.ai_ledger import PROMPT_OVERHEAD_TOKENS
 # agent-v5(MEG-275 5-B): v4에서 부작용을 낸 두 규칙을 빼고 나머지만 남겼다. 근거에 있는 핵심 문장을 빠뜨리지 않기,
 # "왜" 질문에서 근거의 변경·특징 전하기(인과 단정 금지), 근거에 있는 것을 "근거에 없다"고 하지 않기, 충분히 답하면
 # answered로 두기, 노트 문장 확인 질문에서 근거가 어떻게 설명하는지 쓰기.
-PROMPT_VERSION = "agent-v5"
+# agent-v6(MEG-282): v5 L1의 남은 X(04·05·23-1)는 모두 답하는 문장이 근거 문단 안(문단 끝 인용 블록, 바른 표현 목록,
+# 변경 목록)에 있는데 빠뜨리거나 "근거가 설명하지 않는다"고 쓴 생성 실패였다. 규칙만으로는 안정되지 않아, 답을 쓰기 전에
+# 답하는 문장을 evidence_points에 먼저 옮기게 하고(서버는 이 필드를 결과에 넣지 않는다), sections·limitation을 그 목록에
+# 맞추게 했다. 예/아니요 질문은 근거의 결론부터 쓰고, "왜" 질문은 인과 문장이 없다는 이유만으로 partial로 낮추지 않는다.
+PROMPT_VERSION = "agent-v6"
 
 # Q4 임시 상한(코드포인트)
 MAX_QUESTION_CHARS = 1000
@@ -127,7 +131,10 @@ _RULES = """당신은 컴퓨터공학 학습자의 질문에 답하는 학습 �
 - 사실 설명은 "근거 문단"에 있는 내용으로만 씁니다. 근거 문단에서 가져온 문장 끝에 그 문단 번호를 [1]처럼 붙입니다. 없는 번호는 쓰지 않습니다.
 - 인용 번호는 그 문장의 내용이 실제로 그 문단에 있을 때만 붙입니다. 근거 문단이 말하지 않는 방법, 절차, 권고, 원인은 덧붙이지 않습니다. 일반 지식으로 빈칸을 채우지 않습니다.
 - 근거 문단에 질문에 직접 답하는 문장(정의, 결론, 요약, 목록 항목)이 있으면 그 내용을 빠뜨리지 말고 답의 중심으로 씁니다. "어떻게"를 물으면 근거 문단에 있는 핵심 동작(누가 무엇으로 무엇을 하는지)을 씁니다.
-- "왜"를 묻고, 근거 문단이 질문이 묻는 바로 그 대상을 다루지만 이유를 직접 쓰지 않았으면, 그 대상에 대해 근거 문단에 나온 변경과 특징 가운데 질문과 관계있는 것을 사실대로 전합니다. 근거 문단이 인과를 쓰지 않았으면 "때문에", "덕분에"처럼 원인을 단정하지 않습니다. 다른 대상을 다룬 문단의 내용은 답으로 쓰지 않습니다.
+- 답을 쓰기 전에 evidence_points에 근거 문단에서 질문에 직접 답하는 문장을 문단 번호와 함께 하나씩 옮깁니다(예: "[2] 기본 Full Handshake를 1-RTT로 단축"). 항목은 많아야 5개이고, 각 항목은 문장을 줄인 짧은 구절(80자 안)로 씁니다. 문단의 처음만 보지 말고 끝부분, 목록 항목, 표, 인용 블록(>), "기억할 것"이나 "자주 혼동하는 표현"의 바른 설명까지 모두 확인합니다. 질문이 묻는 대상과 다른 대상을 다룬 문장은 넣지 않습니다. 답하는 문장이 없거나 state가 {empty_states}이면 빈 목록 []로 둡니다.
+- answered와 partial의 sections에는 evidence_points의 내용을 하나도 빠뜨리지 않고 씁니다. evidence_points에 있는 내용은 limitation에 "근거에 없다"고 쓰지 않습니다.
+- 예/아니요로 답할 질문(예: "~해도 되나요?", "~거죠?")에 근거 문단이 결론을 주면, 첫 문장에서 그 결론(예 또는 아니요)을 밝히고 근거를 이어 씁니다.
+- "왜"를 묻고, 근거 문단이 질문이 묻는 바로 그 대상을 다루지만 이유를 직접 쓰지 않았으면, 그 대상에 대해 근거 문단에 나온 변경과 특징 가운데 질문과 관계있는 것을 사실대로 전합니다. 근거 문단이 인과를 쓰지 않았으면 "때문에", "덕분에"처럼 원인을 단정하지 않습니다. 다만 인과 문장이 없다는 이유만으로 partial로 낮추거나 limitation을 덧붙이지 않습니다. 다른 대상을 다룬 문단의 내용은 답으로 쓰지 않습니다.
 - 질문에 답하는 내용이 근거 문단에 있으면 그 내용을 "근거에 없다"거나 "설명하지 않는다"고 쓰지 않습니다. sections와 limitation이 서로 어긋나지 않게 합니다. 질문에 답하는 문단이 하나도 없을 때는 아래 규칙의 고정 문장을 그대로 씁니다.
 - 근거 문단이 질문에 답하기에 충분하면 state를 answered로 합니다. 질문이 묻지 않은 주변 내용이 근거에 없다는 이유로 partial로 낮추거나 한계를 덧붙이지 않습니다.
 - "선택 문맥"은 학습자가 노트에서 고른 문장입니다. 검증된 사실이 아니므로 그 내용을 사실로 설명하거나 인용 번호를 붙이지 않고, 질문의 맥락으로만 씁니다.
@@ -140,8 +147,8 @@ _RULES = """당신은 컴퓨터공학 학습자의 질문에 답하는 학습 �
 - 그림이 이해를 도울 때만 figures에 Mermaid flowchart를 넣습니다. 노드와 화살표만 쓰고 click, 링크, 스타일, 주석, HTML은 쓰지 않습니다. 그림의 내용은 본문에도 글로 씁니다.
 - suggestions에는 학습자가 이어서 물어볼 만한 질문을 0~3개 씁니다. 직전 설명을 되풀이하지 않습니다.
 - 출력은 JSON 객체 하나만 씁니다. 코드 블록 표시나 앞뒤 설명을 붙이지 않습니다.
-출력 예: {{"state": "answered", "sections": [{{"heading": "핵심", "body": "설명 문장 [1]"}}], "figures": [{{"mermaid": "flowchart LR\\n  A[요청] --> B[응답]", "caption": "그림 제목", "alt_text": "그림 설명", "source_refs": [1], "after_section": 1}}], "suggestions": ["이어서 물어볼 질문"]}}
-state별 필드:
+출력 예: {{"evidence_points": ["[1] 근거 문단에서 질문에 답하는 문장"], "state": "answered", "sections": [{{"heading": "핵심", "body": "설명 문장 [1]"}}], "figures": [{{"mermaid": "flowchart LR\\n  A[요청] --> B[응답]", "caption": "그림 제목", "alt_text": "그림 설명", "source_refs": [1], "after_section": 1}}], "suggestions": ["이어서 물어볼 질문"]}}
+state별 필드(모든 state에서 evidence_points를 맨 앞에 씁니다):
 - answered: sections, figures(선택), suggestions(선택)
 - partial: sections, limitation
 - clarify: clarify {{"prompt": "확인 질문", "options": ["뜻 1", "뜻 2"]}}
@@ -149,9 +156,9 @@ state별 필드:
 
 _TOPIC_RULE = (
     "- 이전 대화가 있고, 질문이 현재 주제와 이전 대화가 다룬 개념과 관계없는 다른 개념을 물으면(예: CPU 스케줄링을 묻던 대화에서 "
-    "CORS를 물음) 근거 문단이 있어도 답하지 말고 state를 topic_check로 하고 다른 필드는 쓰지 않습니다.\n"
+    "CORS를 물음) 근거 문단이 있어도 답하지 말고 state를 topic_check로 하고 evidence_points는 빈 목록으로 두며 다른 필드는 쓰지 않습니다.\n"
 )
-_TOPIC_FIELDS = "- topic_check: 다른 필드 없음\n"
+_TOPIC_FIELDS = "- topic_check: evidence_points(빈 목록) 외 다른 필드 없음\n"
 
 
 _CORRECTION_RULE = (
@@ -177,6 +184,7 @@ def rules(allow_topic_check: bool, allow_correction: bool = True) -> str:
         topic_fields=_TOPIC_FIELDS if allow_topic_check else "",
         correction_rule=_CORRECTION_RULE if allow_correction else _NO_CORRECTION_RULE,
         correction_fields=_CORRECTION_FIELDS if allow_correction else "",
+        empty_states="clarify·topic_check" if allow_topic_check else "clarify",
     )
 
 
@@ -429,6 +437,9 @@ def parse_output(
     않고 본문(sections)만 남긴 answered로 받는다. 결정(2026-11-18)이 "answered나 partial로 답한다"이기 때문이다.
 
     출처(sources)는 결과에 넣지 않는다. 인용한 번호(refs)로 서버가 근거 문단에서 만들어 ai_turn_sources에 저장한다.
+
+    evidence_points(agent-v6)는 모델이 답을 쓰기 전에 근거 문장을 옮겨 적는 작업 칸이다. 검사하지 않고 결과에도 넣지 않는다.
+    그래서 형식이 틀리거나 빠져도 턴을 실패시키지 않고, 화면·저장소에 나가지 않는다. 인용 번호로도 세지 않는다.
     """
     raw = _load_json(text)
     state = raw.get("state")

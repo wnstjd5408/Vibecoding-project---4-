@@ -369,7 +369,7 @@ def test_the_stream_sends_steps_in_order_and_saves_the_result_with_agent_finish_
          "excerpt": PARAGRAPHS[0].text, "paragraph_snapshot": PARAGRAPHS[0].text, "section": "정의"}
     ]
     assert (finish["p_model_id"], finish["p_prompt_version"], finish["p_retrieval_version"]) == (
-        SETTINGS.model_id, "agent-v5", "fixed-test")
+        SETTINGS.model_id, "agent-v6", "fixed-test")
     assert row["status"] == "completed" and row["paragraph_count"] == 2
     # 원장: 사전 확인 1회, 예약 1회(agent 키 형식), 정산 1회. 모델 호출 1회.
     assert store.reserves == [{"kind": "agent", "key": f"{A}:agent:{key}:1", "daily_count_limit": 20}]
@@ -926,7 +926,7 @@ def test_an_answer_without_citations_ends_as_no_evidence_instead_of_failing(clie
     # 호출은 정산됐고 원장·실행 기록은 남는다. 출처는 저장하지 않는다.
     assert finish["p_ledger_id"] == 101 and finish["p_sources"] is None
     assert (finish["p_model_id"], finish["p_prompt_version"], finish["p_retrieval_version"]) == (
-        SETTINGS.model_id, "agent-v5", "fixed-test")
+        SETTINGS.model_id, "agent-v6", "fixed-test")
     # 검색한 문단 수는 그대로 남긴다(모델에 문단을 보냈다). 저장한 뒤에만 compose 완료를 알린다(spec E29 10단계).
     assert finish["p_paragraph_count"] == 2
     steps = [data for name, data in parsed if name == "step"]
@@ -1470,3 +1470,26 @@ def test_a_hidden_suggested_turn_whose_source_turn_is_hidden_cannot_be_retried(c
     assert turns[2]["hidden"] == {"reason": "source_revoked", "retry_allowed": False}
     assert_error(ask(client, cid, body={"retry_of_turn_id": hidden}), 409, "conflict", "turn_not_retryable")
     assert "claim_agent_turn" not in fake.calls and bedrock.calls == 0
+
+
+# --- agent-v6(MEG-282): 근거 문장 작업 칸 evidence_points ---
+
+
+def test_evidence_points_never_reach_the_response_or_the_saved_turn(client, fake, store, bedrock):
+    # 모델이 답 앞에 옮겨 적은 근거 문장(작업 칸)은 화면 응답·저장 결과·출처 어디에도 나가지 않는다. 인용으로도 세지 않는다.
+    marker = "작업칸-표식-문장"
+    bedrock.replies = [bedrock_reply(answer_json(evidence_points=[f"[2] {marker}"]))]
+    parsed = events(ask(client, fake.conversation(A)))
+    result = parsed[-1][1]
+    assert result["status"] == "completed" and result["result"]["state"] == "answered"
+    assert [source["ref"] for source in result["result"]["sources"]] == [1]
+    [finish] = fake.finishes
+    assert finish["p_result"] == {
+        "state": "answered",
+        "sections": [{"heading": "핵심", "body": "같은 요청을 다시 보내도 결과가 같습니다 [1]."}],
+        "suggestions": ["재시도는 언제 안전해?"],
+    }
+    assert [source["ref"] for source in finish["p_sources"]] == [1]
+    assert marker not in json.dumps(parsed, ensure_ascii=False)
+    assert marker not in json.dumps(finish, ensure_ascii=False)
+    assert finish["p_prompt_version"] == "agent-v6"
