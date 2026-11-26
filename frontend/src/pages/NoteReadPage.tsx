@@ -173,9 +173,25 @@ function NoteRead({ noteId }: { noteId: string }) {
       return
     }
     if (saved === null) return
-    window.scrollTo({ top: Number(saved) })
+    const top = Number(saved)
     // 키보드로 연 사람이 돌아온 자리를 알 수 있게 가이드 연결에 포커스를 돌려준다(PRD AC-4). 화면은 움직이지 않는다.
     articleRef.current?.querySelector<HTMLElement>('[data-guide-link]')?.focus({ preventScroll: true })
+    // 이미지와 다이어그램은 본문이 그려진 뒤에 높이가 정해진다. 본문 높이가 바뀌는 동안(최대 4초) 같은 위치로 다시 맞춘다.
+    // 그 사이 사용자가 직접 움직이면 멈춘다.
+    const apply = () => window.scrollTo({ top })
+    apply()
+    const article = articleRef.current
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(apply)
+    if (article) observer?.observe(article)
+    const userEvents = ['wheel', 'touchstart', 'keydown', 'pointerdown'] as const
+    const stop = () => {
+      observer?.disconnect()
+      window.clearTimeout(timer)
+      for (const name of userEvents) window.removeEventListener(name, stop)
+    }
+    const timer = window.setTimeout(stop, 4000)
+    for (const name of userEvents) window.addEventListener(name, stop, { passive: true })
+    return stop
   }, [noteReady, linkedGuide, guideReturnKey])
 
   const noteRevision = note?.revision

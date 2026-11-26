@@ -96,15 +96,23 @@ function useCloseGuide(entry: GuideIndexEntry) {
   const navigate = useNavigate()
   const location = useLocation()
   const [busy, setBusy] = useState(false)
-  const fromNote = (location.state as Partial<GuideEntryState> | null)?.from === 'note'
+  const state = location.state as Partial<GuideEntryState> | null
+  // 이 가이드의 노트에서 왔고, 그 앞 기록이 남아 있을 때만 한 칸 돌아간다. 복원된 기록처럼 앞 칸이 없으면 주소로 들어온 경우와 같이 처리한다.
+  const historyIndex = (window.history.state as { idx?: number } | null)?.idx ?? 0
+  const fromNote = state?.from === 'note' && state.noteId === entry.note_id && historyIndex > 0
   const run = () => {
     if (fromNote) return void navigate(-1)
     if (!/^[1-9][0-9]*$/.test(entry.note_id)) return void navigate(userPaths.noteList, { replace: true })
     setBusy(true)
-    apiFetch(`/api/notes/${entry.note_id}`).then(
-      () => navigate(noteReadPath(entry.note_id), { replace: true }),
-      (error: unknown) => navigate(isApiError(error, 'not_found') ? userPaths.noteList : noteReadPath(entry.note_id), { replace: true }),
-    )
+    // 응답이 오래 걸려도 닫기가 막히지 않게 8초 뒤에는 노트로 보낸다. 노트 화면이 자기 상태를 보인다.
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => controller.abort(), 8000)
+    apiFetch(`/api/notes/${entry.note_id}`, { signal: controller.signal })
+      .then(
+        () => navigate(noteReadPath(entry.note_id), { replace: true }),
+        (error: unknown) => navigate(isApiError(error, 'not_found') ? userPaths.noteList : noteReadPath(entry.note_id), { replace: true }),
+      )
+      .finally(() => window.clearTimeout(timer))
   }
   return { run, busy }
 }

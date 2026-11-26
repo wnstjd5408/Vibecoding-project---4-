@@ -1,5 +1,7 @@
 import { Component, lazy, Suspense, type ReactNode } from 'react'
-import { Button, StateMessage } from '../components/index.ts'
+import { useParams } from 'react-router'
+import { AppHeader, Button, StateMessage } from '../components/index.ts'
+import { userPaths } from '../routes/paths.ts'
 
 // 가이드 화면(MEG-288)은 노트 화면 번들에 넣지 않고 /guides/:slug에 들어갈 때만 불러온다(PRD v0.5 5.2절).
 const GuideReadPage = lazy(() => import('./GuideReadPage.tsx'))
@@ -13,19 +15,25 @@ class ChunkBoundary extends Component<{ children: ReactNode }, { failed: boolean
   }
   render() {
     if (!this.state.failed) return this.props.children
+    // 가이드 화면 묶음 밖이라 닫기 대신 노트 목록으로 가는 길을 둔다. 주소로 바로 들어와도 나갈 수 있다.
     return (
-      <main style={{ padding: 'var(--space-6) var(--space-4)' }}>
-        <StateMessage kind="error" title="가이드를 불러오지 못했어요" headingLevel={2}
-          action={<Button variant="primary" onClick={() => window.location.reload()}>다시 시도</Button>} />
-      </main>
+      <>
+        <AppHeader backTo={userPaths.noteList} />
+        <main style={{ padding: 'var(--space-6) var(--space-4)' }}>
+          <StateMessage kind="error" title="가이드를 불러오지 못했어요" headingLevel={2}
+            action={<Button variant="primary" onClick={() => window.location.reload()}>다시 시도</Button>} />
+        </main>
+      </>
     )
   }
 }
 
 export function GuideRoute() {
+  // 다른 가이드로 옮기면 실패 상태를 새로 시작한다.
+  const { slug = '' } = useParams()
   return (
-    <ChunkBoundary>
-      <Suspense fallback={<p role="status">가이드를 불러오는 중…</p>}>
+    <ChunkBoundary key={slug}>
+      <Suspense fallback={<p role="status" style={{ padding: 'var(--space-6) var(--space-4)' }}>가이드를 불러오는 중이에요</p>}>
         <GuideReadPage />
       </Suspense>
     </ChunkBoundary>

@@ -28,7 +28,7 @@ export function guideForNote(noteId: number | string): GuideIndexEntry | null {
 }
 
 // 노트의 가이드 연결로 들어왔다는 표시(history state). 닫으면 브라우저 기록으로 돌아가 노트의 읽던 위치를 되살린다.
-export type GuideEntryState = { from: 'note' }
+export type GuideEntryState = { from: 'note'; noteId: string }
 
 // 노트에서 연결을 누르면 화면과 가이드 파일을 먼저 불러온 뒤에 이동한다.
 // 불러오지 못하면 노트에 그대로 남아 오류와 다시 시도를 보인다(PRD AC-10).
