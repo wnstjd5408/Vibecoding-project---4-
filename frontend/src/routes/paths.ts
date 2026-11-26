@@ -8,6 +8,7 @@ export const userPaths = {
   quiz: '/quiz', // F3-3a 오늘의 퀴즈
   login: '/login', // F4-1 로그인
   myInfo: '/me', // F4-5 내 정보 (F4-4 계정 메뉴는 헤더에서 열린다)
+  guide: '/guides/:slug', // G1 단계별 지도 가이드(MEG-288). 기능 플래그 VITE_GUIDES_ENABLED가 켜진 빌드에만 있다
 } as const
 
 // 운영자(PC) 화면. 운영자 셸(MEG-78)이 이 묶음을 감싸 붙이고, 개별 운영자 화면은 이 아래에 경로를 더한다.
@@ -29,7 +30,7 @@ export const devPaths = {
   mockup: '/dev/mockup', // MEG-113 전체 목업 검토. 제품 경로와 데이터는 분리한다.
   foundationDemo: '/dev/foundation', // 공통 기반 확인용 샘플 화면(MEG-105)
   componentShowcase: '/dev/components', // 공통 컴포넌트를 한 페이지에 모아 디자인과 비교하는 화면(MEG-70)
-  guidePreview: '/dev/guide', // 단계별 지도 가이드 화면을 합성 예시로 확인(MEG-287). 제품 경로는 MEG-288
+  guidePreview: '/dev/guide', // 단계별 지도 가이드 화면을 합성 예시로 확인(MEG-287). 제품 경로는 userPaths.guide
 } as const
 
 // glossaryTerm 경로에 용어 id를 채운다.
@@ -40,6 +41,11 @@ export function glossaryTermPath(termId: number | string): string {
 // noteRead 경로에 노트 id를 채운다.
 export function noteReadPath(noteId: number | string): string {
   return userPaths.noteRead.replace(':noteId', String(noteId))
+}
+
+// guide 경로에 가이드 이름(slug)을 채운다.
+export function guidePath(slug: string): string {
+  return userPaths.guide.replace(':slug', encodeURIComponent(slug))
 }
 
 // reportCorrect 경로에 신고 id를 채운다.

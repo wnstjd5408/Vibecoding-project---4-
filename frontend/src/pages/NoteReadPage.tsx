@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link, useLocation, useParams } from 'react-router'
 import { apiFetch, isApiError } from '../api/client.ts'
 import type { NoteReadResponse } from '../api/types.ts'
 import { AccountMenu } from '../account/AccountMenu.tsx'
@@ -14,6 +14,8 @@ import { TermSheet } from '../glossary/TermSheet.tsx'
 import { isLoginRequired } from '../loginPrompt/isLoginRequired.ts'
 import { useLoginPrompt } from '../loginPrompt/useLoginPrompt.ts'
 import { NoteBody } from '../notes/NoteBody.tsx'
+import { GuideLink } from '../guides/GuideLink.tsx'
+import { GUIDES_ENABLED, guideForNote } from '../guides/catalog.ts'
 import { sourceRangeOfSelection } from '../notes/selection.ts'
 import { userPaths } from '../routes/paths.ts'
 import type { ExplainTarget } from '../ai/explain.ts'
@@ -147,6 +149,35 @@ function NoteRead({ noteId }: { noteId: string }) {
   }, [noteId, key])
 
   const note = current && 'data' in current ? current.data : null
+
+  // 단계별 지도 가이드 연결(MEG-288). 플래그가 켜진 빌드에서 공개 목록에 이 노트의 가이드가 있을 때만 본문 첫머리에 그린다.
+  // 가이드로 갈 때 읽던 위치를 이 기록 칸(location.key)에 적어 두고, 닫기·뒤로 가기로 돌아와 노트를 다 받으면 되살린다(PRD AC-8).
+  const location = useLocation()
+  const linkedGuide = GUIDES_ENABLED && valid ? guideForNote(noteId) : null
+  const guideReturnKey = `guide-return:${location.key}`
+  const leaveForGuide = () => {
+    try {
+      sessionStorage.setItem(guideReturnKey, String(window.scrollY))
+    } catch {
+      // 저장소를 못 쓰면 돌아와서 노트 처음부터 보인다.
+    }
+  }
+  const noteReady = note !== null
+  useLayoutEffect(() => {
+    if (!noteReady || !linkedGuide) return
+    let saved: string | null = null
+    try {
+      saved = sessionStorage.getItem(guideReturnKey)
+      sessionStorage.removeItem(guideReturnKey)
+    } catch {
+      return
+    }
+    if (saved === null) return
+    window.scrollTo({ top: Number(saved) })
+    // 키보드로 연 사람이 돌아온 자리를 알 수 있게 가이드 연결에 포커스를 돌려준다(PRD AC-4). 화면은 움직이지 않는다.
+    articleRef.current?.querySelector<HTMLElement>('[data-guide-link]')?.focus({ preventScroll: true })
+  }, [noteReady, linkedGuide, guideReturnKey])
+
   const noteRevision = note?.revision
   const noteBody = note?.body_markdown
   const loginStatus = auth.status
@@ -396,6 +427,7 @@ function NoteRead({ noteId }: { noteId: string }) {
           <article ref={articleRef} className={styles.article} tabIndex={-1} hidden={showingSource || agentLost}>
             <h1 className={styles.title}>{current.data.title}</h1>
             <p className={styles.meta}>{[...current.data.subjects.map((item) => item.name), ...(current.data.studied_on ? [current.data.studied_on] : [])].join(' · ')}</p>
+            {linkedGuide ? <GuideLink guide={linkedGuide} onLeave={leaveForGuide} /> : null}
             <NoteBody body={current.data.body_markdown} spans={current.data.glossary_spans} images={current.data.images}
               brokenImages={brokenImages} onTerm={showTerm} onImageError={onImageError}
               panelId={wide ? panelId : undefined} expandedTermId={wide ? (term ? openTerm?.termId ?? null : null) : undefined} />

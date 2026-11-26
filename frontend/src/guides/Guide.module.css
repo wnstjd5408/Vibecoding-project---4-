@@ -581,3 +581,66 @@
   outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
+
+/* 가이드 화면 위쪽 막대(MEG-288, 캔버스 G1-1m): 닫기와 화면 이름 */
+.topBar {
+  display: flex;
+  align-items: center;
+  height: var(--app-header-height);
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--surface-300);
+}
+
+.topClose {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.topClose:disabled {
+  color: var(--ink-muted);
+  cursor: progress;
+}
+
+.topLabel {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+
+/* 볼 수 없는 가이드(캔버스 G0-E1m). 제목과 내용을 드러내지 않는다(PRD AC-9). */
+.unavailable {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.unavailableTitle {
+  margin: 0;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 700;
+}
+
+.unavailableBody {
+  margin: 0;
+  font-size: 16px;
+  line-height: 26px;
+}
+
+.unavailableAction {
+  align-self: flex-start;
+}
