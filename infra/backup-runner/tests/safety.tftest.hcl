@@ -51,6 +51,12 @@ run "reject_public_application_repository" {
   expect_failures = [var.operations_repository]
 }
 
+run "reject_renamed_public_application_repository" {
+  command = plan
+  variables { operations_repository = "wnstjd5408/cs-training" }
+  expect_failures = [var.operations_repository]
+}
+
 run "reject_wildcard_subject" {
   command = plan
   variables { operations_oidc_subject = "repo:example/private-backup:*" }

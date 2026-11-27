@@ -15,7 +15,7 @@ variable "operations_repository" {
   description = "사람이 생성하고 private임을 확인한 백업 전용 owner/repo. 공개 앱 저장소는 사용할 수 없다."
   type        = string
   validation {
-    condition     = can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.operations_repository)) && lower(var.operations_repository) != "wnstjd5408/vibecoding-project---4-"
+    condition     = can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.operations_repository)) && !contains(["wnstjd5408/vibecoding-project---4-", "wnstjd5408/cs-training"], lower(var.operations_repository))
     error_message = "공개 앱 저장소와 다른 owner/repo를 입력한다."
   }
 }
