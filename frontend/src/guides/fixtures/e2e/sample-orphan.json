@@ -5,7 +5,7 @@
   "scene": "형식 검사용 합성 예시예요. 클라이언트가 서버에 인사를 보내고 서버가 답해요.",
   "note": "주소와 번호는 모두 설명용 예시예요.",
   "term_key": "example-term",
-  "note_id": "00000000-0000-4000-8000-000000000001",
+  "note_id": "404",
   "revision": 1,
   "review": {
     "reviewer": "예시 검수자",
@@ -13,7 +13,7 @@
     "sources": [
       "합성 예시(근거 자료 없음)"
     ],
-    "record_url": "https://example.com/review/sample-handshake"
+    "record_url": "https://example.com/review/sample-orphan"
   },
   "end_text": "예시 가이드는 여기까지예요.",
   "map": {

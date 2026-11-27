@@ -12,7 +12,7 @@ const WIKI_SPECS = ['agentWiki.spec.ts', 'agentWikiFlagOn.spec.ts']
 //  - guides(4189): 가이드 플래그(VITE_GUIDES_ENABLED)를 켠 빌드. 가이드 시험과, 연결이 붙은 노트에서 기존 노트·용어 시험을 다시 돈다(PRD AC-11).
 //  - agent-disabled(4183): 가이드 플래그를 끈 빌드. guidesOff.spec.ts가 연결과 경로가 없는지 본다.
 const GUIDE_SPECS = ['guides.spec.ts', 'noteRead.spec.ts', 'termSheet.spec.ts']
-const SHARED ={ browserName: 'chromium', viewport: { width: 390, height: 844 }, trace: 'retain-on-failure', screenshot: 'only-on-failure' } as const
+const SHARED = { browserName: 'chromium', viewport: { width: 390, height: 844 }, trace: 'retain-on-failure', screenshot: 'only-on-failure' } as const
 
 export default defineConfig({
   forbidOnly: Boolean(process.env.CI),

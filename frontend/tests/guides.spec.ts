@@ -69,8 +69,8 @@ test('AC-2 지금 단계는 색 말고도 칩의 aria-current와 위치 글자�
   await nextButton(page).click()
   await expectStep(page, 1)
   await expect(page.getByText(/2 \/ 3단계/).first()).toBeVisible()
-  // 지도 안의 지금 단계 번호 상자
-  await expect(map(page).getByText('2', { exact: true }).first()).toBeAttached()
+  // 지도 이름에도 지금 단계 번호가 있다(색을 보지 않는 사용자용)
+  await expect(map(page)).toHaveAttribute('aria-label', /^2단계 지도:/)
 })
 
 test.describe('AC-3 움직임 줄이기', () => {
@@ -124,18 +124,25 @@ test('AC-4 키보드만으로 노트에서 들어가 모든 단계를 지나 닫
   await expect(guideLink(page)).toBeFocused()
 })
 
-test('AC-5 지도를 그리지 못해도 글로 같은 내용을 읽고 빈 그림 자리가 없다', async ({ page }) => {
+test.describe('AC-5 지도를 그리지 못해도 글로 같은 내용을 읽고 빈 그림 자리가 없다', () => {
   // 지도 실패는 개발 미리보기의 failMap으로 만든다(제품 경로와 같은 GuidePage를 그린다).
-  await page.goto('/dev/guide?slug=sample-handshake&failMap=1')
-  await expect(page.getByRole('heading', { level: 2, name: STEPS[0] })).toBeVisible()
-  await nextButton(page).click()
-  await expect(page.getByRole('heading', { level: 2, name: STEPS[1] })).toBeVisible()
-  await expect(page.getByRole('img', { name: /단계 지도:/ })).toHaveCount(0)
-  await expect(page.getByRole('region', { name: '지도 칸' })).toHaveCount(0)
-  // 지도 대신 글 상자가 누가 누구에게 무엇을 보내는지 알려 준다
-  await expect(page.getByText('이 단계에서 오가는 것')).toBeVisible()
-  await expect(page.getByText('인사 · 번호 100').first()).toBeVisible()
-  await expect(page.getByRole('heading', { level: 3, name: '무엇이 바뀌었나' })).toBeVisible()
+  // 넓은 화면(지도 칸이 따로 있는 배치)과 좁은 화면을 모두 본다.
+  for (const width of [390, 1280]) {
+    test(`${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 })
+      await page.goto('/dev/guide?slug=sample-handshake&failMap=1')
+      await expect(page.getByRole('heading', { level: 2, name: STEPS[0] })).toBeVisible()
+      await nextButton(page).click()
+      await expect(page.getByRole('heading', { level: 2, name: STEPS[1] })).toBeVisible()
+      await expect(page.getByRole('img', { name: /단계 지도:/ })).toHaveCount(0)
+      await expect(page.getByRole('region', { name: '지도 칸' })).toHaveCount(0)
+      await expect(page.getByRole('region', { name: /^지도/ })).toHaveCount(0)
+      // 지도 대신 글 상자가 누가 누구에게 무엇을 보내는지 알려 준다
+      await expect(page.getByText('이 단계에서 오가는 것')).toBeVisible()
+      await expect(page.getByText('인사 · 번호 100').first()).toBeVisible()
+      await expect(page.getByRole('heading', { level: 3, name: '무엇이 바뀌었나' })).toBeVisible()
+    })
+  }
 })
 
 test.describe('AC-6 화면 폭', () => {
@@ -184,7 +191,8 @@ test.describe('AC-8 노트에서 열고 닫기', () => {
 
     await page.evaluate(() => window.scrollTo(0, 80))
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(80)
-    await guideLink(page).click()
+    // Playwright의 click은 대상을 화면 안으로 굴려 위치가 바뀔 수 있다. 위치를 그대로 두고 누른다.
+    await guideLink(page).evaluate((el: HTMLElement) => el.click())
     await expect(stepHeading(page, 0)).toBeVisible()
 
     await page.getByRole('button', { name: '닫기' }).click()
@@ -199,7 +207,7 @@ test.describe('AC-8 노트에서 열고 닫기', () => {
     await expect(guideLink(page)).toBeVisible()
     await page.evaluate(() => window.scrollTo(0, 80))
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(80)
-    await guideLink(page).click()
+    await guideLink(page).evaluate((el: HTMLElement) => el.click())
     await expect(stepHeading(page, 0)).toBeVisible()
     await page.goBack()
     await expect(page).toHaveURL(/\/notes\/11$/)
@@ -225,21 +233,27 @@ test.describe('AC-8 노트에서 열고 닫기', () => {
   })
 })
 
-test('AC-9 공개 목록에 없는 가이드는 제목과 내용 없이 볼 수 없다는 안내만 보인다', async ({ page }) => {
-  const files: string[] = []
-  page.on('request', (request) => {
-    // 목록 파일(index.json)은 노트 화면 묶음에 들어 있어 늘 받는다. 가이드 파일 자체를 받는지만 본다.
-    const url = request.url()
-    if (/\/(content|fixtures)\/.+\.json/.test(url) && !url.includes('index.json')) files.push(url)
-  })
-  await page.goto('/guides/no-such-guide')
-  await expect(page.getByRole('heading', { level: 1, name: '이 가이드는 지금 볼 수 없어요' })).toBeVisible()
-  await expect(page.getByRole('link', { name: '노트 목록으로' })).toBeVisible()
-  await expect(page.getByRole('group', { name: '단계 고르기' })).toHaveCount(0)
-  await expect(page.getByRole('img', { name: /단계 지도:/ })).toHaveCount(0)
-  expect(files).toEqual([])
-  await page.getByRole('link', { name: '노트 목록으로' }).click()
-  await expect(page).toHaveURL(/\/$/)
+test.describe('AC-9 공개 목록에 없는 가이드', () => {
+  // sample-unlisted는 파일은 있지만 시험용 목록(fixtures/e2e/index.json)에 없다. 공개를 멈춘 가이드와 같은 상태다.
+  for (const slug of ['sample-unlisted', 'no-such-guide']) {
+    test(`${slug}: 제목과 내용 없이 볼 수 없다는 안내만 보이고 가이드 파일을 받지 않는다`, async ({ page }) => {
+      const files: string[] = []
+      page.on('request', (request) => {
+        // 목록 파일(index.json)은 노트 화면 묶음에 들어 있어 늘 받는다. 가이드 파일 자체를 받는지만 본다.
+        const url = request.url()
+        if (/\/(content|fixtures)\/.+\.json/.test(url) && !url.includes('index.json')) files.push(url)
+      })
+      await page.goto(`/guides/${slug}`)
+      await expect(page.getByRole('heading', { level: 1, name: '이 가이드는 지금 볼 수 없어요' })).toBeVisible()
+      await expect(page.getByRole('link', { name: '노트 목록으로' })).toBeVisible()
+      await expect(page.getByText('예시: 목록에 없는 가이드')).toHaveCount(0)
+      await expect(page.getByRole('group', { name: '단계 고르기' })).toHaveCount(0)
+      await expect(page.getByRole('img', { name: /단계 지도:/ })).toHaveCount(0)
+      expect(files).toEqual([])
+      await page.getByRole('link', { name: '노트 목록으로' }).click()
+      await expect(page).toHaveURL(/\/$/)
+    })
+  }
 })
 
 test.describe('AC-10 가이드를 불러오지 못했을 때', () => {
@@ -266,8 +280,8 @@ test.describe('AC-10 가이드를 불러오지 못했을 때', () => {
       .poll(async () => {
         if (new URL(page.url()).pathname === GUIDE) return true
         const again = page.getByRole('alert').getByRole('button', { name: '다시 시도' })
-        if (await again.isVisible().catch(() => false)) await again.click().catch(() => {})
-        else if (await guideLink(page).isVisible().catch(() => false)) await guideLink(page).click().catch(() => {})
+        if (await again.isVisible().catch(() => false)) await again.click({ timeout: 500 }).catch(() => {})
+        else if (await guideLink(page).isVisible().catch(() => false)) await guideLink(page).click({ timeout: 500 }).catch(() => {})
         return false
       }, { timeout: 15_000 })
       .toBe(true)
@@ -284,10 +298,12 @@ test.describe('AC-10 가이드를 불러오지 못했을 때', () => {
     await page.goto(GUIDE)
     await expect(page.getByRole('heading', { name: '가이드를 불러오지 못했어요' })).toBeVisible()
     await expect(page.getByRole('button', { name: '닫기' })).toBeVisible()
+    // 다시 시도를 누른 뒤 불러오는 동안에는 버튼이 없다. 보일 때만 짧게 누른다(없는 버튼을 기다리며 멈추지 않게).
     await expect
       .poll(async () => {
         if (await stepHeading(page, 0).isVisible().catch(() => false)) return true
-        await page.getByRole('button', { name: '다시 시도' }).click().catch(() => {})
+        const retry = page.getByRole('button', { name: '다시 시도' })
+        if (await retry.isVisible().catch(() => false)) await retry.click({ timeout: 500 }).catch(() => {})
         return false
       }, { timeout: 15_000 })
       .toBe(true)
@@ -295,7 +311,14 @@ test.describe('AC-10 가이드를 불러오지 못했을 때', () => {
 })
 
 test('AC-11 가이드를 보는 동안 기록 요청을 보내지 않는다', async ({ page }) => {
+  // 가짜 API를 거치지 않고 네트워크로 나가는 /api/ 요청도 함께 본다
+  let guideOpen = false
+  const network: string[] = []
+  page.on('request', (request) => {
+    if (guideOpen && new URL(request.url()).pathname.startsWith('/api/')) network.push(request.url())
+  })
   await openFromNote(page)
+  guideOpen = true
   // 기록 장치가 동작하는지 먼저 본다: 노트 화면은 E05를 불렀다
   expect(await page.evaluate(() => (globalThis as { __mockApiCalls?: string[] }).__mockApiCalls ?? [])).toContain('GET /api/notes/11')
   // 노트 화면에서 부른 요청은 빼고, 가이드 화면에 들어온 뒤의 요청만 본다
@@ -310,4 +333,5 @@ test('AC-11 가이드를 보는 동안 기록 요청을 보내지 않는다', as
   await expectStep(page, 0)
   const calls = await page.evaluate(() => (globalThis as { __mockApiCalls?: string[] }).__mockApiCalls ?? [])
   expect(calls).toEqual([])
+  expect(network).toEqual([])
 })
