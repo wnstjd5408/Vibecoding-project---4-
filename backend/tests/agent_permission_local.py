@@ -184,10 +184,13 @@ def assert_404(response, label=""):
 
 
 def ask(client, conv, key=None, **extra):
-    """E29 한 번. Accept JSON으로 보낸다(거부는 스트림 전에 JSON 오류이고, 재생은 E30과 같은 턴 객체다)."""
+    """E29 한 번. Accept JSON으로 보낸다(거부는 스트림 전에 JSON 오류이고, 재생은 E30과 같은 턴 객체다).
+
+    질문은 저장한 1턴과 같은 문구다. 같은 키 재전송이 본문까지 비교하게 바뀌어도 재생 대조군이 그대로 맞는다.
+    """
     headers = {**ORIGIN, "Idempotency-Key": key or str(uuid4()), "Accept": "application/json"}
     return client.post(f"/api/ai/conversations/{conv}/turns", headers=headers,
-                       json={"question": {"kind": "free", "text": "Synthetic denied question"}, **extra})
+                       json={"question": {"kind": "free", "text": "Synthetic question 1"}, **extra})
 
 
 def call(client, endpoint, turn=None, conv=None, key=None):
@@ -212,6 +215,10 @@ def denied(matrix, role, checks):
         for endpoint, turn, conv, *key in checks:
             assert_404(call(client, endpoint, turn=turn, conv=conv, key=key[0] if key else None), endpoint)
     assert snapshot(matrix) == before, "Denied CS Agent request changed data"
+    assert_no_writes(matrix, offset)
+
+
+def assert_no_writes(matrix, offset):
     # 속도 제한 카운터와 세션 갱신은 MEG-69와 같이 의도된 제어 동작이라 쓰기로 보지 않는다.
     allowed = {"/rest/v1/rpc/rate_limit_hit", "/rest/v1/rpc/rate_limit_release", "/auth/v1/token", "/auth/v1/logout"}
     writes = [(m, p) for m, p in matrix.calls[offset:] if m not in ("GET", "HEAD") and p not in allowed]
@@ -291,12 +298,13 @@ def test_selection_from_another_note_is_refused(case, local):
     before, offset = snapshot(local), len(local.calls)
     extra = {"add_selections": [{"note_id": SELECTED, "note_revision": 1, "start": 0, "end": 8}]}
     with local.client("member") as client:
-        response = ask(client, case["cited_conv"], **extra)
-    assert response.status_code == 422, response.text
-    assert "add_selections.note_id" in response.text
+        # 노트에서 연 대화(대화 노트 CONTEXT)에 다른 노트를 붙이는 경우와, 노트 없이 연 대화에 붙이는 경우.
+        for conv in (case["note_conv"], case["cited_conv"]):
+            response = ask(client, conv, **extra)
+            assert response.status_code == 422, response.text
+            assert "add_selections.note_id" in response.text
     assert snapshot(local) == before
-    writes = [(m, p) for m, p in local.calls[offset:] if m not in ("GET", "HEAD") and "rate_limit" not in p]
-    assert not writes
+    assert_no_writes(local, offset)
 
 
 # --- 비공개·없는·지운 노트로 대화를 열기(E27) ---
@@ -313,8 +321,7 @@ def test_member_cannot_open_a_conversation_on_a_private_or_missing_note(case, lo
             "origin": "note", "note_id": note, "note_revision": 1, "selection": {"start": 0, "end": 8}})
     assert_404(response)
     assert snapshot(local) == before
-    writes = [(m, p) for m, p in local.calls[offset:] if m not in ("GET", "HEAD") and "rate_limit" not in p]
-    assert not writes
+    assert_no_writes(local, offset)
 
 
 def test_member_can_open_a_conversation_on_a_public_note(case, local):
@@ -345,7 +352,8 @@ def test_conversation_closes_when_its_note_is_revoked(case, local, change):
     assert body.status_code == 200
     first = body.json()["turns"][0]
     assert first["hidden"]["reason"] == "source_revoked" and "result" not in first
-    assert CONTEXT_TEXT[:40] not in body.text
+    for leaked in (CONTEXT_TEXT[:40], "Synthetic stored answer"):
+        assert leaked not in body.text, leaked
     assert_404(source)
 
 
