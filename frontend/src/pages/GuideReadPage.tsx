@@ -62,6 +62,11 @@ function GuideLoaded({ entry }: { entry: GuideIndexEntry }) {
     }
   }, [entry.slug, attempt])
 
+  // 같은 탭에서 실패한 파일을 다시 받아도 또 실패할 수 있다(브라우저가 실패한 모듈을 기억하는 경우).
+  // 노트 쪽 연결(GuideLink)과 같이, 두 번째 실패부터 다시 시도는 페이지를 새로 고친다(MEG-305, PRD AC-10).
+  // 새로 고쳐도 기록(history state)이 남아 닫기는 전과 같이 동작한다.
+  const retry = () => (attempt >= 1 ? window.location.reload() : setAttempt((n) => n + 1))
+
   const header = (
     <div className={styles.topBar}>
       <button type="button" className={styles.topClose} onClick={close.run} disabled={close.busy}>
@@ -80,7 +85,7 @@ function GuideLoaded({ entry }: { entry: GuideIndexEntry }) {
           <StateMessage kind="loading" title={MESSAGES.loading} headingLevel={2} />
         ) : (
           <StateMessage kind="error" title={MESSAGES.failed} headingLevel={2}
-            action={<Button variant="primary" onClick={() => setAttempt((n) => n + 1)}>{MESSAGES.retry}</Button>} />
+            action={<Button variant="primary" onClick={retry}>{MESSAGES.retry}</Button>} />
         )}
       </main>
     </div>

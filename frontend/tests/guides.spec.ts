@@ -310,6 +310,32 @@ test.describe('AC-10 가이드를 불러오지 못했을 때', () => {
   })
 })
 
+test('AC-10 주소로 바로 들어와 두 번 실패하면 다시 시도가 페이지를 새로 고쳐 연다 (MEG-305)', async ({ page }) => {
+  // 처음 두 번은 가이드 파일 요청을 막는다. 같은 탭에서 다시 받아도 실패하는 경우를 흉내 낸다.
+  // 새로 고쳤는지는 window에 남긴 표시가 사라졌는지로 본다(다시 부르기만 하면 표시가 남는다).
+  let blocked = true
+  await page.route(GUIDE_FILE, (route) => (blocked ? route.abort() : route.continue()))
+  await page.goto(GUIDE)
+  const failed = page.getByRole('heading', { name: '가이드를 불러오지 못했어요' })
+  const retry = page.getByRole('button', { name: '다시 시도' })
+  await expect(failed).toBeVisible()
+  await page.evaluate(() => {
+    ;(window as { __beforeReload?: boolean }).__beforeReload = true
+  })
+
+  // 첫 실패 뒤: 새로 고치지 않고 다시 불러온다(그래도 막혀 있어 다시 실패한다)
+  await retry.click()
+  await expect(failed).toBeVisible()
+  expect(await page.evaluate(() => (window as { __beforeReload?: boolean }).__beforeReload)).toBe(true)
+
+  // 두 번째 실패 뒤: 페이지를 새로 고치고, 이번에는 받아서 연다
+  blocked = false
+  await retry.click()
+  await expect(stepHeading(page, 0)).toBeVisible()
+  expect(await page.evaluate(() => (window as { __beforeReload?: boolean }).__beforeReload)).toBeUndefined()
+  await expect(page).toHaveURL(new RegExp(`${GUIDE}$`))
+})
+
 test('AC-11 가이드를 보는 동안 기록 요청을 보내지 않는다', async ({ page }) => {
   // 가짜 API를 거치지 않고 네트워크로 나가는 /api/ 요청도 함께 본다
   let guideOpen = false
