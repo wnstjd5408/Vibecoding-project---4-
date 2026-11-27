@@ -31,8 +31,6 @@ NOTE_CITED = 132111  # 답변이 인용하는 노트. 시나리오 3에서 운�
 
 # 질문에 이 낱말이 있으면 가짜 모델이 답하기 전에 기다린다. 그 사이에 시험이 스트림을 끊는다(시나리오 1).
 SLOW_MARKER = "천천히"
-# 2차 점검·보완 프롬프트의 첫 줄(app.agent_output._REVIEW_RULES). 앱을 import하지 않고 글자로 가른다.
-REVIEW_HEAD = "당신은 학습 도우미가 쓴 답(1차 답)을 점검하는 검토자입니다."
 SLOW_SECONDS = 6.0
 # 가짜 답변의 추천 질문. 인용 노트의 낱말(합성체이닝)이 들어 있어 다시 보내도 근거를 찾는다.
 SUGGESTIONS = ("합성체이닝을 예시로 보여 줘", "합성체이닝의 단점은 뭐야?")
@@ -69,7 +67,7 @@ do $$ begin
   end if;
 end $$;
 delete from public.ai_conversations where user_id = '{MEMBER_A}';
-delete from public.ai_usage_ledger where user_id = '{MEMBER_A}' and kind in ('agent', 'agent_review');
+delete from public.ai_usage_ledger where user_id = '{MEMBER_A}' and kind = 'agent';
 delete from public.rate_limit_counters;
 delete from public.notes where id in ({NOTE_OPEN}, {NOTE_CITED});
 insert into public.notes (id, title, body_markdown, is_published) overriding system value values
@@ -102,11 +100,7 @@ class FakeModel:
         prompt = "".join(
             block.get("text", "") for message in kwargs.get("messages", []) for block in message.get("content", [])
         )
-        # 2차 점검·보완(MEG-282 D2) 프롬프트도 근거 문단을 담으므로 먼저 가른다. 2차는 늘 "변경 없음"이다.
-        if prompt.startswith(REVIEW_HEAD):
-            kind = "agent_review"
-        else:
-            kind = "agent" if "근거 문단" in prompt else "other"
+        kind = "agent" if "근거 문단" in prompt else "other"
         with self._lock:
             number = len(self.calls) + 1
             call = {"n": number, "kind": kind, "at": time.time(), "done_at": None}
@@ -115,9 +109,7 @@ class FakeModel:
             time.sleep(SLOW_SECONDS)
         with self._lock:
             call["done_at"] = time.time()
-        if kind == "agent_review":
-            text = '{"unchanged": true}'
-        elif kind == "agent":
+        if kind == "agent":
             text = json.dumps({
                 "state": "answered",
                 "sections": [{"heading": "합성 답변", "body": f"합성 가짜 답변 {number}입니다. 근거 문단을 인용합니다 [1]."}],

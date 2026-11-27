@@ -303,29 +303,6 @@ def test_timeout_retries_once_with_a_new_reservation_and_both_settle_as_fallback
     assert (api_error.code, CATALOG[(api_error.code, None)][0]) == ("ai_unavailable", 502)
 
 
-def test_max_attempts_one_turns_off_the_in_call_retry():
-    # CS Agent 2차(MEG-282 D2)는 재시도하지 않는다. 재시도 가능한 오류도 한 번만 부르고 그 오류를 낸다.
-    store = FakeStore()
-    bedrock = FakeBedrock(timeout(), OK)
-
-    with pytest.raises(AiCallError):
-        run(store, bedrock, max_attempts=1)
-
-    assert bedrock.calls == 1
-    assert [r["key"] for r in store.reserved] == [f"{USER}:key-1:1"]
-    assert store.settled == [(101, "reserved_fallback", {})]
-    with pytest.raises(ValueError):
-        run(FakeStore(), FakeBedrock(OK), max_attempts=0)
-
-
-def test_agent_review_spec_and_key():
-    from app.ai_ledger import CALL_SPECS, KIND_AGENT_REVIEW, agent_request_key, agent_review_request_key
-
-    spec = CALL_SPECS[KIND_AGENT_REVIEW]
-    assert (KIND_AGENT_REVIEW, spec.max_tokens, spec.effort, spec.daily_count_limit) == ("agent_review", 1500, "none", None)
-    assert agent_review_request_key(USER, "k") == f"{USER}:agent-review:k" != agent_request_key(USER, "k")
-
-
 def test_retry_success_returns_second_attempt():
     store = FakeStore()
 

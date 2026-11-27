@@ -41,8 +41,6 @@ KIND_EXPLAIN = "explain"
 KIND_QUIZ = "quiz"
 KIND_FOLLOWUP = "followup"
 KIND_AGENT = "agent"
-# CS Agent 2차 점검·보완 호출(MEG-282 설계 v0.2 4절 D2). 하루 턴 수 한도에 세지 않고 금액 한도와 agent 몫(70%)에는 넣는다.
-KIND_AGENT_REVIEW = "agent_review"
 
 
 @dataclass(frozen=True)
@@ -61,8 +59,6 @@ CALL_SPECS: dict[str, CallSpec] = {
     # CS Agent E29(MEG-236). 출력 1,500토큰은 Q4 임시값, 하루 20턴은 D4(사용자 결정 2026-11-18, 시작값)다.
     # agent 금액 몫 70%는 SQL 기본값을 쓴다(MEG-232 결정 1). 실측(MEG-236 AC-5) 뒤 다시 정한다.
     KIND_AGENT: CallSpec(max_tokens=1500, effort="none", daily_count_limit=20),
-    # 2차 점검·보완(MEG-282 D2). 출력 상한은 1차와 같고 추론은 none으로 시작한다. 횟수 한도는 없다(9절 결정 5).
-    KIND_AGENT_REVIEW: CallSpec(max_tokens=1500, effort="none", daily_count_limit=None),
 }
 # 한 사용자가 하루 전체 예산에서 쓸 수 있는 몫(5.3)
 USER_DAILY_SHARE = Decimal("0.5")
@@ -348,14 +344,6 @@ def agent_request_key(user_id: str, idempotency_key: str) -> str:
     return f"{user_id}:agent:{idempotency_key}"
 
 
-def agent_review_request_key(user_id: str, idempotency_key: str) -> str:
-    """E29 2차 점검·보완 원장 키의 앞부분(MEG-282 D2). {user_id}:agent-review:{Idempotency-Key}:{attempt_no}다.
-
-    1차 키와 겹치지 않는다(같은 키면 중복 키 오류). 2차는 앱 안 재시도가 없어 시도 번호는 늘 1이다.
-    """
-    return f"{user_id}:agent-review:{idempotency_key}"
-
-
 def agent_explain_request_key(user_id: str, idempotency_key: str) -> str:
     """E29 노트 용어 질문의 explain 원장 키 앞부분(MEG-243, spec 9절). {user_id}:agent-explain:{Idempotency-Key}:{attempt_no}다.
 
@@ -416,11 +404,8 @@ def run_ai_call(
     first_reservation: Reservation | None = None,
     client_factory: Callable = make_client,
     sleep: Callable[[float], None] = time.sleep,
-    max_attempts: int = MAX_ATTEMPTS,
 ) -> AiOutcome:
     """예약 → 호출 → 정산. 원장 키는 {request_key}:{attempt_no}다.
-
-    max_attempts: 호출 안 시도 횟수(기본 2 = 재시도 1회). 1이면 재시도하지 않는다(CS Agent 2차, MEG-282 D2).
 
     동기 함수다. Bedrock 호출과 스로틀링 대기가 스레드를 막으므로 async 엔드포인트에서 직접 부르지 않는다
     (FastAPI의 일반 def 엔드포인트는 스레드 풀에서 돈다).
@@ -456,7 +441,6 @@ def run_ai_call(
             client_factory=client_factory,
             sleep=sleep,
             spent=spent,
-            max_attempts=max_attempts,
         )
     except Exception as error:
         if spent:
@@ -479,16 +463,13 @@ def _call_attempts(
     client_factory: Callable,
     sleep: Callable[[float], None],
     spent: list[int],
-    max_attempts: int = MAX_ATTEMPTS,
 ) -> AiOutcome:
     """run_ai_call의 예약 → 호출 → 정산 반복. 예약할 때마다 원장 id를 spent에 더한다."""
     reserved_usd = budget.reserve_amount(prompt, spec.max_tokens)
     client = None
     last_error: AiCallError | None = None
 
-    if max_attempts < 1:
-        raise ValueError("max_attempts must be at least 1")
-    for attempt_no in range(1, max_attempts + 1):
+    for attempt_no in range(1, MAX_ATTEMPTS + 1):
         if attempt_no == 1 and first_reservation is not None:
             reservation = first_reservation
         else:
@@ -533,7 +514,7 @@ def _call_attempts(
             )
             _settle_failure(store, budget, reservation, error)
             last_error = error
-            if error.retryable and attempt_no < max_attempts:
+            if error.retryable and attempt_no < MAX_ATTEMPTS:
                 if error.code == THROTTLING_CODE:
                     # 스로틀링은 바로 다시 부르면 또 걸리므로 잠깐 쉰다.
                     sleep(THROTTLE_BACKOFF_SECONDS)
