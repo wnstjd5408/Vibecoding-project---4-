@@ -4,6 +4,8 @@ import NoteListPage from '../pages/NoteListPage.tsx'
 import NoteReadPage from '../pages/NoteReadPage.tsx'
 import MyInfoPage from '../pages/MyInfoPage.tsx'
 import QuizPage from '../pages/QuizPage.tsx'
+import { GuideRoute } from '../pages/LazyGuideRead.tsx'
+import { GUIDES_ENABLED } from '../guides/catalog.ts'
 import { userPaths } from './paths.ts'
 
 // 사용자(모바일) 화면 경로 묶음. 아직 없는 화면이 생기면 임시 빈 페이지(Placeholder)로 연결해 두고, 해당 티켓이 그 줄의 element를 교체한다.
@@ -13,4 +15,6 @@ export const userRoutes: RouteObject[] = [
   { path: userPaths.quiz, element: <QuizPage /> },
   { path: userPaths.login, element: <LoginPage /> },
   { path: userPaths.myInfo, element: <MyInfoPage /> },
+  // 단계별 지도 가이드(MEG-288). 플래그가 꺼진 빌드에는 경로가 없어 없는 경로(404) 화면이 보인다.
+  ...(GUIDES_ENABLED ? [{ path: userPaths.guide, element: <GuideRoute /> }] : []),
 ]
