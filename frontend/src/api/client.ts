@@ -96,6 +96,12 @@ async function realTransport(url: string, init: ApiRequestInit): Promise<Transpo
 
 function mockTransport(url: string, init: ApiRequestInit): Transported {
   const parsed = new URL(url, 'http://mock.invalid')
+  // 개발 서버의 가짜 API는 네트워크를 타지 않아 Playwright가 요청을 볼 수 없다.
+  // 시험이 「이 화면은 기록 요청을 보내지 않는다」를 확인할 수 있게 부른 경로를 남긴다(MEG-289, PRD AC-11). 운영 빌드에는 없다.
+  if (import.meta.env.DEV) {
+    const log = ((globalThis as { __mockApiCalls?: string[] }).__mockApiCalls ??= [])
+    log.push(`${init.method ?? 'GET'} ${parsed.pathname}`)
+  }
   return handleMock({
     method: init.method ?? 'GET',
     path: parsed.pathname,
