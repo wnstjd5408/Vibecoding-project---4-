@@ -57,7 +57,7 @@ data "aws_iam_policy_document" "trust" {
     condition {
       test     = "StringEquals"
       variable = "${local.oidc_host}:sub"
-      values   = ["repo:${var.github_subject_repository}:environment:${each.value}"]
+      values   = [for r in concat([var.github_subject_repository], var.github_subject_repository_aliases) : "repo:${r}:environment:${each.value}"]
     }
   }
 }

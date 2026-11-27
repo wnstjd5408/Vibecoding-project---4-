@@ -222,7 +222,7 @@ data "aws_iam_policy_document" "trust" {
     condition {
       test     = "StringEquals"
       variable = "${local.oidc_host}:sub"
-      values   = [var.backup_oidc_subject != null ? var.backup_oidc_subject : "repo:${var.github_subject_repository}:environment:${var.backup_environment}"]
+      values   = var.backup_oidc_subject != null ? [var.backup_oidc_subject] : [for r in concat([var.github_subject_repository], var.github_subject_repository_aliases) : "repo:${r}:environment:${var.backup_environment}"]
     }
   }
 }
