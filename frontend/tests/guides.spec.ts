@@ -314,17 +314,24 @@ test('AC-10 주소로 바로 들어와 두 번 실패하면 다시 시도가 페
   // 처음 두 번은 가이드 파일 요청을 막는다. 같은 탭에서 다시 받아도 실패하는 경우를 흉내 낸다.
   // 새로 고쳤는지는 window에 남긴 표시가 사라졌는지로 본다(다시 부르기만 하면 표시가 남는다).
   let blocked = true
-  await page.route(GUIDE_FILE, (route) => (blocked ? route.abort() : route.continue()))
+  let aborts = 0
+  await page.route(GUIDE_FILE, (route) => {
+    if (!blocked) return route.continue()
+    aborts += 1
+    return route.abort()
+  })
   await page.goto(GUIDE)
   const failed = page.getByRole('heading', { name: '가이드를 불러오지 못했어요' })
   const retry = page.getByRole('button', { name: '다시 시도' })
   await expect(failed).toBeVisible()
+  expect(aborts).toBe(1)
   await page.evaluate(() => {
     ;(window as { __beforeReload?: boolean }).__beforeReload = true
   })
 
   // 첫 실패 뒤: 새로 고치지 않고 다시 불러온다(그래도 막혀 있어 다시 실패한다)
   await retry.click()
+  await expect.poll(() => aborts).toBe(2)
   await expect(failed).toBeVisible()
   expect(await page.evaluate(() => (window as { __beforeReload?: boolean }).__beforeReload)).toBe(true)
 
