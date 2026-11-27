@@ -26,8 +26,8 @@ Supabase 계정 로그인, 원격 프로젝트 연결, 운영 키 복사는 하�
 새 작업 폴더를 만드는 예시입니다. 이미 전용 worktree가 있다면 그 폴더에서 시작하세요. 다른 작업이 진행 중인 폴더의 브랜치를 바꾸지 않습니다.
 
 ```powershell
-git clone https://github.com/wnstjd5408/Vibecoding-project---4-.git
-cd Vibecoding-project---4-
+git clone https://github.com/wnstjd5408/cs-training.git
+cd cs-training
 git switch -c meg-89-favorites-api
 cd backend
 uv sync --frozen --python 3.12

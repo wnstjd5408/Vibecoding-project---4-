@@ -16,7 +16,7 @@ class RulesetTest(unittest.TestCase):
     def actual_snapshot(self):
         snapshot = copy.deepcopy(self.policy)
         snapshot.update(id=42, source_type="Repository",
-                        source="wnstjd5408/Vibecoding-project---4-",
+                        source="wnstjd5408/cs-training",
                         current_user_can_bypass="never")
         return snapshot
 

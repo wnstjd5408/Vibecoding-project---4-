@@ -33,15 +33,15 @@ variable "cloudtrail_bucket_name" {
 variable "github_subject_repository" {
   description = "CD를 실행할 GitHub 저장소의 sub 클레임 표기(owner@ID/name@ID). 역할 신뢰 정책의 sub를 이 저장소로 제한한다."
   type        = string
-  default     = "wnstjd5408@73061276/Vibecoding-project---4-@1421732974"
+  default     = "wnstjd5408@73061276/cs-training@1421732974"
 }
 
-# MEG-301: 저장소 이름을 cs-training으로 바꾸는 동안 옛 이름과 새 이름의 sub를 함께 허용한다.
-# 소유자·저장소 숫자 ID는 이름을 바꿔도 그대로다. 이름 변경과 후속 PR이 끝나면 이 목록을 비운다.
+# 저장소 이름을 바꾸는 동안 옛 이름과 새 이름의 sub를 함께 허용할 때 쓴다(MEG-301에서 사용).
+# 소유자·저장소 숫자 ID는 이름을 바꿔도 그대로다. 평소에는 비워 둔다.
 variable "github_subject_repository_aliases" {
   description = "github_subject_repository와 함께 신뢰할 추가 sub 표기(owner@ID/name@ID). 저장소 이름 변경 기간에만 쓴다."
   type        = list(string)
-  default     = ["wnstjd5408@73061276/cs-training@1421732974"]
+  default     = []
   validation {
     condition     = alltrue([for r in var.github_subject_repository_aliases : can(regex("^[A-Za-z0-9_.-]+@[0-9]+/[A-Za-z0-9_.-]+@[0-9]+$", r))])
     error_message = "owner@ID/name@ID 형식만 허용한다(와일드카드 금지)."

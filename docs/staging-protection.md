@@ -49,7 +49,7 @@ AI 실행 환경에 관리자 자격증명을 넣지 않는다. 김준성이 별
 
 ```powershell
 # 사람 관리자 전용: 위 선행 조건과 설정안을 수락한 후 1회 생성
-gh api --method POST repos/wnstjd5408/Vibecoding-project---4-/rulesets --input .github/rulesets/staging-protection.json
+gh api --method POST repos/wnstjd5408/cs-training/rulesets --input .github/rulesets/staging-protection.json
 ```
 
 이 PR의 병합이나 로컬 검증 성공은 위 설정의 적용 증거가 아니다.
@@ -66,13 +66,13 @@ python -m unittest discover -s tools -p "test_check_staging_ruleset.py" -v
 첫 명령은 **제안 파일** 검사다. 실제 설정은 관리자 GET 응답을 별도의 비공개 임시 경로에 저장한 뒤 확인한다. `<ruleset-id>`는 적용 결과의 실제 ID로 바꾼다.
 
 ```powershell
-gh api repos/wnstjd5408/Vibecoding-project---4-/rulesets/<ruleset-id> | Set-Content -Encoding utf8 $env:TEMP/staging-ruleset-after.json
+gh api repos/wnstjd5408/cs-training/rulesets/<ruleset-id> | Set-Content -Encoding utf8 $env:TEMP/staging-ruleset-after.json
 python tools/check_staging_ruleset.py $env:TEMP/staging-ruleset-after.json --actual
-gh api repos/wnstjd5408/Vibecoding-project---4-/rules/branches/staging
-gh api repos/wnstjd5408/Vibecoding-project---4-/branches/staging --jq '{name,protected,sha:.commit.sha}'
+gh api repos/wnstjd5408/cs-training/rules/branches/staging
+gh api repos/wnstjd5408/cs-training/branches/staging --jq '{name,protected,sha:.commit.sha}'
 ```
 
-`--actual`은 bypass 목록의 명시적 빈 배열과 `current_user_can_bypass: never`, 양의 정수 `id`, `source_type: Repository`, `source: wnstjd5408/Vibecoding-project---4-`도 요구한다. 임시 시험 저장소의 응답이나 출처를 알 수 없는 파일은 실제 대상의 적용 증거로 통과시키지 않는다. 권한 때문에 필드가 보이지 않으면 실패하며 관리자가 조회한 증거가 필요하다. AI 계정에서도 `current_user_can_bypass`를 별도로 조회한다. 응답의 추가 시각 등은 허용하되 보호 항목 누락·다른 대상·중복 규칙·다른 검사/앱·strict 해제는 거부한다. 오프라인 파일 검사는 응답의 진위나 최신성을 보장하지 않으므로 관리자가 방금 조회한 원본을 사용한다.
+`--actual`은 bypass 목록의 명시적 빈 배열과 `current_user_can_bypass: never`, 양의 정수 `id`, `source_type: Repository`, `source: wnstjd5408/cs-training`도 요구한다. 임시 시험 저장소의 응답이나 출처를 알 수 없는 파일은 실제 대상의 적용 증거로 통과시키지 않는다. 권한 때문에 필드가 보이지 않으면 실패하며 관리자가 조회한 증거가 필요하다. AI 계정에서도 `current_user_can_bypass`를 별도로 조회한다. 응답의 추가 시각 등은 허용하되 보호 항목 누락·다른 대상·중복 규칙·다른 검사/앱·strict 해제는 거부한다. 오프라인 파일 검사는 응답의 진위나 최신성을 보장하지 않으므로 관리자가 방금 조회한 원본을 사용한다.
 
 이 검증기는 **단일 ruleset의 구성**을 대조한다. 다른 ruleset/기존 branch protection의 중첩, CODEOWNERS의 실제 승인자 자격, 서버의 push 거부, 실제 CI 내용, 배포 차단은 보장하지 않는다. 전체 실효 규칙도 사람이 확인한다.
 
