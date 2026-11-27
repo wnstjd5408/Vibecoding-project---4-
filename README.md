@@ -1,4 +1,4 @@
-# Vibecoding project 4
+# CS Training
 
 프런트·백엔드 공통: [Docker Compose 실행 안내](docs/local-compose-guide.md)로 기존 로컬 DB와 앱을 준비·실행·종료할 수 있다.
 
@@ -20,8 +20,8 @@ clone한 뒤 아래 [설정](#설정) 1~3단계를 순서대로 진행한다. �
 
 1. **clone** (3분)
    ```bash
-   git clone https://github.com/wnstjd5408/Vibecoding-project---4-.git
-   cd Vibecoding-project---4-
+   git clone https://github.com/wnstjd5408/cs-training.git
+   cd cs-training
    ```
 2. **GitHub 로그인** (3분)
    ```bash
