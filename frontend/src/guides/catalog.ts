@@ -15,7 +15,12 @@ export function isGuidesOnValue(value: unknown): boolean {
 export const GUIDES_ENABLED: boolean = isGuidesOnValue(import.meta.env.VITE_GUIDES_ENABLED)
 
 // 빌드 전 검사(npm run check:guides)가 목록 파일의 형식과 각 가이드의 공개 기준을 확인한다.
-const INDEX: readonly GuideIndexEntry[] = indexData as GuideIndexEntry[]
+// 시험용 목록(MEG-289): 개발 서버에서 VITE_GUIDES_E2E=1일 때만 공개 목록 대신 fixtures/e2e/index.json을 쓴다.
+// 공개 목록(content/index.json)은 비어 있어도 Playwright가 노트 연결과 /guides/* 화면을 시험할 수 있게 한다.
+// 운영 빌드(import.meta.env.DEV=false)에서는 이 분기가 빠져 시험용 목록이 묶이지 않는다.
+export const GUIDES_E2E: boolean = import.meta.env.DEV && import.meta.env.VITE_GUIDES_E2E === '1'
+const E2E_INDEX = GUIDES_E2E ? import.meta.glob<GuideIndexEntry[]>('./fixtures/e2e/index.json', { eager: true, import: 'default' }) : {}
+const INDEX: readonly GuideIndexEntry[] = GUIDES_E2E ? (Object.values(E2E_INDEX)[0] ?? []) : (indexData as GuideIndexEntry[])
 
 // 공개 목록에 있는 가이드. 목록에 없으면 null이다(공개를 멈췄거나 지웠거나 없는 이름).
 export function findGuide(slug: string): GuideIndexEntry | null {

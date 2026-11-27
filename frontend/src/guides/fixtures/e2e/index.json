@@ -1,0 +1,14 @@
+[
+  {
+    "slug": "sample-handshake",
+    "title": "예시: 인사 주고받기",
+    "note_id": "11",
+    "term_key": "example-term"
+  },
+  {
+    "slug": "sample-orphan",
+    "title": "예시: 노트가 사라진 가이드",
+    "note_id": "404",
+    "term_key": "example-term"
+  }
+]
