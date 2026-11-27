@@ -28,5 +28,10 @@
     "paths": [
       "review.reviewed_on"
     ]
+  },
+  "missing-mobile.json": {
+    "paths": [
+      "map.nodes_mobile"
+    ]
   }
 }

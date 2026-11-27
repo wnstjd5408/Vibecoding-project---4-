@@ -1,0 +1,266 @@
+{
+  "schema_version": 1,
+  "slug": "missing-mobile",
+  "title": "예시: 인사 주고받기",
+  "scene": "형식 검사용 합성 예시예요. 클라이언트가 서버에 인사를 보내고 서버가 답해요.",
+  "note": "주소와 번호는 모두 설명용 예시예요.",
+  "term_key": "example-term",
+  "note_id": "00000000-0000-4000-8000-000000000001",
+  "revision": 1,
+  "review": {
+    "reviewer": "예시 검수자",
+    "reviewed_on": "2026-11-25",
+    "sources": [
+      "합성 예시(근거 자료 없음)"
+    ],
+    "record_url": "https://example.com/review/sample-handshake"
+  },
+  "end_text": "예시 가이드는 여기까지예요.",
+  "map": {
+    "view": [
+      640,
+      360
+    ],
+    "nodes": [
+      {
+        "id": "client",
+        "x": 60,
+        "y": 160,
+        "icon": "client",
+        "label": "클라이언트",
+        "sub": "192.0.2.10"
+      },
+      {
+        "id": "server",
+        "x": 460,
+        "y": 160,
+        "icon": "server",
+        "label": "서버",
+        "sub": "198.51.100.20"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "short": "준비",
+      "kind": "문제",
+      "title": "아직 아무것도 오가지 않았어요",
+      "body": [
+        "클라이언트와 서버가 서로를 아직 몰라요."
+      ],
+      "changed": [
+        "아직 바뀐 것이 없어요."
+      ],
+      "active": [
+        "client",
+        "server"
+      ],
+      "arrows": [],
+      "notes": {
+        "server": "기다리는 중"
+      }
+    },
+    {
+      "short": "인사",
+      "kind": "과정",
+      "title": "클라이언트가 인사를 보내요",
+      "body": [
+        "클라이언트가 서버에 인사 메시지를 보내요."
+      ],
+      "changed": [
+        "서버가 인사를 받았어요."
+      ],
+      "active": [
+        "client",
+        "server"
+      ],
+      "arrows": [
+        {
+          "from": "client",
+          "to": "server",
+          "label": "인사 · 번호 100"
+        }
+      ],
+      "notes": {},
+      "roles": {
+        "client": "보내는 쪽",
+        "server": "받는 쪽"
+      },
+      "aside": {
+        "title": "번호란?",
+        "body": "예시에서 메시지를 구분하려고 붙인 값이에요."
+      },
+      "figure": "compare"
+    },
+    {
+      "short": "답",
+      "kind": "해결",
+      "title": "서버가 답하고 클라이언트가 확인해요",
+      "body": [
+        "서버가 받은 번호에 1을 더해 답해요.",
+        "클라이언트는 그 번호를 확인해요."
+      ],
+      "changed": [
+        "양쪽이 서로의 번호를 알게 됐어요."
+      ],
+      "active": [
+        "client",
+        "server"
+      ],
+      "arrows": [
+        {
+          "from": "server",
+          "to": "client",
+          "label": "① 답 · 번호 101",
+          "shift": -7
+        },
+        {
+          "from": "client",
+          "to": "client",
+          "label": "② 번호 확인",
+          "local": true,
+          "style": "ok"
+        }
+      ],
+      "notes": {
+        "client": "확인 끝"
+      }
+    }
+  ],
+  "figures": {
+    "compare": [
+      {
+        "title": "① 인사가 도착한 경우",
+        "view": [
+          640,
+          220
+        ],
+        "desc": "클라이언트의 인사가 서버에 도착해요.",
+        "nodes": [
+          {
+            "id": "c",
+            "x": 90,
+            "y": 62,
+            "icon": "client",
+            "label": "클라이언트",
+            "sub": "보낸 쪽"
+          },
+          {
+            "id": "s",
+            "x": 550,
+            "y": 62,
+            "icon": "server",
+            "label": "서버",
+            "sub": "받은 쪽"
+          }
+        ],
+        "edges": [
+          {
+            "from": "c",
+            "to": "s",
+            "label": "인사"
+          }
+        ],
+        "notes": []
+      },
+      {
+        "title": "② 인사가 사라진 경우",
+        "view": [
+          640,
+          240
+        ],
+        "desc": "인사가 중간에 사라지면 서버는 아무것도 받지 못해요.",
+        "nodes": [
+          {
+            "id": "c",
+            "x": 90,
+            "y": 62,
+            "icon": "client",
+            "label": "클라이언트",
+            "sub": "보낸 쪽"
+          },
+          {
+            "id": "s",
+            "x": 550,
+            "y": 62,
+            "icon": "server",
+            "label": "서버",
+            "sub": "받지 못함",
+            "off": true
+          }
+        ],
+        "edges": [
+          {
+            "from": "c",
+            "to": "s",
+            "faint": true
+          }
+        ],
+        "notes": [
+          {
+            "x": 320,
+            "y": 228,
+            "text": "클라이언트는 시간이 지나면 다시 보내요."
+          }
+        ]
+      }
+    ]
+  },
+  "sequence": {
+    "placement": "last_step",
+    "actors": [
+      {
+        "id": "c",
+        "name": "클라이언트"
+      },
+      {
+        "id": "s",
+        "name": "서버"
+      }
+    ],
+    "tags": {
+      "plain": "요청",
+      "app": "응답"
+    },
+    "legend": [
+      [
+        "plain",
+        "요청"
+      ],
+      [
+        "app",
+        "응답"
+      ]
+    ],
+    "rows": [
+      {
+        "k": "note",
+        "step": 1,
+        "at": "s",
+        "label": "기다리는 중"
+      },
+      {
+        "k": "msg",
+        "step": 2,
+        "from": "c",
+        "to": "s",
+        "label": "인사 · 번호 100",
+        "prot": "plain"
+      },
+      {
+        "k": "msg",
+        "step": 3,
+        "from": "s",
+        "to": "c",
+        "label": "답 · 번호 101",
+        "prot": "app"
+      },
+      {
+        "k": "note",
+        "step": 3,
+        "at": "both",
+        "label": "서로의 번호를 앎"
+      }
+    ]
+  }
+}
