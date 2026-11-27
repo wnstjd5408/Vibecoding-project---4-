@@ -3,7 +3,7 @@
 AI 에이전트(Codex, Claude 등)가 이 저장소에서 작업할 때 따르는 공통 규칙입니다. 모든 작업에 해당하는 규칙만 여기에 두고, 상황별 절차는 맨 아래 표의 문서를 해당할 때 읽습니다.
 
 ## 프로젝트
-- 이름: Vibecoding project 4 (Linear 프로젝트: Megazoneproject, 팀 키: MEG)
+- 이름: CS Training (Linear 프로젝트: Megazoneproject, 팀 키: MEG)
 - 한 줄 소개: <제품 한 줄 설명 — 작성 필요>
 - 현재 단계: **PMF 검증 중**. 가설 검증에 필요하지 않은 기능은 만들지 않는다.
 - 정식 기능 개발은 사람이 PMF 근거와 한계를 검토하고 개발 전환을 승인한 뒤 시작한다. 탐색 티켓 Done이나 실험 성공만으로 PMF 달성·개발 승인을 선언하지 않는다. PMF 이전 실험용 구현은 사람이 조건을 정한 경우에만 한다([spec-flow](docs/harness/spec-flow.md)).
